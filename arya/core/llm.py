@@ -506,15 +506,11 @@ TOOLS = [
 ]
 
 
-async def chat_with_tools(message: str) -> str:
-    needs_tool_result = await needs_tool(message)
-    print(f"Needs tool: {needs_tool_result}")
-    if not needs_tool_result:
-        return chat(message)
-
+async def _tool_pipeline(message: str) -> str:
+    """Execute the full tool-dispatch pipeline. Only call when a tool is confirmed needed."""
     client = _get_client()
-    save_message("user", message)
     history = get_history(limit=20)
+    save_message("user", message)
     history_messages = [
         {"role": item["role"], "content": item["content"]}
         for item in history
@@ -755,7 +751,11 @@ async def chat_with_tools(message: str) -> str:
         {
             "role": "tool",
             "tool_call_id": tool_call.id,
-            "content": str(tool_result),
+            "content": (
+                f"Tool result: {str(tool_result)}\n\n"
+                "Report this result to the user accurately and verbatim. "
+                "Do not recalculate, rephrase numbers, or add information not present in the result."
+            ),
         },
     ]
 
@@ -763,6 +763,7 @@ async def chat_with_tools(message: str) -> str:
         final_response = client.chat.completions.create(
             model=INTENT_MODEL_NAME,
             messages=follow_up_messages,
+            temperature=0,
         )
     except Exception as exc:
         raise RuntimeError(f"Groq follow-up request failed: {exc}") from exc
@@ -772,12 +773,19 @@ async def chat_with_tools(message: str) -> str:
     return assistant_response
 
 
+async def chat_with_tools(message: str) -> str:
+    """Public entry point: checks intent then dispatches tools if needed."""
+    if not await needs_tool(message):
+        return chat(message)
+    return await _tool_pipeline(message)
+
+
 async def stream_with_tools(message: str):
     needs_tool_result = await needs_tool(message)
     print(f"Needs tool: {needs_tool_result}")
 
     if needs_tool_result:
-        response = await chat_with_tools(message)
+        response = await _tool_pipeline(message)
         yield response
         return
 

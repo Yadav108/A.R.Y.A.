@@ -1,6 +1,45 @@
-import re
+import ast
+import operator
 
 import wikipediaapi
+
+
+_SAFE_OPS: dict = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+    ast.Pow: operator.pow,
+    ast.Mod: operator.mod,
+    ast.USub: operator.neg,
+    ast.UAdd: operator.pos,
+}
+
+
+def _safe_eval(node: ast.AST) -> float:
+    """Recursively evaluate a parsed AST, allowing only numeric constants and
+    basic arithmetic operators. Raises ValueError for anything else."""
+    if isinstance(node, ast.Expression):
+        return _safe_eval(node.body)
+    if isinstance(node, ast.Constant):
+        if isinstance(node.value, (int, float)):
+            return float(node.value)
+        raise ValueError(f"Unsupported constant type: {type(node.value)}")
+    if isinstance(node, ast.BinOp):
+        op_type = type(node.op)
+        if op_type not in _SAFE_OPS:
+            raise ValueError(f"Unsupported operator: {op_type.__name__}")
+        left = _safe_eval(node.left)
+        right = _safe_eval(node.right)
+        if op_type is ast.Div and right == 0:
+            raise ZeroDivisionError
+        return _SAFE_OPS[op_type](left, right)
+    if isinstance(node, ast.UnaryOp):
+        op_type = type(node.op)
+        if op_type not in _SAFE_OPS:
+            raise ValueError(f"Unsupported unary operator: {op_type.__name__}")
+        return _SAFE_OPS[op_type](_safe_eval(node.operand))
+    raise ValueError(f"Unsupported expression node: {type(node).__name__}")
 
 
 async def calculate(expression: str) -> str:
@@ -9,13 +48,12 @@ async def calculate(expression: str) -> str:
     normalized = normalized.replace("%", "/100")
     normalized = normalized.replace("squared", "**2")
     normalized = normalized.replace("cubed", "**3")
-
-    if not re.fullmatch(r"[0-9.\+\-\*/()%\s]*", normalized):
-        return "Invalid expression — only math allowed."
+    normalized = normalized.replace("^", "**")
 
     try:
-        result = eval(normalized, {"__builtins__": {}}, {})
-        return f"Result: {round(float(result), 4)}"
+        tree = ast.parse(normalized, mode="eval")
+        result = _safe_eval(tree)
+        return f"Result: {round(result, 4)}"
     except ZeroDivisionError:
         return "Cannot divide by zero."
     except Exception:

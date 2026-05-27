@@ -5,3 +5,9 @@ edge-tts
 pywin32
 httpx
 python-dotenv
+psutil
+pyperclip
+wikipedia-api
+websockets
+faster-whisper
+sounddevice

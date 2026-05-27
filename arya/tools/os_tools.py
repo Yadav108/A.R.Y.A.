@@ -3,7 +3,21 @@ import subprocess
 import webbrowser
 
 
-DANGEROUS_KEYWORDS = ["rm -rf", "format", "del /f", "shutdown", "rmdir"]
+DANGEROUS_KEYWORDS = [
+    "rm -rf", "rm -r",
+    "format",
+    "del /f", "del /q", "del /s",
+    "shutdown", "restart",
+    "rmdir", "rd /s",
+    "taskkill",
+    "reg delete", "reg add",
+    "bcdedit",
+    "diskpart",
+    "cipher /w",
+    "sfc /scannow",
+    "netsh",
+    "> /dev/null",
+]
 
 
 async def open_app(app_name: str) -> str:

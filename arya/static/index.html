@@ -5,9 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>ARYA Voice Assistant</title>
   <style>
-    :root {
-      color-scheme: dark;
-    }
+    :root { color-scheme: dark; }
 
     body {
       margin: 0;
@@ -28,16 +26,18 @@
       box-sizing: border-box;
     }
 
-    h1 {
-      margin: 0 0 16px;
-      font-size: 1.2rem;
-    }
+    h1 { margin: 0 0 16px; font-size: 1.2rem; }
 
     .status {
       margin-bottom: 14px;
-      color: #9db0d1;
       font-weight: 600;
+      min-height: 1.4em;
+      color: #9db0d1;
+      transition: color 0.2s;
     }
+    .status.listening { color: #f87171; }
+    .status.thinking  { color: #fbbf24; }
+    .status.speaking  { color: #34d399; }
 
     button {
       width: 100%;
@@ -48,17 +48,37 @@
       font-size: 1rem;
       font-weight: 700;
       background: #3b82f6;
-      color: #ffffff;
+      color: #fff;
+      user-select: none;
+      transition: background 0.15s, transform 0.1s;
+    }
+    button.listening {
+      background: #dc2626;
+      transform: scale(0.98);
+    }
+    button:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
     }
 
-    button:active {
-      background: #2563eb;
+    .rec-timer {
+      margin-top: 8px;
+      height: 4px;
+      border-radius: 2px;
+      background: #1e293b;
+      overflow: hidden;
+    }
+    .rec-timer-bar {
+      height: 100%;
+      width: 0%;
+      background: #dc2626;
+      transition: width 0.1s linear;
     }
 
     textarea {
       margin-top: 14px;
       width: 100%;
-      min-height: 150px;
+      min-height: 160px;
       border-radius: 10px;
       border: 1px solid #30384a;
       background: #10141d;
@@ -66,207 +86,263 @@
       padding: 12px;
       box-sizing: border-box;
       resize: vertical;
+      font-size: 0.95rem;
+      line-height: 1.5;
     }
+
+    .you-label { color: #60a5fa; font-weight: 600; }
   </style>
 </head>
 <body>
   <main class="card">
-    <h1>ARYA</h1>
-    <div id="status" class="status">Ready</div>
-    <button id="talkButton" type="button">Hold to Talk</button>
-    <textarea id="responseBox" readonly placeholder="ARYA response will appear here..."></textarea>
+    <h1>ARYA <span id="wakeIndicator" style="font-size:0.7rem;color:#4ade80;display:none;">● always listening</span></h1>
+    <div id="status" class="status">Connecting...</div>
+    <button id="talkButton" type="button" disabled>🎤 Tap to Talk</button>
+    <div class="rec-timer"><div id="recBar" class="rec-timer-bar"></div></div>
+    <textarea id="responseBox" readonly placeholder="ARYA's response will appear here..."></textarea>
   </main>
 
   <script>
-    const statusEl = document.getElementById("status");
+    const statusEl   = document.getElementById("status");
     const talkButton = document.getElementById("talkButton");
     const responseBox = document.getElementById("responseBox");
 
-    const SpeechRecognition = window.webkitSpeechRecognition;
-    let socket = null;
+    /* ── State ─────────────────────────────────────────────────────────── */
+    let socket         = null;
     let reconnectTimer = null;
-    let isRecognizing = false;
-    const audioQueue = [];
-    let isPlaying = false;
-    let currentAudio = null;
-    let waitingForFirstAudio = false;
+    let mediaRecorder  = null;
+    let micStream      = null;
+    let audioChunks    = [];
+    let isRecording    = false;
+    let isBusy         = false;
 
-    function setStatus(text) {
+    const audioQueue = [];
+    let isPlaying    = false;
+    let currentAudio = null;
+
+    /* ── Helpers ────────────────────────────────────────────────────────── */
+    function setStatus(text, cls = "") {
       statusEl.textContent = text;
+      statusEl.className   = "status " + cls;
     }
 
+    function setBusy(busy) {
+      isBusy = busy;
+      talkButton.disabled = busy;
+    }
+
+    /* ── Audio playback queue ───────────────────────────────────────────── */
     async function playNext() {
-      if (isPlaying || audioQueue.length === 0) {
-        return;
-      }
-
+      if (isPlaying || audioQueue.length === 0) return;
       isPlaying = true;
-      const audioBlob = audioQueue.shift();
-      const audioUrl = URL.createObjectURL(audioBlob);
-      currentAudio = new Audio(audioUrl);
+      const blob = audioQueue.shift();
+      const url  = URL.createObjectURL(blob);
+      currentAudio = new Audio(url);
 
-      currentAudio.onplay = () => {
-        waitingForFirstAudio = false;
-        setStatus("Speaking...");
-      };
-
+      currentAudio.onplay  = () => setStatus("Speaking...", "speaking");
       currentAudio.onended = () => {
         isPlaying = false;
-        URL.revokeObjectURL(audioUrl);
+        URL.revokeObjectURL(url);
         currentAudio = null;
-        if (audioQueue.length === 0) {
-          setStatus("Ready");
-        }
+        if (audioQueue.length === 0) { setBusy(false); setStatus("Ready"); }
         playNext();
       };
-
       currentAudio.onerror = () => {
         isPlaying = false;
-        URL.revokeObjectURL(audioUrl);
+        URL.revokeObjectURL(url);
         currentAudio = null;
-        if (audioQueue.length === 0) {
-          setStatus("Ready");
-        }
+        if (audioQueue.length === 0) { setBusy(false); setStatus("Ready"); }
         playNext();
       };
-
-      try {
-        await currentAudio.play();
-      } catch (_) {
-        isPlaying = false;
-        currentAudio = null;
-        if (audioQueue.length === 0) {
-          setStatus("Ready");
-        }
+      try { await currentAudio.play(); }
+      catch (_) {
+        isPlaying = false; currentAudio = null;
+        if (audioQueue.length === 0) { setBusy(false); setStatus("Ready"); }
         playNext();
       }
     }
 
+    /* ── WebSocket ──────────────────────────────────────────────────────── */
     function connectWebSocket() {
-      if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
-        return;
-      }
+      if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) return;
 
       socket = new WebSocket("ws://localhost:8000/ws");
       socket.binaryType = "arraybuffer";
 
       socket.onopen = () => {
-        if (reconnectTimer) {
-          clearInterval(reconnectTimer);
-          reconnectTimer = null;
-        }
+        if (reconnectTimer) { clearInterval(reconnectTimer); reconnectTimer = null; }
         setStatus("Ready");
+        talkButton.disabled = false;
+        document.getElementById("wakeIndicator").style.display = "inline";
       };
 
       socket.onmessage = async (event) => {
-        if (typeof event.data === "string") {
-          if (event.data === "ARYA_DONE") {
-            return;
-          }
-          responseBox.value += event.data;
-          if (waitingForFirstAudio) {
-            setStatus("Thinking...");
-          } else {
-            setStatus("Speaking...");
-          }
+        /* ── binary → TTS audio ── */
+        if (event.data instanceof ArrayBuffer) {
+          const blob = new Blob([event.data], { type: "audio/mpeg" });
+          audioQueue.push(blob);
+          await playNext();
           return;
         }
 
-        if (event.data instanceof Blob || event.data instanceof ArrayBuffer) {
-          const audioBlob = event.data instanceof Blob
-            ? event.data
-            : new Blob([event.data], { type: "audio/mpeg" });
-          audioQueue.push(audioBlob);
-          await playNext();
+        /* ── text messages ── */
+        const msg = event.data;
+
+        if (msg === "ARYA_DONE") {
+          // If no audio arrived, unblock now
+          if (audioQueue.length === 0 && !isPlaying) { setBusy(false); setStatus("Ready"); }
+          return;
         }
+
+        if (msg === "ARYA_NO_SPEECH") {
+          setBusy(false);
+          setStatus("No speech detected — try again");
+          setTimeout(() => { if (statusEl.textContent.startsWith("No speech")) setStatus("Ready"); }, 3000);
+          return;
+        }
+
+        if (msg === "ARYA_WAKE") {
+          // Wake word triggered from server side
+          setBusy(true);
+          talkButton.disabled = true;
+          responseBox.value = "";
+          setStatus("🔊 Wake word detected...", "listening");
+          return;
+        }
+
+        if (msg.startsWith("TRANSCRIPT:")) {
+          const transcript = msg.slice("TRANSCRIPT:".length);
+          responseBox.value = "";
+          responseBox.value += `You: ${transcript}\n\n`;
+          setStatus("Thinking...", "thinking");
+          return;
+        }
+
+        // Regular response text chunk
+        responseBox.value += msg;
+        if (!isPlaying) setStatus("Thinking...", "thinking");
       };
 
-      socket.onerror = () => {
-        setStatus("Connection lost");
-      };
-
+      socket.onerror = () => setStatus("Connection error");
       socket.onclose = () => {
-        setStatus("Connection lost");
-        if (!reconnectTimer) {
-          reconnectTimer = setInterval(connectWebSocket, 3000);
-        }
+        setStatus("Disconnected — reconnecting...");
+        talkButton.disabled = true;
+        if (!reconnectTimer) reconnectTimer = setInterval(connectWebSocket, 3000);
       };
     }
 
     connectWebSocket();
 
-    if (!SpeechRecognition) {
-      setStatus("Web Speech API not supported in this browser");
-      talkButton.disabled = true;
-    } else {
-      const recognition = new SpeechRecognition();
-      recognition.lang = "en-US";
-      recognition.continuous = false;
-      recognition.interimResults = false;
+    const MIN_REC_MS  = 2000;   // never cut off before 2 s
+    const MAX_REC_MS  = 15000;  // auto-stop at 15 s
+    const recBar      = document.getElementById("recBar");
 
-      recognition.onstart = () => {
-        isRecognizing = true;
-        setStatus("Listening...");
-      };
+    let recStartTime  = 0;
+    let recTimerID    = null;
+    let autoStopID    = null;
 
-      recognition.onresult = (event) => {
-        const transcript = event.results?.[0]?.[0]?.transcript?.trim();
-        if (!transcript) {
-          setStatus("Ready");
-          return;
-        }
-
-        if (!socket || socket.readyState !== WebSocket.OPEN) {
-          setStatus("Connection lost");
-          return;
-        }
-
-        responseBox.value = "";
-        waitingForFirstAudio = true;
-        setStatus("Thinking...");
-        socket.send(transcript);
-      };
-
-      recognition.onerror = () => {
-        setStatus("Ready");
-      };
-
-      recognition.onend = () => {
-        isRecognizing = false;
-      };
-
-      function startListening() {
-        if (isRecognizing) {
-          return;
-        }
-        try {
-          recognition.start();
-        } catch (_) {
-          setStatus("Ready");
-        }
+    /* ── Microphone setup ───────────────────────────────────────────────── */
+    async function ensureMic() {
+      if (micStream && micStream.active) return true;
+      try {
+        micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        return true;
+      } catch (err) {
+        const msg = err.name === "NotAllowedError"
+          ? "Microphone blocked — allow access in browser settings"
+          : "No microphone found";
+        setStatus(msg);
+        setTimeout(() => { if (statusEl.textContent === msg) setStatus("Ready"); }, 4000);
+        return false;
       }
-
-      function stopListening() {
-        if (!isRecognizing) {
-          return;
-        }
-        recognition.stop();
-      }
-
-      talkButton.addEventListener("mousedown", startListening);
-      talkButton.addEventListener("mouseup", stopListening);
-      talkButton.addEventListener("mouseleave", stopListening);
-
-      talkButton.addEventListener("touchstart", (event) => {
-        event.preventDefault();
-        startListening();
-      }, { passive: false });
-      talkButton.addEventListener("touchend", (event) => {
-        event.preventDefault();
-        stopListening();
-      });
-      talkButton.addEventListener("touchcancel", stopListening);
     }
+
+    /* ── Progress bar animation while recording ─────────────────────────── */
+    function startBar() {
+      recStartTime = Date.now();
+      recBar.style.transition = "none";
+      recBar.style.width = "0%";
+      recTimerID = setInterval(() => {
+        const pct = Math.min(100, ((Date.now() - recStartTime) / MAX_REC_MS) * 100);
+        recBar.style.transition = "width 0.1s linear";
+        recBar.style.width = pct + "%";
+      }, 100);
+    }
+
+    function stopBar() {
+      clearInterval(recTimerID);
+      recBar.style.transition = "width 0.3s ease";
+      recBar.style.width = "0%";
+    }
+
+    /* ── Recording ──────────────────────────────────────────────────────── */
+    async function startRecording() {
+      if (isRecording || isBusy) return;
+      if (!(await ensureMic())) return;
+      if (!socket || socket.readyState !== WebSocket.OPEN) { setStatus("Not connected"); return; }
+
+      audioChunks = [];
+      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+        ? "audio/webm;codecs=opus" : "";
+      mediaRecorder = mimeType
+        ? new MediaRecorder(micStream, { mimeType })
+        : new MediaRecorder(micStream);
+
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) audioChunks.push(e.data);
+      };
+
+      mediaRecorder.onstop = async () => {
+        isRecording = false;
+        clearTimeout(autoStopID);
+        stopBar();
+        talkButton.textContent = "🎤 Tap to Talk";
+        talkButton.classList.remove("listening");
+
+        if (audioChunks.length === 0) { setStatus("Ready"); return; }
+        const blob = new Blob(audioChunks, { type: mediaRecorder.mimeType || "audio/webm" });
+        if (blob.size < 1500) { setStatus("Too short — tap again and speak"); setTimeout(() => setStatus("Ready"), 3000); return; }
+
+        setBusy(true);
+        setStatus("Transcribing...", "thinking");
+        const buf = await blob.arrayBuffer();
+        socket.send(buf);
+      };
+
+      mediaRecorder.start();
+      isRecording = true;
+      recStartTime = Date.now();
+      startBar();
+      talkButton.textContent = "🔴 Tap to Stop";
+      talkButton.classList.add("listening");
+      setStatus("Listening... (tap again to stop)", "listening");
+
+      // auto-stop at MAX_REC_MS
+      autoStopID = setTimeout(doStop, MAX_REC_MS);
+    }
+
+    function doStop() {
+      if (!isRecording || !mediaRecorder) return;
+      const elapsed = Date.now() - recStartTime;
+      if (elapsed < MIN_REC_MS) {
+        // too soon — wait out the minimum duration then stop
+        setTimeout(doStop, MIN_REC_MS - elapsed);
+        return;
+      }
+      mediaRecorder.stop();
+    }
+
+    /* ── Button: single click toggles start / stop ──────────────────────── */
+    talkButton.addEventListener("click", () => {
+      if (isBusy) return;
+      if (isRecording) doStop();
+      else startRecording();
+    });
+
+    talkButton.addEventListener("touchend", (e) => {
+      e.preventDefault();
+      talkButton.click();
+    }, { passive: false });
   </script>
 </body>
 </html>
