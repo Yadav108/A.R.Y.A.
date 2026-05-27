@@ -1,3 +1,4 @@
+import asyncio
 import sqlite3
 import threading
 from pathlib import Path
@@ -14,9 +15,9 @@ def _get_connection() -> sqlite3.Connection:
 def _initialize_notes_table() -> None:
     create_table_sql = """
     CREATE TABLE IF NOT EXISTS research_notes (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        content TEXT NOT NULL,
-        tag TEXT DEFAULT 'general',
+        id        INTEGER PRIMARY KEY AUTOINCREMENT,
+        content   TEXT    NOT NULL,
+        tag       TEXT    DEFAULT 'general',
         timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
     )
     """
@@ -38,15 +39,35 @@ def _format_rows(rows: list[sqlite3.Row]) -> str:
     )
 
 
+# ── Embedding helper (fire-and-forget) ───────────────────────────────────────
+
+async def _embed_and_store_note(note_id: int, content: str, tag: str) -> None:
+    """Runs in the background after save_note returns."""
+    try:
+        from arya.core.embedder import embed
+        from arya.memory.database import save_memory_vector
+        labelled = f"[note:{tag}]: {content}"
+        vec = await embed(labelled)
+        save_memory_vector("note", note_id, labelled, vec)
+    except Exception as exc:
+        print(f"Embedder: failed to store note vector (id={note_id}): {exc}")
+
+
+# ── CRUD ─────────────────────────────────────────────────────────────────────
+
 async def save_note(content: str, tag: str = "general") -> str:
     insert_sql = "INSERT INTO research_notes (content, tag) VALUES (?, ?)"
     try:
         with _DB_LOCK:
             with _get_connection() as conn:
-                conn.execute(insert_sql, (content, tag or "general"))
+                cursor = conn.execute(insert_sql, (content, tag or "general"))
                 conn.commit()
+                note_id = cursor.lastrowid
     except sqlite3.Error as exc:
         raise RuntimeError(f"Failed to save note: {exc}") from exc
+
+    # Embed in background — doesn't block the response
+    asyncio.create_task(_embed_and_store_note(note_id, content, tag or "general"))
 
     return f"Note saved: {content[:50]}..."
 
@@ -90,7 +111,9 @@ async def delete_note(note_id: int) -> str:
     try:
         with _DB_LOCK:
             with _get_connection() as conn:
-                cursor = conn.execute("DELETE FROM research_notes WHERE id = ?", (note_id,))
+                cursor = conn.execute(
+                    "DELETE FROM research_notes WHERE id = ?", (note_id,)
+                )
                 conn.commit()
     except sqlite3.Error as exc:
         raise RuntimeError(f"Failed to delete note: {exc}") from exc

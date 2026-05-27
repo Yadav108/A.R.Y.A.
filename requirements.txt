@@ -11,3 +11,4 @@ wikipedia-api
 websockets
 faster-whisper
 sounddevice
+sentence-transformers

@@ -1,3 +1,4 @@
+import asyncio
 import os
 import json
 import re
@@ -6,7 +7,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 from groq import Groq
 
-from arya.memory.database import get_history, save_message
+from arya.memory.database import get_history, save_message, save_memory_vector, semantic_search
 
 
 load_dotenv()
@@ -35,6 +36,39 @@ def _get_client() -> Groq:
 
     _client = Groq(api_key=api_key)
     return _client
+
+
+# ── Semantic memory helpers ───────────────────────────────────────────────────
+
+_MAX_STORED_LEN = 500   # chars to embed (quality) — content stored up to 300 in DB
+
+
+async def _store_embedding(kind: str, source_id: int, labelled_content: str) -> None:
+    """Background task: embed labelled_content and persist vector. Never raises."""
+    try:
+        from arya.core.embedder import embed
+        vec = await embed(labelled_content[:_MAX_STORED_LEN])
+        save_memory_vector(kind, source_id, labelled_content, vec)
+    except Exception as exc:
+        print(f"Embedder: store failed (kind={kind}, id={source_id}): {exc}")
+
+
+async def _get_semantic_context(message: str, exclude: set[str]) -> str:
+    """
+    Embed message, search memory, return a formatted memory block to append to
+    SYSTEM_PROMPT — or an empty string when nothing relevant is found.
+    """
+    try:
+        from arya.core.embedder import embed
+        vec = await embed(message)
+        hits = semantic_search(vec, top_k=3, exclude_content=exclude)
+        if not hits:
+            return ""
+        lines = "\n".join(f"  - {h[:150]}" for h in hits)
+        return f"\n\n### Relevant context from memory:\n{lines}"
+    except Exception as exc:
+        print(f"Semantic search skipped: {exc}")
+        return ""
 
 
 def chat(message: str) -> str:
@@ -509,14 +543,21 @@ TOOLS = [
 async def _tool_pipeline(message: str) -> str:
     """Execute the full tool-dispatch pipeline. Only call when a tool is confirmed needed."""
     client = _get_client()
-    history = get_history(limit=20)
-    save_message("user", message)
+    history = get_history(limit=10)
+
+    # ── Semantic memory injection ─────────────────────────────────────────────
+    recent_contents = {item["content"] for item in history}
+    mem_context = await _get_semantic_context(message, recent_contents)
+
+    msg_id = save_message("user", message)
+    asyncio.create_task(_store_embedding("message", msg_id, f"[user]: {message}"))
+
     history_messages = [
         {"role": item["role"], "content": item["content"]}
         for item in history
     ]
     base_messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": SYSTEM_PROMPT + mem_context},
         *history_messages,
         {"role": "user", "content": message},
     ]
@@ -537,17 +578,20 @@ async def _tool_pipeline(message: str) -> str:
     finish_reason = first_response.choices[0].finish_reason
     if finish_reason == "stop":
         assistant_response = first_message.content or ""
-        save_message("assistant", assistant_response)
+        resp_id = save_message("assistant", assistant_response)
+        asyncio.create_task(_store_embedding("message", resp_id, f"[assistant]: {assistant_response}"))
         return assistant_response
     if finish_reason != "tool_calls":
         assistant_response = first_message.content or ""
-        save_message("assistant", assistant_response)
+        resp_id = save_message("assistant", assistant_response)
+        asyncio.create_task(_store_embedding("message", resp_id, f"[assistant]: {assistant_response}"))
         return assistant_response
 
     tool_calls = first_message.tool_calls
     if not tool_calls or len(tool_calls) == 0:
         assistant_response = first_message.content or ""
-        save_message("assistant", assistant_response)
+        resp_id = save_message("assistant", assistant_response)
+        asyncio.create_task(_store_embedding("message", resp_id, f"[assistant]: {assistant_response}"))
         return assistant_response
 
     tool_call = first_response.choices[0].message.tool_calls[0]
@@ -769,7 +813,8 @@ async def _tool_pipeline(message: str) -> str:
         raise RuntimeError(f"Groq follow-up request failed: {exc}") from exc
 
     assistant_response = final_response.choices[0].message.content or ""
-    save_message("assistant", assistant_response)
+    resp_id = save_message("assistant", assistant_response)
+    asyncio.create_task(_store_embedding("message", resp_id, f"[assistant]: {assistant_response}"))
     return assistant_response
 
 
@@ -790,15 +835,22 @@ async def stream_with_tools(message: str):
         return
 
     client = _get_client()
-    history = get_history(limit=20)
+    history = get_history(limit=10)
+
+    # ── Semantic memory injection ─────────────────────────────────────────────
+    recent_contents = {item["content"] for item in history}
+    mem_context = await _get_semantic_context(message, recent_contents)
+
+    msg_id = save_message("user", message)
+    asyncio.create_task(_store_embedding("message", msg_id, f"[user]: {message}"))
+
     history_messages = [
         {"role": item["role"], "content": item["content"]}
         for item in history
     ]
-    save_message("user", message)
 
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": SYSTEM_PROMPT + mem_context},
         *history_messages,
         {"role": "user", "content": message},
     ]
@@ -843,4 +895,5 @@ async def stream_with_tools(message: str):
         full_response_parts.append(buffer)
 
     full_response = "".join(full_response_parts)
-    save_message("assistant", full_response)
+    resp_id = save_message("assistant", full_response)
+    asyncio.create_task(_store_embedding("message", resp_id, f"[assistant]: {full_response}"))

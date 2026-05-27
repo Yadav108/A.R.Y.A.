@@ -5,6 +5,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from arya.core.embedder import load_embedder
 from arya.core.llm import stream_with_tools
 from arya.core.stt import load_model, transcribe
 from arya.core.tts import speak_sentence
@@ -27,6 +28,10 @@ async def preload_models() -> None:
     print("STT: loading Whisper medium (CUDA)...")
     await loop.run_in_executor(None, load_model)
     print("STT: model ready.")
+
+    print("Embedder: loading all-MiniLM-L6-v2 (CPU)...")
+    await loop.run_in_executor(None, load_embedder)
+    print("Embedder: model ready.")
 
     # Wake word callback — runs in the background thread, posts to asyncio
     async def on_wake(command: str) -> None:

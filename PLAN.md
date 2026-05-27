@@ -12,8 +12,8 @@
 |-------|---------|--------|
 | 1 | Local STT — faster-whisper medium CUDA | ✅ Done |
 | 2 | Wake word engine — "Hey ARYA" (Whisper tiny CPU) | ✅ Done |
-| 3 | Semantic memory — sentence-transformers vector search | 🔲 Next |
-| 4 | Offline LLM fallback — Ollama llama3.2:3b | 🔲 Planned |
+| 3 | Semantic memory — sentence-transformers vector search | ✅ Done |
+| 4 | Offline LLM fallback — Ollama llama3.2:3b | 🔲 Next |
 | 5 | Local TTS — Kokoro neural voice | 🔲 Planned |
 | 6 | Screen awareness — OCR + context injection | 🔲 Planned |
 | 7 | Proactive intelligence — pattern detection & alerts | 🔲 Planned |
