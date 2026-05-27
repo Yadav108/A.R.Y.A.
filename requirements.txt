@@ -1,0 +1,7 @@
+groq
+fastapi
+uvicorn[standard]
+edge-tts
+pywin32
+httpx
+python-dotenv
