@@ -2,25 +2,86 @@ import asyncio
 import os
 import json
 import re
+import time
+from collections.abc import AsyncIterator
+from dataclasses import dataclass, field
 from datetime import datetime
 
+import groq
+import httpx
 from dotenv import load_dotenv
 from groq import AsyncGroq
 
+from arya.core.llm_local import OLLAMA_MODEL, LocalLLMUnavailable, chat_local, stream_local
 from arya.memory.database import get_history, save_message, save_memory_vector, semantic_search
 
 
 load_dotenv()
 
-SYSTEM_PROMPT = (
-    "You are ARYA, a fast and helpful voice assistant. "
-    "Only call tools when the user explicitly asks for an action or live data. "
-    "Never call tools for greetings, casual conversation, or general questions."
-)
-MODEL_NAME = "llama-3.3-70b-versatile"
-INTENT_MODEL_NAME = "llama-3.1-8b-instant"
+# Groq retired the Llama 3.x models ARYA originally used (model_not_found as of
+# Nov 2026). Override in .env if Groq's lineup changes again — list what your
+# key can use with:  python -c "import groq; print([m.id for m in groq.Groq().models.list().data])"
+MODEL_NAME = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")             # tool selection
+INTENT_MODEL_NAME = os.getenv("GROQ_FAST_MODEL", "openai/gpt-oss-20b")  # intent, chat, follow-ups
+
+
+def _groq_extra(model: str) -> dict:
+    """Per-model request options. gpt-oss models are reasoning models: keep
+    reasoning short for voice latency and hide it so only the answer comes back."""
+    if "gpt-oss" in model:
+        return {"reasoning_effort": "low", "include_reasoning": False}
+    return {}
+
+# Max tool calls ARYA may chain for one request ("check the weather and set a
+# timer", "find my thesis notes and copy the first one").
+MAX_TOOL_STEPS = 4
+
+# Requests that probably need more than one tool ("weather and a timer",
+# "find my notes then copy the first one").
+_MULTI_PART = re.compile(r"\b(and|then|also|plus|after that|as well)\b|,", re.IGNORECASE)
+
+
+def _system_prompt(with_tools: bool = False) -> str:
+    """Built per request so ARYA always knows the current date and time.
+    Tool guidance is only included when tools are actually offered — gpt-oss
+    models try to call tools whenever the prompt mentions them."""
+    now = datetime.now().strftime("%A, %d %B %Y, %H:%M")
+    city = os.getenv("DEFAULT_CITY", "Berlin")
+    user = os.getenv("USER_NAME", "").strip()
+    who = f"You are talking with {user}, a Mechatronics engineering student. " if user else (
+        "You are talking with a Mechatronics engineering student. "
+    )
+    return (
+        "You are ARYA, a sharp, warm, hands-free voice assistant running on the user's Windows PC. "
+        + who
+        + f"Current local date and time: {now}. Home city: {city}.\n"
+        "Your replies are spoken aloud by a text-to-speech voice, so:\n"
+        "- Answer in one to three short sentences unless the user asks for detail.\n"
+        "- Never use markdown, bullet points, headings, tables, emojis or code blocks.\n"
+        "- Say numbers, units and times the way a person would say them.\n"
+        "- Lead with the answer; skip filler like 'Sure!' or 'Great question'.\n"
+        + (
+            "Only call tools when the user asks for an action or live data. "
+            "You may chain several tool calls to finish a multi-part request. "
+            "Never call tools for greetings, casual conversation, or general knowledge."
+            if with_tools else ""
+        )
+    )
+
+
+class _ModelWantsTool(Exception):
+    """The streaming chat model tried to call a tool — escalate to the tool pipeline."""
+
 
 _client: AsyncGroq | None = None
+
+
+class GroqNotConfigured(RuntimeError):
+    """GROQ_API_KEY is missing — ARYA runs on the local model only."""
+
+
+class LLMUnavailableError(RuntimeError):
+    """Neither Groq nor the local Ollama model could serve the request."""
 
 
 def _get_client() -> AsyncGroq:
@@ -30,12 +91,217 @@ def _get_client() -> AsyncGroq:
 
     api_key = os.getenv("GROQ_API_KEY")
     if not api_key:
-        raise RuntimeError(
-            "Missing GROQ_API_KEY. Add it to your .env file before calling chat()."
+        raise GroqNotConfigured(
+            "Missing GROQ_API_KEY. Add it to your .env file to use Groq."
         )
 
-    _client = AsyncGroq(api_key=api_key)
+    # No SDK retries: on a rate limit or outage we fail over to Ollama
+    # immediately instead of sleeping through Groq's backoff.
+    _client = AsyncGroq(api_key=api_key, max_retries=0, timeout=15.0)
     return _client
+
+
+# ── Groq → Ollama failover (Phase 4) ──────────────────────────────────────────
+
+# Errors that mean "Groq can't serve this right now" (as opposed to a bad request).
+_FALLBACK_ERRORS = (
+    groq.RateLimitError,
+    groq.APIConnectionError,   # includes APITimeoutError
+    groq.InternalServerError,
+    httpx.TransportError,      # connection dropped mid-stream
+    GroqNotConfigured,
+)
+
+
+class _CircuitBreaker:
+    """After `threshold` consecutive Groq failures within `window` seconds,
+    skip Groq entirely for `cooldown` seconds."""
+
+    def __init__(self, threshold: int = 3, window: float = 60.0, cooldown: float = 300.0):
+        self.threshold = threshold
+        self.window = window
+        self.cooldown = cooldown
+        self._failures: list[float] = []
+        self._open_until = 0.0
+        self.last_error = ""
+
+    def allow(self) -> bool:
+        return time.monotonic() >= self._open_until
+
+    def record_success(self) -> None:
+        self._failures.clear()
+
+    def record_failure(self, exc: BaseException) -> None:
+        now = time.monotonic()
+        self.last_error = f"{type(exc).__name__}: {exc}"
+        self._failures = [t for t in self._failures if now - t < self.window]
+        self._failures.append(now)
+        print(f"LLM: Groq unavailable ({self.last_error[:120]}) — falling back to {OLLAMA_MODEL}")
+        if len(self._failures) >= self.threshold:
+            self._open_until = now + self.cooldown
+            self._failures.clear()
+            print(f"LLM: circuit open — using {OLLAMA_MODEL} for the next {self.cooldown:.0f}s")
+
+
+_breaker = _CircuitBreaker()
+
+
+def _unavailable(local_exc: LocalLLMUnavailable) -> LLMUnavailableError:
+    groq_reason = _breaker.last_error or "circuit open"
+    return LLMUnavailableError(
+        f"Groq unavailable ({groq_reason}); local model unavailable ({local_exc})"
+    )
+
+
+@dataclass
+class _ToolCall:
+    id: str
+    name: str
+    arguments: str | dict
+
+
+@dataclass
+class _Completion:
+    content: str
+    tool_calls: list[_ToolCall] = field(default_factory=list)
+
+
+async def _complete(
+    model: str,
+    messages: list[dict],
+    *,
+    tools: list | None = None,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
+) -> _Completion:
+    """One chat completion: Groq if healthy, otherwise the local Ollama model."""
+    if _breaker.allow():
+        kwargs: dict = {"model": model, "messages": messages, **_groq_extra(model)}
+        if tools:
+            kwargs.update(tools=tools, tool_choice="auto", parallel_tool_calls=False)
+        if temperature is not None:
+            kwargs["temperature"] = temperature
+        if max_tokens is not None:
+            kwargs["max_tokens"] = max_tokens
+        try:
+            try:
+                response = await _get_client().chat.completions.create(**kwargs)
+            except groq.APIConnectionError:
+                # One quick retry for a transient blip (timeout / dropped
+                # connection) before declaring Groq down. Rate limits and
+                # server errors fall through to the local model immediately.
+                response = await _get_client().chat.completions.create(**kwargs)
+        except _FALLBACK_ERRORS as exc:
+            _breaker.record_failure(exc)
+        else:
+            _breaker.record_success()
+            msg = response.choices[0].message
+            calls = [
+                _ToolCall(id=tc.id, name=tc.function.name, arguments=tc.function.arguments)
+                for tc in (msg.tool_calls or [])
+            ]
+            return _Completion(content=msg.content or "", tool_calls=calls)
+
+    try:
+        msg = await chat_local(messages, tools=tools, temperature=temperature, max_tokens=max_tokens)
+    except LocalLLMUnavailable as exc:
+        raise _unavailable(exc) from exc
+    calls = [
+        _ToolCall(
+            id=f"call_{i}",
+            name=tc.get("function", {}).get("name", ""),
+            arguments=tc.get("function", {}).get("arguments") or {},
+        )
+        for i, tc in enumerate(msg.get("tool_calls") or [])
+    ]
+    return _Completion(content=msg.get("content") or "", tool_calls=calls)
+
+
+async def _stream_tokens(model: str, messages: list[dict]) -> AsyncIterator[str]:
+    """Stream content tokens: Groq if healthy, otherwise the local Ollama model.
+    Falls back only if Groq fails before producing any output."""
+    if _breaker.allow():
+        yielded = False
+        try:
+            request = dict(model=model, messages=messages, stream=True, **_groq_extra(model))
+            try:
+                stream = await _get_client().chat.completions.create(**request)
+            except groq.APIConnectionError:
+                stream = await _get_client().chat.completions.create(**request)  # one retry
+            async for chunk in stream:
+                choices = getattr(chunk, "choices", None)
+                if not choices:
+                    continue
+                delta = getattr(choices[0], "delta", None)
+                token = getattr(delta, "content", None) if delta else None
+                if token:
+                    yielded = True
+                    yield token
+            _breaker.record_success()
+            return
+        except _FALLBACK_ERRORS as exc:
+            if yielded:
+                raise
+            _breaker.record_failure(exc)
+        except groq.APIError as exc:
+            if not yielded and "called a tool" in str(exc).lower():
+                raise _ModelWantsTool() from exc
+            raise
+
+    try:
+        async for token in stream_local(messages):
+            yield token
+    except LocalLLMUnavailable as exc:
+        raise _unavailable(exc) from exc
+
+
+# Offline intent heuristic — mirrors the categories in the needs_tool() prompt.
+# Used when Groq is down so we don't spend a second local inference on YES/NO.
+_TOOL_KEYWORDS = re.compile(
+    r"\b("
+    r"weather|temperature in|forecast|"
+    r"open|launch|website|"
+    r"search for (?:a |the )?file|find (?:a |the |my )?file|"
+    r"run (?:the )?command|directory|"
+    r"cpu|ram|memory usage|battery|"
+    r"timers?|pomodoro|focus session|remind me|reminders?|time left|"
+    r"pause|resume|play|skip|next (?:song|track)|previous (?:song|track)|volume|mute|unmute|louder|quieter|"
+    r"clipboard|"
+    r"calculate|percent|convert|"
+    r"wikipedia|look up|"
+    r"take a note|save (?:a |this )?note|my notes|search notes|note this|remember this|"
+    r"explain|describe|simply|technically|for (?:the |an )?exam|"
+    r"formula|equation|"
+    r"quiz me|test me|flashcards?|questions on|"
+    r"briefing|brief me"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _keyword_needs_tool(message: str) -> bool:
+    return bool(_TOOL_KEYWORDS.search(message))
+
+
+# ── Speech helpers ────────────────────────────────────────────────────────────
+
+# Sentence end = punctuation followed by whitespace (so "3.14" never splits).
+# Also splits "hour.Timer" — models sometimes drop the space between sentences.
+_SENTENCE_END = re.compile(r"[.!?](?=\s|$|[A-Z][a-z])|\n+")
+
+
+def split_sentences(text: str) -> list[str]:
+    """Split text into speakable sentences (keeps decimals like 3.14 intact)."""
+    parts: list[str] = []
+    start = 0
+    for match in _SENTENCE_END.finditer(text):
+        chunk = text[start:match.end()]
+        if chunk.strip():
+            parts.append(chunk)
+        start = match.end()
+    if text[start:].strip():
+        parts.append(text[start:])
+    return parts
 
 
 # ── Semantic memory helpers ───────────────────────────────────────────────────
@@ -72,53 +338,65 @@ async def _get_semantic_context(message: str, exclude: set[str]) -> str:
 
 
 async def chat(message: str) -> str:
-    response = await _get_client().chat.completions.create(
-        model=INTENT_MODEL_NAME,
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
+    response = await _complete(
+        INTENT_MODEL_NAME,
+        [
+            {"role": "system", "content": _system_prompt()},
             {"role": "user", "content": message},
         ],
     )
-    return response.choices[0].message.content or ""
+    return response.content
+
+
+_INTENT_PROMPT = (
+    "You are a binary classifier. Reply with only YES or NO. No explanation.\n\n"
+    "Reply YES for ANY of these:\n"
+    "- Weather requests: 'weather in X', 'temperature in X'\n"
+    "- App/URL opening: 'open X', 'launch X', 'go to X website'\n"
+    "- File operations: 'search for file X', 'find file X'\n"
+    "- Terminal commands: 'run command X', 'what is my directory'\n"
+    "- System status: 'CPU usage', 'RAM usage', 'battery level'\n"
+    "- Timers and reminders: 'set timer', 'remind me at 5 to X', 'remind me in 10 minutes', "
+    "'how long is left on my timer', 'cancel the timer', 'pomodoro', 'focus session'\n"
+    "- Media and volume: 'pause', 'play music', 'next song', 'skip', 'volume up', 'mute', 'turn it down'\n"
+    "- Clipboard: 'what is in clipboard', 'copy X to clipboard'\n"
+    "- Math/Calculator: 'calculate X', 'what is X percent of Y', 'convert X to Y'\n"
+    "- Wikipedia: 'search wikipedia for X', 'look up X on wikipedia'\n"
+    "- Notes: 'take a note', 'save note', 'read my notes', 'search notes'\n"
+    "- Study explain: 'explain X', 'what is X simply', 'describe X technically', 'explain X for exam'\n"
+    "- Study formula: 'formula for X', 'equation for X', 'give me formula'\n"
+    "- Study quiz: 'quiz me', 'test me', 'flashcard', 'give me questions on X'\n"
+    "- Daily briefing: 'morning briefing', 'daily briefing', 'brief me'\n\n"
+    "Reply NO for:\n"
+    "- Greetings: 'hello', 'how are you', 'good morning'\n"
+    "- Date or time questions: 'what time is it', 'what day is today'\n"
+    "- Casual chat: 'tell me a joke', 'what do you think about X'\n"
+    "- Follow-up questions in conversation: 'can you elaborate', 'tell me more'\n"
+    "- Opinion questions: 'which is better X or Y'"
+)
 
 
 async def needs_tool(message: str) -> bool:
-    response = await _get_client().chat.completions.create(
-        model=INTENT_MODEL_NAME,
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "You are a binary classifier. Reply with only YES or NO. No explanation.\n\n"
-                    "Reply YES for ANY of these:\n"
-                    "- Weather requests: 'weather in X', 'temperature in X'\n"
-                    "- App/URL opening: 'open X', 'launch X', 'go to X website'\n"
-                    "- File operations: 'search for file X', 'find file X'\n"
-                    "- Terminal commands: 'run command X', 'what is my directory'\n"
-                    "- System status: 'CPU usage', 'RAM usage', 'battery level'\n"
-                    "- Timer/Pomodoro: 'set timer', 'pomodoro', 'focus session'\n"
-                    "- Clipboard: 'what is in clipboard', 'copy X to clipboard'\n"
-                    "- Math/Calculator: 'calculate X', 'what is X percent of Y', 'convert X to Y'\n"
-                    "- Wikipedia: 'search wikipedia for X', 'look up X on wikipedia'\n"
-                    "- Notes: 'take a note', 'save note', 'read my notes', 'search notes'\n"
-                    "- Study explain: 'explain X', 'what is X simply', 'describe X technically', 'explain X for exam'\n"
-                    "- Study formula: 'formula for X', 'equation for X', 'give me formula'\n"
-                    "- Study quiz: 'quiz me', 'test me', 'flashcard', 'give me questions on X'\n"
-                    "- Daily briefing: 'morning briefing', 'daily briefing', 'brief me'\n\n"
-                    "Reply NO for:\n"
-                    "- Greetings: 'hello', 'how are you', 'good morning'\n"
-                    "- Casual chat: 'tell me a joke', 'what do you think about X'\n"
-                    "- Follow-up questions in conversation: 'can you elaborate', 'tell me more'\n"
-                    "- Opinion questions: 'which is better X or Y'"
-                ),
-            },
-            {"role": "user", "content": message},
-        ],
-        temperature=0,
-        max_tokens=5,
-    )
+    if not _breaker.allow():
+        return _keyword_needs_tool(message)
+    try:
+        response = await _get_client().chat.completions.create(
+            model=INTENT_MODEL_NAME,
+            messages=[
+                {"role": "system", "content": _INTENT_PROMPT},
+                {"role": "user", "content": message},
+            ],
+            temperature=0,
+            # Room for a reasoning model's short hidden reasoning before "YES".
+            max_tokens=64,
+            **_groq_extra(INTENT_MODEL_NAME),
+        )
+    except _FALLBACK_ERRORS as exc:
+        _breaker.record_failure(exc)
+        return _keyword_needs_tool(message)
+    _breaker.record_success()
     decision = (response.choices[0].message.content or "").strip().upper()
-    return decision == "YES"
+    return decision.startswith("YES")
 
 
 async def get_daily_briefing() -> str:
@@ -132,12 +410,16 @@ async def get_daily_briefing() -> str:
         raise RuntimeError("Invalid DEFAULT_LAT or DEFAULT_LON in environment.") from exc
 
     from arya.tools.notes import get_notes
+    from arya.tools.productivity import list_timers
     from arya.tools.system_info import get_system_info
     from arya.tools.weather import get_weather
 
-    weather = await get_weather(default_city, default_lat, default_lon)
-    notes = await get_notes(limit=5)
-    system_status = await get_system_info()
+    weather, notes, system_status, timers = await asyncio.gather(
+        get_weather(default_city, default_lat, default_lon),
+        get_notes(limit=5),
+        get_system_info(),
+        list_timers(),
+    )
 
     prompt = (
         "Time and date:\n"
@@ -146,25 +428,28 @@ async def get_daily_briefing() -> str:
         f"{weather}\n\n"
         "Recent notes:\n"
         f"{notes}\n\n"
+        "Active timers and reminders:\n"
+        f"{timers}\n\n"
         "System status:\n"
         f"{system_status}\n"
     )
 
-    response = await _get_client().chat.completions.create(
-        model=INTENT_MODEL_NAME,
-        messages=[
+    response = await _complete(
+        INTENT_MODEL_NAME,
+        [
             {
                 "role": "system",
                 "content": (
-                    "You are ARYA. Generate a concise morning briefing "
+                    "You are ARYA. Generate a concise spoken morning briefing "
                     "in a friendly professional tone. Cover: time, weather, "
-                    "recent notes, and system status. Keep it under 5 sentences."
+                    "recent notes, pending reminders, and system status. "
+                    "Keep it under 5 sentences. No markdown or lists."
                 ),
             },
             {"role": "user", "content": prompt},
         ],
     )
-    return response.choices[0].message.content or ""
+    return response.content
 
 
 TOOLS = [
@@ -541,75 +826,99 @@ TOOLS = [
                 "required": [],
             },
         },
-    }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "media_control",
+            "description": (
+                "Control music/video playback and system volume on the PC. "
+                "Use for: 'pause', 'resume', 'play music', 'next song', 'skip', "
+                "'previous track', 'volume up', 'turn it down', 'mute', 'unmute'."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": [
+                            "play_pause", "next", "previous", "stop",
+                            "volume_up", "volume_down", "mute",
+                        ],
+                        "description": "The media action. 'mute' toggles mute on/off.",
+                    },
+                    "steps": {
+                        "type": "integer",
+                        "description": "For volume_up/volume_down: how many 2% steps, default 5 (10%).",
+                    },
+                },
+                "required": ["action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "set_reminder",
+            "description": (
+                "Remind the user about something at a clock time or after a delay. "
+                "Use for: 'remind me at 17:30 to call mom', 'remind me in 20 minutes to check the oven'. "
+                "Give exactly one of at_time or in_minutes."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "message": {
+                        "type": "string",
+                        "description": "What to remind the user about, e.g. 'call mom'",
+                    },
+                    "at_time": {
+                        "type": "string",
+                        "description": "24-hour clock time HH:MM, e.g. '17:30'. Tomorrow if already past today.",
+                    },
+                    "in_minutes": {
+                        "type": "number",
+                        "description": "Minutes from now",
+                    },
+                },
+                "required": ["message"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_timers",
+            "description": "List active timers, reminders and pomodoros with the time remaining on each",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "cancel_timer",
+            "description": "Cancel an active timer, reminder or pomodoro by its label, or all of them if no label is given",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "label": {
+                        "type": "string",
+                        "description": "Label (or part of it) of the timer to cancel; omit to cancel all",
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
 ]
 
 
-async def _tool_pipeline(message: str) -> str:
-    """Execute the full tool-dispatch pipeline. Only call when a tool is confirmed needed."""
-    client = _get_client()
-    history = get_history(limit=10)
-
-    # ── Semantic memory injection ─────────────────────────────────────────────
-    recent_contents = {item["content"] for item in history}
-    mem_context = await _get_semantic_context(message, recent_contents)
-
-    msg_id = save_message("user", message)
-    asyncio.create_task(_store_embedding("message", msg_id, f"[user]: {message}"))
-
-    history_messages = [
-        {"role": item["role"], "content": item["content"]}
-        for item in history
-    ]
-    base_messages = [
-        {"role": "system", "content": SYSTEM_PROMPT + mem_context},
-        *history_messages,
-        {"role": "user", "content": message},
-    ]
-
-    try:
-        first_response = await client.chat.completions.create(
-            model=MODEL_NAME,
-            messages=base_messages,
-            tools=TOOLS,
-            tool_choice="auto",
-            parallel_tool_calls=False,
-            temperature=0,
-        )
-    except Exception as exc:
-        raise RuntimeError(f"Groq request failed: {exc}") from exc
-
-    first_message = first_response.choices[0].message
-    finish_reason = first_response.choices[0].finish_reason
-    if finish_reason == "stop":
-        assistant_response = first_message.content or ""
-        resp_id = save_message("assistant", assistant_response)
-        asyncio.create_task(_store_embedding("message", resp_id, f"[assistant]: {assistant_response}"))
-        return assistant_response
-    if finish_reason != "tool_calls":
-        assistant_response = first_message.content or ""
-        resp_id = save_message("assistant", assistant_response)
-        asyncio.create_task(_store_embedding("message", resp_id, f"[assistant]: {assistant_response}"))
-        return assistant_response
-
-    tool_calls = first_message.tool_calls
-    if not tool_calls or len(tool_calls) == 0:
-        assistant_response = first_message.content or ""
-        resp_id = save_message("assistant", assistant_response)
-        asyncio.create_task(_store_embedding("message", resp_id, f"[assistant]: {assistant_response}"))
-        return assistant_response
-
-    tool_call = first_response.choices[0].message.tool_calls[0]
-    tool_name = re.split(r"[\s{=,]", tool_call.function.name)[0].strip()
-
-    try:
-        args = json.loads(tool_call.function.arguments)
-    except (TypeError, json.JSONDecodeError) as exc:
-        raise RuntimeError(f"Model returned invalid tool arguments for {tool_name}.") from exc
-    if args is None:
-        args = {}
-    print(f"Tool called: {tool_name}, Args: {args}")
-
+async def _dispatch_tool(tool_name: str, args: dict) -> str:
+    """Route a tool call to its implementation. Raises on bad arguments."""
     if tool_name == "get_weather":
         try:
             city = args["city"]
@@ -620,7 +929,7 @@ async def _tool_pipeline(message: str) -> str:
 
         from arya.tools.weather import get_weather
 
-        tool_result = await get_weather(city=city, latitude=latitude, longitude=longitude)
+        return await get_weather(city=city, latitude=latitude, longitude=longitude)
     elif tool_name == "open_app":
         try:
             app_name = str(args["app_name"])
@@ -629,7 +938,7 @@ async def _tool_pipeline(message: str) -> str:
 
         from arya.tools.os_tools import open_app
 
-        tool_result = await open_app(app_name=app_name)
+        return await open_app(app_name=app_name)
     elif tool_name == "open_url":
         try:
             url = str(args["url"])
@@ -638,7 +947,7 @@ async def _tool_pipeline(message: str) -> str:
 
         from arya.tools.os_tools import open_url
 
-        tool_result = await open_url(url=url)
+        return await open_url(url=url)
     elif tool_name == "file_search":
         try:
             filename = str(args["filename"])
@@ -648,7 +957,7 @@ async def _tool_pipeline(message: str) -> str:
 
         from arya.tools.os_tools import file_search
 
-        tool_result = await file_search(filename=filename, search_path=search_path)
+        return await file_search(filename=filename, search_path=search_path)
     elif tool_name == "run_command":
         try:
             command = str(args["command"])
@@ -657,15 +966,15 @@ async def _tool_pipeline(message: str) -> str:
 
         from arya.tools.os_tools import run_command
 
-        tool_result = await run_command(command=command)
+        return await run_command(command=command)
     elif tool_name == "get_system_info":
         from arya.tools.system_info import get_system_info
 
-        tool_result = await get_system_info()
+        return await get_system_info()
     elif tool_name == "get_battery":
         from arya.tools.system_info import get_battery
 
-        tool_result = await get_battery()
+        return await get_battery()
     elif tool_name == "set_timer":
         try:
             duration_seconds = int(args["duration_seconds"])
@@ -675,7 +984,7 @@ async def _tool_pipeline(message: str) -> str:
 
         from arya.tools.productivity import set_timer
 
-        tool_result = await set_timer(duration_seconds=duration_seconds, label=label)
+        return await set_timer(duration_seconds=duration_seconds, label=label)
     elif tool_name == "pomodoro":
         try:
             sessions = int(args.get("sessions", 1))
@@ -685,11 +994,11 @@ async def _tool_pipeline(message: str) -> str:
 
         from arya.tools.productivity import pomodoro
 
-        tool_result = await pomodoro(sessions=sessions, label=label)
+        return await pomodoro(sessions=sessions, label=label)
     elif tool_name == "get_clipboard":
         from arya.tools.productivity import get_clipboard
 
-        tool_result = await get_clipboard()
+        return await get_clipboard()
     elif tool_name == "set_clipboard":
         try:
             text = str(args["text"])
@@ -698,7 +1007,7 @@ async def _tool_pipeline(message: str) -> str:
 
         from arya.tools.productivity import set_clipboard
 
-        tool_result = await set_clipboard(text=text)
+        return await set_clipboard(text=text)
     elif tool_name == "calculate":
         try:
             expression = str(args["expression"])
@@ -707,7 +1016,7 @@ async def _tool_pipeline(message: str) -> str:
 
         from arya.tools.knowledge import calculate
 
-        tool_result = await calculate(expression=expression)
+        return await calculate(expression=expression)
     elif tool_name == "search_wikipedia":
         try:
             query = str(args["query"])
@@ -716,7 +1025,7 @@ async def _tool_pipeline(message: str) -> str:
 
         from arya.tools.knowledge import search_wikipedia
 
-        tool_result = await search_wikipedia(query=query)
+        return await search_wikipedia(query=query)
     elif tool_name == "explain_concept":
         try:
             topic = str(args["topic"])
@@ -740,7 +1049,7 @@ async def _tool_pipeline(message: str) -> str:
 
         from arya.tools.study import explain_concept
 
-        tool_result = await explain_concept(topic=cleaned_topic, level=level)
+        return await explain_concept(topic=cleaned_topic, level=level)
     elif tool_name == "formula_lookup":
         try:
             topic = str(args["topic"])
@@ -749,7 +1058,7 @@ async def _tool_pipeline(message: str) -> str:
 
         from arya.tools.study import formula_lookup
 
-        tool_result = await formula_lookup(topic=topic)
+        return await formula_lookup(topic=topic)
     elif tool_name == "flashcard_quiz":
         try:
             topic = str(args["topic"])
@@ -765,7 +1074,7 @@ async def _tool_pipeline(message: str) -> str:
 
         from arya.tools.study import flashcard_quiz
 
-        tool_result = await flashcard_quiz(topic=cleaned_topic, num_questions=num_questions)
+        return await flashcard_quiz(topic=cleaned_topic, num_questions=num_questions)
     elif tool_name == "save_note":
         try:
             content = str(args["content"])
@@ -775,11 +1084,11 @@ async def _tool_pipeline(message: str) -> str:
 
         from arya.tools.notes import save_note
 
-        tool_result = await save_note(content=content, tag=tag)
+        return await save_note(content=content, tag=tag)
     elif tool_name == "get_notes":
         from arya.tools.notes import get_notes
 
-        tool_result = await get_notes(tag=args.get("tag"), limit=args.get("limit", 10))
+        return await get_notes(tag=args.get("tag"), limit=args.get("limit", 10))
     elif tool_name == "search_notes":
         try:
             keyword = str(args["keyword"])
@@ -788,36 +1097,146 @@ async def _tool_pipeline(message: str) -> str:
 
         from arya.tools.notes import search_notes
 
-        tool_result = await search_notes(keyword=keyword)
+        return await search_notes(keyword=keyword)
     elif tool_name == "get_daily_briefing":
-        tool_result = await get_daily_briefing()
+        return await get_daily_briefing()
+    elif tool_name == "media_control":
+        from arya.tools.media import media_control
+
+        steps = args.get("steps")
+        return await media_control(
+            action=str(args.get("action", "")),
+            steps=int(steps) if steps is not None else 5,
+        )
+    elif tool_name == "set_reminder":
+        try:
+            reminder_message = str(args["message"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise RuntimeError("Model returned incomplete reminder arguments.") from exc
+
+        from arya.tools.productivity import set_reminder
+
+        in_minutes = args.get("in_minutes")
+        return await set_reminder(
+            message=reminder_message,
+            at_time=args.get("at_time"),
+            in_minutes=float(in_minutes) if in_minutes not in (None, "") else None,
+        )
+    elif tool_name == "list_timers":
+        from arya.tools.productivity import list_timers
+
+        return await list_timers()
+    elif tool_name == "cancel_timer":
+        from arya.tools.productivity import cancel_timer
+
+        return await cancel_timer(label=args.get("label"))
     else:
         raise RuntimeError(f"Unsupported tool requested by model: {tool_name}")
 
-    follow_up_messages = [
-        *base_messages,
-        first_response.choices[0].message,
-        {
+
+async def _execute_tool(tool_name: str, args: dict) -> str:
+    """Run one tool. Failures come back as text so the model can recover
+    (retry with fixed arguments, or explain the problem) instead of the whole
+    turn crashing with 'ARYA encountered an error'."""
+    try:
+        result = await _dispatch_tool(tool_name, args)
+    except Exception as exc:
+        print(f"Tool error ({tool_name}): {exc}")
+        return f"Tool '{tool_name}' failed: {exc}"
+    return str(result)
+
+
+def _parse_args(tool_call: _ToolCall) -> dict:
+    args = tool_call.arguments
+    if isinstance(args, str):
+        try:
+            args = json.loads(args) if args.strip() else {}
+        except json.JSONDecodeError:
+            return {}
+    return args if isinstance(args, dict) else {}
+
+
+async def _tool_pipeline(
+    message: str,
+    history: list[dict] | None = None,
+    mem_context: str | None = None,
+    save_user: bool = True,
+) -> str:
+    """Agent loop: let the model call tools (chaining up to MAX_TOOL_STEPS)
+    until it can answer. Only call when a tool is confirmed needed."""
+    if history is None:
+        history = get_history(limit=10)
+    if mem_context is None:
+        recent_contents = {item["content"] for item in history}
+        mem_context = await _get_semantic_context(message, recent_contents)
+
+    if save_user:
+        msg_id = save_message("user", message)
+        asyncio.create_task(_store_embedding("message", msg_id, f"[user]: {message}"))
+
+    messages: list[dict] = [
+        {"role": "system", "content": _system_prompt(with_tools=True) + mem_context},
+        *({"role": item["role"], "content": item["content"]} for item in history),
+        {"role": "user", "content": message},
+    ]
+
+    multi_part = bool(_MULTI_PART.search(message))
+    seen_calls: set[tuple[str, str]] = set()
+    assistant_response = ""
+    for step in range(MAX_TOOL_STEPS + 1):
+        # The big model picks the first tool; the fast 8B model handles the
+        # follow-up steps (reading results, chaining another call, answering),
+        # which keeps latency and Groq token use down.
+        model = MODEL_NAME if step == 0 else INTENT_MODEL_NAME
+        # Re-sending ~3k tokens of tool schemas on every step burns Groq's
+        # free-tier per-minute budget, so after the first call only offer
+        # tools again when the request sounds multi-part.
+        allow_tools = step == 0 or (step < MAX_TOOL_STEPS and multi_part)
+        completion = await _complete(
+            model, messages, tools=TOOLS if allow_tools else None, temperature=0
+        )
+
+        if not completion.tool_calls:
+            assistant_response = completion.content
+            break
+
+        tool_call = completion.tool_calls[0]
+        tool_name = re.split(r"[\s{=,]", tool_call.name)[0].strip()
+        args = _parse_args(tool_call)
+        signature = (tool_name, json.dumps(args, sort_keys=True))
+        if signature in seen_calls:
+            # Model is looping on the same call — force a final answer.
+            completion = await _complete(INTENT_MODEL_NAME, messages, temperature=0)
+            assistant_response = completion.content
+            break
+        seen_calls.add(signature)
+
+        print(f"Tool called (step {step + 1}): {tool_name}, Args: {args}")
+        tool_result = await _execute_tool(tool_name, args)
+
+        messages.append({
+            "role": "assistant",
+            "content": completion.content,
+            "tool_calls": [{
+                "id": tool_call.id,
+                "type": "function",
+                "function": {"name": tool_name, "arguments": json.dumps(args)},
+            }],
+        })
+        messages.append({
             "role": "tool",
             "tool_call_id": tool_call.id,
             "content": (
-                f"Tool result: {str(tool_result)}\n\n"
-                "Report this result to the user accurately and verbatim. "
-                "Do not recalculate, rephrase numbers, or add information not present in the result."
+                f"Tool result: {tool_result}\n\n"
+                "If the request needs another tool, call it. Otherwise report the "
+                "result to the user accurately, in plain spoken sentences. Do not "
+                "recalculate, rephrase numbers, or add information not present in the result."
             ),
-        },
-    ]
+        })
 
-    try:
-        final_response = await client.chat.completions.create(
-            model=INTENT_MODEL_NAME,
-            messages=follow_up_messages,
-            temperature=0,
-        )
-    except Exception as exc:
-        raise RuntimeError(f"Groq follow-up request failed: {exc}") from exc
+    if not assistant_response.strip():
+        assistant_response = "Done."
 
-    assistant_response = final_response.choices[0].message.content or ""
     resp_id = save_message("assistant", assistant_response)
     asyncio.create_task(_store_embedding("message", resp_id, f"[assistant]: {assistant_response}"))
     return assistant_response
@@ -831,74 +1250,65 @@ async def chat_with_tools(message: str) -> str:
 
 
 async def stream_with_tools(message: str):
-    needs_tool_result = await needs_tool(message)
+    """Yield the reply sentence by sentence (so TTS can start on sentence one)."""
+    # Intent check and memory lookup are independent — run them together.
+    history = get_history(limit=10)
+    recent_contents = {item["content"] for item in history}
+    needs_tool_result, mem_context = await asyncio.gather(
+        needs_tool(message),
+        _get_semantic_context(message, recent_contents),
+    )
     print(f"Needs tool: {needs_tool_result}")
 
     if needs_tool_result:
-        response = await _tool_pipeline(message)
-        yield response
+        response = await _tool_pipeline(message, history, mem_context)
+        for sentence in split_sentences(response):
+            yield sentence
         return
-
-    client = _get_client()
-    history = get_history(limit=10)
-
-    # ── Semantic memory injection ─────────────────────────────────────────────
-    recent_contents = {item["content"] for item in history}
-    mem_context = await _get_semantic_context(message, recent_contents)
 
     msg_id = save_message("user", message)
     asyncio.create_task(_store_embedding("message", msg_id, f"[user]: {message}"))
 
-    history_messages = [
-        {"role": item["role"], "content": item["content"]}
-        for item in history
-    ]
-
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT + mem_context},
-        *history_messages,
+        {"role": "system", "content": _system_prompt() + mem_context},
+        *({"role": item["role"], "content": item["content"]} for item in history),
         {"role": "user", "content": message},
     ]
-
-    try:
-        stream = await client.chat.completions.create(
-            model=INTENT_MODEL_NAME,
-            messages=messages,
-            stream=True,
-        )
-    except Exception as exc:
-        raise RuntimeError(f"Groq streaming request failed: {exc}") from exc
 
     buffer = ""
     full_response_parts: list[str] = []
 
-    async for chunk in stream:
-        choices = getattr(chunk, "choices", None)
-        if not choices:
-            continue
+    try:
+        try:
+            async for token in _stream_tokens(INTENT_MODEL_NAME, messages):
+                buffer += token
 
-        delta = getattr(choices[0], "delta", None)
-        token = getattr(delta, "content", None) if delta else None
-        if not token:
-            continue
+                while True:
+                    match = _SENTENCE_END.search(buffer)
+                    if not match:
+                        break
 
-        buffer += token
-
-        while True:
-            match = re.search(r"(?<!\d)[.!?](?=\s|$)", buffer)
-            if not match:
-                break
-
-            sentence = buffer[: match.end()]
-            if sentence:
+                    sentence = buffer[: match.end()]
+                    buffer = buffer[match.end():]
+                    if sentence.strip():
+                        full_response_parts.append(sentence)
+                        yield sentence
+        except _ModelWantsTool:
+            # The intent check said "no tool" but the model disagrees — trust
+            # the model and run the tool pipeline (it saves its own reply).
+            print("Chat model wants a tool — escalating to tool pipeline")
+            response = await _tool_pipeline(message, history, mem_context, save_user=False)
+            for sentence in split_sentences(response):
                 yield sentence
-                full_response_parts.append(sentence)
-            buffer = buffer[match.end():]
+            return
 
-    if buffer:
-        yield buffer
-        full_response_parts.append(buffer)
-
-    full_response = "".join(full_response_parts)
-    resp_id = save_message("assistant", full_response)
-    asyncio.create_task(_store_embedding("message", resp_id, f"[assistant]: {full_response}"))
+        if buffer.strip():
+            full_response_parts.append(buffer)
+            yield buffer
+    finally:
+        # Runs on normal completion *and* when the user interrupts ARYA, so
+        # history records what was actually said instead of a dangling question.
+        full_response = "".join(full_response_parts).strip()
+        if full_response:
+            resp_id = save_message("assistant", full_response)
+            asyncio.create_task(_store_embedding("message", resp_id, f"[assistant]: {full_response}"))

@@ -65,9 +65,25 @@ BARGE_IN_STOP_PHRASES = {
 # don't register.
 BARGE_IN_DUCK_MULTIPLIER = 4.0
 
+# Keep the mic ducked briefly after playback ends — room echo and speaker
+# tail would otherwise be heard as the start of a follow-up command.
+SPEAKING_TAIL_SECONDS = 0.35
+
+# Re-transcribe wake-word commands and follow-ups with the GPU Whisper medium
+# model. The small CPU model is good enough to *spot* "ARYA", but it mangles
+# the actual request ("set a timer for fifteen" → "set a time for fifty").
+ACCURATE_COMMANDS = os.getenv("WAKE_ACCURATE_COMMANDS", "1") != "0"
+
 # Regex built from variants — require word boundary on the right side
+# Mishearings that are ordinary words/phrases ("area", "are ya") only count
+# when they directly follow a greeting — "hey area" is ARYA, "this area" isn't.
+_GREETED_FUZZY = r"(?:hey|hi|ok|okay|k)[\s,.\-]+(?:area|are ya|are yah)"
+
 _WAKE_PATTERN = re.compile(
-    r"(?<!\w)(" + "|".join(re.escape(v) for v in sorted(WAKE_VARIANTS, key=len, reverse=True)) + r")(?!\w)",
+    r"(?<!\w)("
+    + _GREETED_FUZZY + "|"
+    + "|".join(re.escape(v) for v in sorted(WAKE_VARIANTS, key=len, reverse=True))
+    + r")(?!\w)",
     re.IGNORECASE,
 )
 
@@ -100,6 +116,7 @@ class WakeWordEngine:
         self._noise_floor = ENERGY_THRESHOLD  # adaptive noise floor
         self._followup_active = False
         self._followup_deadline = 0.0
+        self._speaking_tail_until = 0.0
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -112,8 +129,28 @@ class WakeWordEngine:
         self._loop = loop
 
     def set_speaking(self, state: bool) -> None:
-        """Duck (not mute) the mic while ARYA is speaking so barge-in still works."""
+        """Duck (not mute) the mic while ARYA is speaking so barge-in still works.
+
+        When ARYA stops speaking mid-conversation, the follow-up window restarts
+        from *now* — otherwise a long answer could use up the whole window and
+        the user would have to say the wake word again to reply.
+        """
+        if self._speaking and not state:
+            self._speaking_tail_until = time.monotonic() + SPEAKING_TAIL_SECONDS
+            if self._followup_active:
+                self._refresh_followup_mode()
         self._speaking = state
+
+    def _is_ducked(self) -> bool:
+        return self._speaking or time.monotonic() < self._speaking_tail_until
+
+    def followup_active(self) -> bool:
+        """True while ARYA will accept a command without the wake word."""
+        return self._followup_mode_enabled()
+
+    def end_conversation(self) -> None:
+        """Close the follow-up window (e.g. after 'thanks' or 'that's all')."""
+        self._clear_followup_mode()
 
     def _refresh_followup_mode(self) -> None:
         self._followup_active = True
@@ -169,13 +206,14 @@ class WakeWordEngine:
             # Adaptive threshold: 3× the recent noise floor, floored at ENERGY_THRESHOLD.
             # While ARYA is speaking, require much louder input so speaker bleed
             # picked up by this same mic doesn't self-trigger.
+            ducked = self._is_ducked()
             threshold = max(ENERGY_THRESHOLD, self._noise_floor * 3.0)
-            if self._speaking:
+            if ducked:
                 threshold *= BARGE_IN_DUCK_MULTIPLIER
             is_speech = rms > threshold
 
             if not is_speech and not recording:
-                if not self._speaking:
+                if not ducked:
                     noise_samples.append(rms)
                     if len(noise_samples) == noise_samples.maxlen:
                         self._noise_floor = float(np.mean(list(noise_samples)))
@@ -187,7 +225,7 @@ class WakeWordEngine:
                     # Flush the pre-roll buffer so we capture "Ar-" before VAD fired
                     audio_buf = list(preroll) + [chunk]
                     recording = True
-                    captured_while_speaking = self._speaking
+                    captured_while_speaking = ducked
                 else:
                     audio_buf.append(chunk)
                 speech_frames  += 1
@@ -257,7 +295,11 @@ class WakeWordEngine:
                 no_speech_threshold=MAX_NO_SPEECH_PROB,
                 log_prob_threshold=MIN_AVG_LOGPROB,
                 compression_ratio_threshold=2.4,
-                initial_prompt="Arya,",  # biases Whisper toward the wake word spelling
+                # No initial_prompt here: Whisper treats prompt text as already
+                # said and drops it from the output, so a prompt of "Arya,"
+                # made it *omit* the wake word ("Hey Arya, set a timer" →
+                # "set a timer"). Measured on synthetic speech: 5/12 wake words
+                # kept with the prompt vs 10/12 without.
             )
             accepted_segments = [s for s in segments if not _is_low_confidence_segment(s)]
             transcript = " ".join(s.text.strip() for s in accepted_segments).strip()
@@ -295,6 +337,17 @@ class WakeWordEngine:
                 print(f"WakeWord heard (no match): {transcript!r}")
                 return
 
+            # Spotting the wake word only needs the small model; understanding
+            # the request deserves the accurate one. Barge-in stops skip this —
+            # they must be instant and are matched on a fixed phrase list.
+            # A bare "ARYA" (no command) also skips it so "Yes?" comes back fast.
+            if ACCURATE_COMMANDS and not (captured_while_speaking and not match) and (command or not match):
+                refined = self._refine_command(audio, command, wake_matched=bool(match))
+                if refined is None:
+                    print(f"WakeWord dropped (accurate model heard no speech): {transcript!r}")
+                    return
+                command = refined
+
             print(f"WakeWord command: {command!r}")
 
             if self._callback and self._loop:
@@ -311,6 +364,30 @@ class WakeWordEngine:
                     os.unlink(tmp_path)
                 except OSError:
                     pass
+
+
+    def _refine_command(self, audio: np.ndarray, fallback: str, wake_matched: bool) -> str | None:
+        """Re-transcribe with Whisper medium. Returns the refined command,
+        `fallback` if medium can't improve on it, or None if this was a
+        follow-up that medium judges to be noise (drops false triggers from
+        TV / background chatter during the follow-up window)."""
+        try:
+            from arya.core.stt import transcribe_array
+            accurate = transcribe_array(audio)
+        except Exception as exc:
+            print(f"WakeWord: accurate re-transcription failed ({exc}); using fast transcript")
+            return fallback
+
+        if not accurate:
+            return fallback if wake_matched else None
+
+        if wake_matched:
+            match = _WAKE_PATTERN.search(accurate)
+            if not match:
+                # Medium spelled the name some other way — trust the fast cut.
+                return fallback
+            return accurate[match.end():].lstrip(" ,.:!?").strip()
+        return accurate
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

@@ -92,44 +92,57 @@ def load_model() -> WhisperModel:
     return _model
 
 
-def _transcribe_sync(audio_bytes: bytes) -> str:
+def _run_model(m: WhisperModel, source) -> str:
+    segments, _ = m.transcribe(
+        source,
+        language="en",
+        beam_size=WHISPER_BEAM_SIZE,
+        best_of=1,
+        temperature=0.0,
+        condition_on_previous_text=False,
+        vad_filter=True,
+        vad_parameters={"min_silence_duration_ms": 500, "speech_pad_ms": 120},
+        no_speech_threshold=MAX_NO_SPEECH_PROB,
+        log_prob_threshold=MIN_AVG_LOGPROB,
+        compression_ratio_threshold=WHISPER_COMPRESSION_RATIO_THRESHOLD,
+    )
+    return _accept_segments(segments)
+
+
+def _run_with_cpu_fallback(source) -> str:
     global _model
     model = load_model()
-
-    with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as f:
-        f.write(audio_bytes)
-        tmp_path = f.name
-
-    def _run(m: WhisperModel) -> str:
-        segments, _ = m.transcribe(
-            tmp_path,
-            language="en",
-            beam_size=WHISPER_BEAM_SIZE,
-            best_of=1,
-            temperature=0.0,
-            condition_on_previous_text=False,
-            vad_filter=True,
-            vad_parameters={"min_silence_duration_ms": 500, "speech_pad_ms": 120},
-            no_speech_threshold=MAX_NO_SPEECH_PROB,
-            log_prob_threshold=MIN_AVG_LOGPROB,
-            compression_ratio_threshold=WHISPER_COMPRESSION_RATIO_THRESHOLD,
-        )
-        return _accept_segments(segments)
-
     try:
-        return _run(model)
+        return _run_model(model, source)
     except RuntimeError as exc:
         if any(k in str(exc).lower() for k in ("cublas", "cuda", "cufft", "curand")):
             print(f"STT: CUDA runtime error — switching to CPU permanently. ({exc})")
             _model = WhisperModel("medium", device="cpu", compute_type="int8")
             print("STT: Whisper reloaded on CPU (int8)")
-            return _run(_model)
+            return _run_model(_model, source)
         raise
+
+
+def _transcribe_sync(audio_bytes: bytes) -> str:
+    with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as f:
+        f.write(audio_bytes)
+        tmp_path = f.name
+    try:
+        return _run_with_cpu_fallback(tmp_path)
     finally:
         try:
             os.unlink(tmp_path)
         except OSError:
             pass
+
+
+def transcribe_array(audio: "np.ndarray") -> str:
+    """Transcribe 16 kHz mono float32 PCM with Whisper medium. Blocking —
+    called from the wake-word worker thread to get an accurate command
+    transcript after the small model has spotted the wake word."""
+    if audio is None or len(audio) == 0:
+        return ""
+    return _run_with_cpu_fallback(audio.astype("float32", copy=False))
 
 
 async def transcribe(audio_bytes: bytes) -> str:

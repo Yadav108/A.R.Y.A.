@@ -388,6 +388,10 @@
     let currentAudio = null;
     let audioUnlocked = false;
     let currentAssistantEl = null;
+    // Server-side playback (AUDIO_OUTPUT=local): ARYA speaks through the PC
+    // speakers, the page just mirrors state.
+    let remoteSpeaking = false;
+    let followupTimer  = null;
 
     /* ── Autoplay unlock ────────────────────────────────────────────────
        Chrome blocks unmuted Audio.play() until the page has seen a user
@@ -479,7 +483,7 @@
         target = Math.min(1, readRMS(listenAnalyser) * 4.5);
       } else if (isPlaying && speakAnalyser) {
         target = Math.min(1, readRMS(speakAnalyser) * 4.5);
-      } else if (isRecording || isPlaying) {
+      } else if (isRecording || isPlaying || remoteSpeaking) {
         // No analyser available (unsupported browser, permission edge case) —
         // synthetic wobble so the orb still feels responsive, not dead.
         target = Math.max(0, 0.35 + 0.25 * Math.sin(t / 140) + 0.15 * Math.sin(t / 55 + 1.3));
@@ -580,7 +584,8 @@
     function connectWebSocket() {
       if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) return;
 
-      socket = new WebSocket("ws://localhost:8000/ws");
+      const wsProto = location.protocol === "https:" ? "wss" : "ws";
+      socket = new WebSocket(`${wsProto}://${location.host || "localhost:8000"}/ws`);
       socket.binaryType = "arraybuffer";
 
       socket.onopen = () => {
@@ -602,7 +607,31 @@
         /* ── text messages ── */
         const msg = event.data;
 
+        if (msg === "ARYA_SPEAKING") {
+          remoteSpeaking = true;
+          setStatus("Speaking...", "speaking");
+          return;
+        }
+
+        if (msg === "ARYA_FOLLOWUP") {
+          // Hands-free conversation: ARYA is listening for a reply without the wake word.
+          setStatus("Listening — just reply, no wake word needed", "listening");
+          clearTimeout(followupTimer);
+          followupTimer = setTimeout(() => {
+            if (statusEl.textContent.startsWith("Listening — just reply")) setStatus("Ready");
+          }, 12000);
+          return;
+        }
+
+        if (msg.startsWith("NOTIFY:")) {
+          currentAssistantEl = null;
+          appendAssistantChunk("⏰ " + msg.slice("NOTIFY:".length));
+          currentAssistantEl = null;
+          return;
+        }
+
         if (msg === "ARYA_INTERRUPT") {
+          remoteSpeaking = false;
           // Server is barging in with a new response — stop whatever is playing.
           audioQueue.length = 0;
           if (currentAudio) {
@@ -616,6 +645,7 @@
         }
 
         if (msg === "ARYA_DONE") {
+          remoteSpeaking = false;
           // If no audio arrived, unblock now
           if (audioQueue.length === 0 && !isPlaying) { setBusy(false); setStatus("Ready"); }
           return;
@@ -637,6 +667,7 @@
         }
 
         if (msg.startsWith("TRANSCRIPT:")) {
+          clearTimeout(followupTimer);
           const transcript = msg.slice("TRANSCRIPT:".length);
           appendUserMessage(transcript);
           setStatus("Thinking...", "thinking");

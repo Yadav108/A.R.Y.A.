@@ -1,7 +1,4 @@
-from arya.core.llm import _get_client
-
-
-MODEL_NAME = "llama-3.1-8b-instant"
+from arya.core.llm import INTENT_MODEL_NAME as MODEL_NAME, _complete
 
 SYSTEM_PROMPTS = {
     "simple": (
@@ -27,9 +24,9 @@ async def explain_concept(topic: str, level: str = "simple") -> str:
     system_prompt = SYSTEM_PROMPTS[selected_level]
 
     try:
-        response = await _get_client().chat.completions.create(
-            model=MODEL_NAME,
-            messages=[
+        response = await _complete(
+            MODEL_NAME,
+            [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": f"Explain: {topic}"},
             ],
@@ -37,7 +34,7 @@ async def explain_concept(topic: str, level: str = "simple") -> str:
     except Exception as exc:
         raise RuntimeError(f"Failed to explain concept: {exc}") from exc
 
-    return response.choices[0].message.content or ""
+    return response.content
 
 
 async def formula_lookup(topic: str) -> str:
@@ -54,9 +51,9 @@ async def formula_lookup(topic: str) -> str:
     )
 
     try:
-        response = await _get_client().chat.completions.create(
-            model=MODEL_NAME,
-            messages=[
+        response = await _complete(
+            MODEL_NAME,
+            [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": f"Give me the formula for: {topic}"},
             ],
@@ -64,7 +61,7 @@ async def formula_lookup(topic: str) -> str:
     except Exception as exc:
         raise RuntimeError(f"Failed to look up formula: {exc}") from exc
 
-    return response.choices[0].message.content or ""
+    return response.content
 
 
 async def flashcard_quiz(topic: str, num_questions: int = 3) -> str:
@@ -92,9 +89,9 @@ async def flashcard_quiz(topic: str, num_questions: int = 3) -> str:
     )
 
     try:
-        response = await _get_client().chat.completions.create(
-            model=MODEL_NAME,
-            messages=[
+        response = await _complete(
+            MODEL_NAME,
+            [
                 {"role": "system", "content": system_prompt},
                 {
                     "role": "user",
@@ -105,7 +102,7 @@ async def flashcard_quiz(topic: str, num_questions: int = 3) -> str:
     except Exception as exc:
         raise RuntimeError(f"Failed to generate flashcard quiz: {exc}") from exc
 
-    raw = response.choices[0].message.content or ""
+    raw = response.content
     lines = [line.strip() for line in raw.splitlines() if line.strip()]
 
     qa_pairs: dict[int, dict[str, str]] = {}
