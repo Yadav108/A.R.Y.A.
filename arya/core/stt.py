@@ -3,11 +3,53 @@ import os
 import site
 import tempfile
 from pathlib import Path
+from typing import Iterable
 
 from faster_whisper import WhisperModel
 
 
 _model: WhisperModel | None = None
+
+MIN_AVG_LOGPROB = -1.0
+MAX_NO_SPEECH_PROB = 0.6
+WHISPER_BEAM_SIZE = 5
+WHISPER_COMPRESSION_RATIO_THRESHOLD = 2.4
+
+# Whisper's well-known canned hallucinations on quiet/ambiguous audio — trained
+# into it from YouTube caption data. If the *entire* accepted transcript is one
+# of these verbatim, it's noise, not speech.
+_HALLUCINATION_PHRASES = {
+    "thank you for watching",
+    "thanks for watching",
+    "thank you for watching!",
+    "thanks for watching!",
+    "please subscribe",
+    "subscribe to my channel",
+    "like and subscribe",
+    "don't forget to subscribe",
+    "see you in the next video",
+    "see you next time",
+    "thanks for watching this video",
+    "thank you so much for watching",
+    "i'll see you in the next one",
+}
+
+
+def _accept_segments(segments: Iterable) -> str:
+    parts: list[str] = []
+    for segment in segments:
+        text = segment.text.strip()
+        if not text:
+            continue
+        if getattr(segment, "no_speech_prob", 0.0) > MAX_NO_SPEECH_PROB:
+            continue
+        if getattr(segment, "avg_logprob", 0.0) < MIN_AVG_LOGPROB:
+            continue
+        parts.append(text)
+    result = " ".join(parts).strip()
+    if result.lower().strip(" .!?") in _HALLUCINATION_PHRASES:
+        return ""
+    return result
 
 
 def _register_nvidia_dll_dirs() -> None:
@@ -62,11 +104,17 @@ def _transcribe_sync(audio_bytes: bytes) -> str:
         segments, _ = m.transcribe(
             tmp_path,
             language="en",
-            beam_size=5,
+            beam_size=WHISPER_BEAM_SIZE,
+            best_of=1,
+            temperature=0.0,
+            condition_on_previous_text=False,
             vad_filter=True,
-            vad_parameters={"min_silence_duration_ms": 300},
+            vad_parameters={"min_silence_duration_ms": 500, "speech_pad_ms": 120},
+            no_speech_threshold=MAX_NO_SPEECH_PROB,
+            log_prob_threshold=MIN_AVG_LOGPROB,
+            compression_ratio_threshold=WHISPER_COMPRESSION_RATIO_THRESHOLD,
         )
-        return " ".join(seg.text.strip() for seg in segments).strip()
+        return _accept_segments(segments)
 
     try:
         return _run(model)

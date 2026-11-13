@@ -27,7 +27,7 @@ async def explain_concept(topic: str, level: str = "simple") -> str:
     system_prompt = SYSTEM_PROMPTS[selected_level]
 
     try:
-        response = _get_client().chat.completions.create(
+        response = await _get_client().chat.completions.create(
             model=MODEL_NAME,
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -54,7 +54,7 @@ async def formula_lookup(topic: str) -> str:
     )
 
     try:
-        response = _get_client().chat.completions.create(
+        response = await _get_client().chat.completions.create(
             model=MODEL_NAME,
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -92,7 +92,7 @@ async def flashcard_quiz(topic: str, num_questions: int = 3) -> str:
     )
 
     try:
-        response = _get_client().chat.completions.create(
+        response = await _get_client().chat.completions.create(
             model=MODEL_NAME,
             messages=[
                 {"role": "system", "content": system_prompt},

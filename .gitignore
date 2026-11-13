@@ -3,3 +3,4 @@ __pycache__/
 *.pyc
 *.pyo
 *.db
+# .venv\Scripts\python.exe -m uvicorn arya.server.websocket:app --reload --port 8000

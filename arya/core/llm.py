@@ -5,7 +5,7 @@ import re
 from datetime import datetime
 
 from dotenv import load_dotenv
-from groq import Groq
+from groq import AsyncGroq
 
 from arya.memory.database import get_history, save_message, save_memory_vector, semantic_search
 
@@ -20,10 +20,10 @@ SYSTEM_PROMPT = (
 MODEL_NAME = "llama-3.3-70b-versatile"
 INTENT_MODEL_NAME = "llama-3.1-8b-instant"
 
-_client: Groq | None = None
+_client: AsyncGroq | None = None
 
 
-def _get_client() -> Groq:
+def _get_client() -> AsyncGroq:
     global _client
     if _client is not None:
         return _client
@@ -34,7 +34,7 @@ def _get_client() -> Groq:
             "Missing GROQ_API_KEY. Add it to your .env file before calling chat()."
         )
 
-    _client = Groq(api_key=api_key)
+    _client = AsyncGroq(api_key=api_key)
     return _client
 
 
@@ -71,8 +71,8 @@ async def _get_semantic_context(message: str, exclude: set[str]) -> str:
         return ""
 
 
-def chat(message: str) -> str:
-    response = _get_client().chat.completions.create(
+async def chat(message: str) -> str:
+    response = await _get_client().chat.completions.create(
         model=INTENT_MODEL_NAME,
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -83,7 +83,7 @@ def chat(message: str) -> str:
 
 
 async def needs_tool(message: str) -> bool:
-    response = _get_client().chat.completions.create(
+    response = await _get_client().chat.completions.create(
         model=INTENT_MODEL_NAME,
         messages=[
             {
@@ -150,7 +150,7 @@ async def get_daily_briefing() -> str:
         f"{system_status}\n"
     )
 
-    response = _get_client().chat.completions.create(
+    response = await _get_client().chat.completions.create(
         model=INTENT_MODEL_NAME,
         messages=[
             {
@@ -221,7 +221,7 @@ TOOLS = [
                     "url": {
                         "type": "string",
                         "description": "The URL to open in the default browser",
-                    },
+                    }, \
                 },
                 "required": ["url"],
             },
@@ -253,7 +253,12 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "run_command",
-            "description": "Run a Windows terminal command and return output",
+            "description": (
+                "Run a read-only Windows diagnostic command and return its output. "
+                "Only these commands are allowed: dir, echo, whoami, systeminfo, "
+                "ipconfig, ping, tasklist, where, hostname, ver, date, time, type, "
+                "tree, vol, netstat, driverquery. No shell operators (&, |, ;, <, >)."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -563,7 +568,7 @@ async def _tool_pipeline(message: str) -> str:
     ]
 
     try:
-        first_response = client.chat.completions.create(
+        first_response = await client.chat.completions.create(
             model=MODEL_NAME,
             messages=base_messages,
             tools=TOOLS,
@@ -804,7 +809,7 @@ async def _tool_pipeline(message: str) -> str:
     ]
 
     try:
-        final_response = client.chat.completions.create(
+        final_response = await client.chat.completions.create(
             model=INTENT_MODEL_NAME,
             messages=follow_up_messages,
             temperature=0,
@@ -821,7 +826,7 @@ async def _tool_pipeline(message: str) -> str:
 async def chat_with_tools(message: str) -> str:
     """Public entry point: checks intent then dispatches tools if needed."""
     if not await needs_tool(message):
-        return chat(message)
+        return await chat(message)
     return await _tool_pipeline(message)
 
 
@@ -856,7 +861,7 @@ async def stream_with_tools(message: str):
     ]
 
     try:
-        stream = client.chat.completions.create(
+        stream = await client.chat.completions.create(
             model=INTENT_MODEL_NAME,
             messages=messages,
             stream=True,
@@ -867,7 +872,7 @@ async def stream_with_tools(message: str):
     buffer = ""
     full_response_parts: list[str] = []
 
-    for chunk in stream:
+    async for chunk in stream:
         choices = getattr(chunk, "choices", None)
         if not choices:
             continue
