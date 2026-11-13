@@ -1,7 +1,7 @@
 groq
 fastapi
 uvicorn[standard]
-edge-tts
+edge-tts>=7.3.1  # older versions get HTTP 403 from Microsoft
 pywin32
 httpx
 python-dotenv

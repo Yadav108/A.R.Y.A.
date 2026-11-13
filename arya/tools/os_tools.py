@@ -1,38 +1,137 @@
+import asyncio
 import os
+import shutil
 import subprocess
 import webbrowser
 
 
-DANGEROUS_KEYWORDS = [
-    "rm -rf", "rm -r",
-    "format",
-    "del /f", "del /q", "del /s",
-    "shutdown", "restart",
-    "rmdir", "rd /s",
-    "taskkill",
-    "reg delete", "reg add",
-    "bcdedit",
-    "diskpart",
-    "cipher /w",
-    "sfc /scannow",
-    "netsh",
-    "> /dev/null",
+# Only these read-only, informational commands may be run via voice — the LLM
+# decides the command from what it thinks it heard, so this is an allowlist
+# (not a blocklist) to keep a misheard/misinterpreted phrase from ever running
+# something destructive. First whitespace-separated token of the command must
+# match one of these (case-insensitive).
+ALLOWED_COMMANDS = {
+    "dir", "echo", "whoami", "systeminfo", "ipconfig", "ping",
+    "tasklist", "where", "hostname", "ver", "date", "time",
+    "type", "tree", "vol", "netstat", "driverquery",
+}
+
+# Shell metacharacters that could chain an allowed command into something
+# else (e.g. "echo hi & del /f x") are always blocked, even for allowed verbs.
+_SHELL_METACHARACTERS = set("&|;<>`$")
+
+
+# os.startfile() / ShellExecute only resolves a bare name if it's an exact
+# match on PATH or in the "App Paths" registry — spoken names like "vs code"
+# or "visual studio code" (what the LLM extracts from natural speech) match
+# neither, so the previous implementation silently failed for anything but
+# a handful of well-known system exes. Map common spoken names to their real
+# executables, and fall back to a bounded search of the usual install roots.
+_APP_ALIASES: dict[str, str] = {
+    "vscode": "Code.exe",
+    "vs code": "Code.exe",
+    "visual studio code": "Code.exe",
+    "code": "Code.exe",
+    "chrome": "chrome.exe",
+    "google chrome": "chrome.exe",
+    "edge": "msedge.exe",
+    "microsoft edge": "msedge.exe",
+    "firefox": "firefox.exe",
+    "notepad": "notepad.exe",
+    "calculator": "calc.exe",
+    "calc": "calc.exe",
+    "explorer": "explorer.exe",
+    "file explorer": "explorer.exe",
+    "word": "WINWORD.EXE",
+    "microsoft word": "WINWORD.EXE",
+    "excel": "EXCEL.EXE",
+    "microsoft excel": "EXCEL.EXE",
+    "powerpoint": "POWERPNT.EXE",
+    "spotify": "Spotify.exe",
+    "terminal": "wt.exe",
+    "windows terminal": "wt.exe",
+    "cmd": "cmd.exe",
+    "command prompt": "cmd.exe",
+    "powershell": "powershell.exe",
+    "task manager": "Taskmgr.exe",
+    "paint": "mspaint.exe",
+    "settings": "ms-settings:",
+}
+
+_APP_SEARCH_ROOTS = [
+    os.environ.get("ProgramFiles", r"C:\Program Files"),
+    os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
+    os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs"),
 ]
+
+_resolved_app_cache: dict[str, str] = {}
+
+
+def _walk_limited(root: str, target_filename: str, max_depth: int = 4) -> str | None:
+    """Depth-limited search so this never turns into a full Program Files crawl."""
+    root = os.path.normpath(root)
+    base_depth = root.count(os.sep)
+    for dirpath, dirnames, filenames in os.walk(root):
+        if dirpath.count(os.sep) - base_depth >= max_depth:
+            dirnames[:] = []
+            continue
+        if target_filename in filenames:
+            return os.path.join(dirpath, target_filename)
+    return None
+
+
+def _resolve_app(app_name: str) -> str | None:
+    """Best-effort resolve a spoken app name to a launchable path. Runs on a
+    worker thread (see open_app) since the fallback search touches disk."""
+    key = app_name.strip().lower()
+    if key in _resolved_app_cache:
+        return _resolved_app_cache[key]
+
+    alias = _APP_ALIASES.get(key)
+    if alias and alias.endswith(":"):
+        _resolved_app_cache[key] = alias
+        return alias
+
+    candidates = [alias] if alias else []
+    stripped = key.replace(" ", "")
+    for guess in (f"{stripped}.exe", key if key.endswith(".exe") else f"{stripped}.exe"):
+        if guess not in candidates:
+            candidates.append(guess)
+
+    for candidate in candidates:
+        found = shutil.which(candidate)
+        if found:
+            _resolved_app_cache[key] = found
+            return found
+
+    for candidate in candidates:
+        for root in _APP_SEARCH_ROOTS:
+            if root and os.path.isdir(root):
+                found = _walk_limited(root, candidate)
+                if found:
+                    _resolved_app_cache[key] = found
+                    return found
+
+    return None
 
 
 async def open_app(app_name: str) -> str:
     if not app_name.strip():
         return "Failed to open app: app name is empty."
 
+    loop = asyncio.get_event_loop()
+    resolved = await loop.run_in_executor(None, _resolve_app, app_name)
+    target = resolved or app_name
+
     try:
-        os.startfile(app_name)  # type: ignore[attr-defined]
+        os.startfile(target)  # type: ignore[attr-defined]
         return f"Opened {app_name}"
-    except Exception:
+    except Exception as exc:
         try:
-            subprocess.Popen(app_name, shell=True)
+            subprocess.Popen(f'start "" "{target}"', shell=True)
             return f"Opened {app_name}"
-        except Exception as exc:
-            return f"Failed to open {app_name}: {exc}"
+        except Exception:
+            return f"Failed to open {app_name}: couldn't find or launch it ({exc})."
 
 
 async def open_url(url: str) -> str:
@@ -105,9 +204,15 @@ async def run_command(command: str) -> str:
     if not normalized_command:
         return "Command not allowed"
 
-    lower_command = normalized_command.lower()
-    if any(keyword in lower_command for keyword in DANGEROUS_KEYWORDS):
-        return "Command not allowed"
+    if any(ch in normalized_command for ch in _SHELL_METACHARACTERS):
+        return "Command not allowed: shell operators like &, |, ;, <, >, `, $ are blocked."
+
+    first_token = normalized_command.split()[0].lower()
+    if first_token not in ALLOWED_COMMANDS:
+        return (
+            f"Command not allowed: '{first_token}' isn't in ARYA's allowed command "
+            f"list ({', '.join(sorted(ALLOWED_COMMANDS))})."
+        )
 
     try:
         result = subprocess.run(

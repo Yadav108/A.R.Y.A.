@@ -101,7 +101,22 @@ GROQ_API_KEY=your_groq_api_key_here
 DEFAULT_CITY=Berlin
 DEFAULT_LAT=52.52
 DEFAULT_LON=13.405
+
+# Optional
+USER_NAME=Aryan                    # ARYA addresses you by name
+GROQ_MODEL=openai/gpt-oss-120b     # tool-calling model
+GROQ_FAST_MODEL=openai/gpt-oss-20b # intent, chat, follow-ups
+AUDIO_OUTPUT=local                 # local = PC speakers (hands-free); browser = play in the tab
+WAKE_ACCURATE_COMMANDS=1           # re-transcribe commands with Whisper medium (0 to save RAM)
+OLLAMA_MODEL=llama3.2:3b           # offline fallback when Groq fails
 ```
+
+**Hands-free use:** run `python main.py` and just talk — no browser tab needed.
+Say "Hey ARYA, …" (or just "ARYA" and wait for "Yes?"). After each reply ARYA keeps listening
+for ~12 s, so you can follow up without the wake word. Say "stop" to interrupt, "thanks" to end.
+
+**Offline fallback (recommended):** `winget install Ollama.Ollama` then `ollama pull llama3.2:3b`.
+Used automatically when Groq is rate-limited or unreachable.
 
 **4. Run**
 ```bash
