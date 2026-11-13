@@ -919,6 +919,12 @@ TOOLS = [
 
 async def _dispatch_tool(tool_name: str, args: dict) -> str:
     """Route a tool call to its implementation. Raises on bad arguments."""
+    # Small local models often send the *string* "null"/"none" for optional
+    # arguments instead of omitting them — treat those as missing.
+    args = {
+        k: v for k, v in args.items()
+        if not (isinstance(v, str) and v.strip().lower() in {"", "null", "none", "undefined"})
+    }
     if tool_name == "get_weather":
         try:
             city = args["city"]
