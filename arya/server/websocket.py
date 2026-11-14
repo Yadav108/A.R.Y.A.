@@ -540,17 +540,16 @@ async def _aiter(items: Iterable[str]) -> AsyncIterator[str]:
 
 MAX_SPOKEN_SENTENCES = int(os.getenv("ARYA_MAX_SPOKEN_SENTENCES", "5"))      # 0 = no limit
 DETAIL_SPOKEN_SENTENCES = 12
-_WANTS_DETAIL = re.compile(r"\b(?:in detail|detailed|step by step|explain (?:it )?fully|full explanation|"
-                           r"tell me more|more detail|go on|continue|everything|walk me through)\b", re.IGNORECASE)
 REST_ON_SCREEN = "The rest is on screen."
 
 
 def spoken_limit(message: str) -> int:
     """How many sentences ARYA says aloud; the whole reply is always shown on screen."""
+    from arya.core.llm import wants_detail
+
     if MAX_SPOKEN_SENTENCES <= 0:
         return 0
-    return max(MAX_SPOKEN_SENTENCES, DETAIL_SPOKEN_SENTENCES) if _WANTS_DETAIL.search(message or "") \
-        else MAX_SPOKEN_SENTENCES
+    return max(MAX_SPOKEN_SENTENCES, DETAIL_SPOKEN_SENTENCES) if wants_detail(message) else MAX_SPOKEN_SENTENCES
 
 
 async def _speak_stream(sentences: AsyncIterator[str], max_spoken: int = 0) -> None:

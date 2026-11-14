@@ -56,8 +56,19 @@ async def calculate(expression: str) -> str:
 
     try:
         tree = ast.parse(normalized, mode="eval")
-        result = _safe_eval(tree)
-        return f"Result: {round(result, 4)}"
+        result = round(_safe_eval(tree), 4)
+        return f"Result: {int(result) if result == int(result) else result}"
+    except ZeroDivisionError:
+        return "Cannot divide by zero."
+    except Exception:
+        pass
+    # Functions, roots, π, solving, calculus, unit conversions (arya/tools/mathsolve.py).
+    from arya.tools.mathsolve import MathError, evaluate
+
+    try:
+        return evaluate(expression)
+    except MathError as exc:
+        return f"Could not calculate that: {exc}"
     except ZeroDivisionError:
         return "Cannot divide by zero."
     except Exception:

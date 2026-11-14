@@ -25,6 +25,7 @@ python-docx       # Word files
 python-pptx       # PowerPoint files
 scipy             # step / impulse / Bode plots
 matplotlib        # plots
+sympy             # exact maths tool (arya/tools/mathsolve.py)
 # OCR for scanned PDFs: the OCR engine built into Windows (offline)
 winrt-runtime; sys_platform == "win32"
 winrt-Windows.Media.Ocr; sys_platform == "win32"

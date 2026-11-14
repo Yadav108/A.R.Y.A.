@@ -62,7 +62,7 @@ def _regrade() -> int:
     import yaml
 
     sys.path.insert(0, str(HERE.parents[1]))
-    runs = sorted(p for p in RESULTS.glob("*.json"))
+    runs = sorted(p for p in RESULTS.glob("*.json") if "-partial" not in p.name)
     if not runs:
         print("No saved run to re-grade.")
         return 1
@@ -117,6 +117,10 @@ def main() -> int:
     import arya.core.llm as llm
 
     llm.set_artifact_sink(lambda kind, payload: None)          # no app window during the run
+    from arya.core.embedder import load_embedder
+    from arya.knowledge import library
+    load_embedder()                                            # warm up like the running app is, so the first
+    library.relevant("warm up")                                # question isn't timed against model loading
     data = yaml.safe_load((HERE / "golden.yaml").read_text(encoding="utf-8"))
     defaults, items = data.get("defaults", {}), data["questions"]
     if args.tag:
@@ -159,13 +163,14 @@ def main() -> int:
     print("By tag: " + ", ".join(f"{t} {sum(v)}/{len(v)}" for t, v in sorted(by_tag.items())))
 
     RESULTS.mkdir(exist_ok=True)
-    previous = sorted(RESULTS.glob("*.json"))
+    partial = bool(args.tag or args.id)                        # never the baseline for the next full run
+    previous = sorted(p for p in RESULTS.glob("*.json") if "-partial" not in p.name)
     if previous:
         before = {r["id"]: r["passed"] for r in json.loads(previous[-1].read_text(encoding="utf-8"))["results"]}
         fixed = [r["id"] for r in results if r["passed"] and before.get(r["id"]) is False]
         broke = [r["id"] for r in results if not r["passed"] and before.get(r["id"]) is True]
         print(f"Compared with {previous[-1].name}: fixed {fixed or 'none'}; newly failing {broke or 'none'}")
-    out = RESULTS / f"{datetime.now():%Y%m%d-%H%M%S}-{mode}.json"
+    out = RESULTS / f"{datetime.now():%Y%m%d-%H%M%S}-{mode}{'-partial' if partial else ''}.json"
     out.write_text(json.dumps({"mode": mode, "score": score, "passed": passed, "total": len(results),
                                "results": results}, ensure_ascii=False, indent=1), encoding="utf-8")
     print(f"Saved {out.relative_to(HERE.parents[1])}")

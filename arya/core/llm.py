@@ -21,8 +21,55 @@ from arya.memory.database import save_message as _db_save_message
 
 
 def save_message(role: str, content: str) -> int:
-    """History keeps ARYA's maths readable (ζ, ωₙ²), so the model isn't shown its own LaTeX to copy."""
-    return _db_save_message(role, latex_to_text(content) if role == "assistant" else content)
+    """History keeps ARYA's maths readable (ζ, ωₙ²) and plain, so the model isn't shown its own
+    LaTeX or markdown to copy."""
+    return _db_save_message(role, plain_text(latex_to_text(content)) if role == "assistant" else content)
+
+
+# Spoken answers stop here unless detail was asked for (~8 short sentences); see wants_detail().
+ANSWER_MAX_TOKENS = int(os.getenv("ARYA_ANSWER_MAX_TOKENS", "230")) or None
+# An exercise answer is an overview (given, asked, idea, result); "step by step" gets the full walkthrough.
+EXERCISE_MAX_TOKENS = int(os.getenv("ARYA_EXERCISE_MAX_TOKENS", "160")) or None
+_WANTS_DETAIL = re.compile(r"\b(?:in detail|detailed|step by step|explain (?:it )?fully|full explanation|"
+                           r"tell me more|more detail|go on|continue|everything|walk me through)\b", re.IGNORECASE)
+
+
+# "What can you do?" gets a true answer, not the model's guess (it claimed translations and music).
+_CAPABILITIES = re.compile(r"^\W*(?:hey\W+)?(?:arya\W+)?(?:so\W+)?(?:what (?:can|could) you do|what are your "
+                           r"(?:capabilities|skills|features)|what do you do|how can you help(?: me)?|what are you "
+                           r"able to do)\W*$", re.IGNORECASE)
+CAPABILITIES = (
+    "I'm your study companion. I answer questions from your own course material and show you the page, "
+    "explain exercises by number, plot step responses, Bode plots and functions, draw block diagrams, and do "
+    "exact maths and unit conversions. I can also set timers, reminders and pomodoros, take and find notes, "
+    "check the weather, battery and system, open apps and files, and control music and volume. "
+    "Everything runs on this laptop unless you say \"ask the cloud\"."
+)
+
+
+def trim_unfinished(text: str) -> str:
+    """An answer cut by the length cap ends mid-sentence: keep it up to its last complete sentence."""
+    text = (text or "").rstrip()
+    if not text or re.search(r"[.!?…:)\]]$", text):
+        return text
+    parts = split_sentences(text)
+    while len(parts) > 1 and not re.search(r"[.!?…:)\]]\s*$", parts[-1]):
+        parts.pop()
+    return "".join(parts).rstrip()
+
+
+def wants_detail(message: str) -> bool:
+    """'Explain it in detail' / 'step by step' / 'tell me more' lift the length limits."""
+    return bool(_WANTS_DETAIL.search(message or ""))
+
+
+def plain_text(text: str) -> str:
+    """Markdown the small model writes anyway -> plain text for screen, speech and history:
+    '### Problem:' -> 'Problem:', '- **P**: …' -> 'P: …', '1. Damping' -> 'Damping'."""
+    text = re.sub(r"(?m)^(\s*)#{1,6}\s*", r"\1", text)
+    text = re.sub(r"(?m)^(\s*)(?:[-*•]|\d{1,2}[.)])\s+(?=\S)", r"\1", text)
+    text = re.sub(r"\*\*(.+?)\*\*|__(.+?)__", lambda m: m.group(1) or m.group(2), text)
+    return re.sub(r"(?<![\w*])\*(?!\s)([^*\n]+?)(?<!\s)\*(?![\w*])", r"\1", text)
 
 
 load_dotenv()
@@ -284,13 +331,15 @@ async def _complete(
     return _Completion(content=msg.get("content") or "", tool_calls=calls)
 
 
-async def _stream_tokens(model: str, messages: list[dict]) -> AsyncIterator[str]:
+async def _stream_tokens(model: str, messages: list[dict], max_tokens: int | None = None) -> AsyncIterator[str]:
     """Stream content tokens: Groq if healthy, otherwise the local Ollama model.
     Falls back only if Groq fails before producing any output."""
     if _groq_allowed():
         yielded = False
         try:
             request = dict(model=model, messages=messages, stream=True, **_groq_extra(model))
+            if max_tokens:
+                request["max_tokens"] = max_tokens
             try:
                 stream = await _get_client().chat.completions.create(**request)
             except groq.APIConnectionError:
@@ -317,7 +366,7 @@ async def _stream_tokens(model: str, messages: list[dict]) -> AsyncIterator[str]
 
     try:
         from arya.core.llm_local import ANSWER_TEMPERATURE
-        async for token in stream_local(messages, temperature=ANSWER_TEMPERATURE):
+        async for token in stream_local(messages, temperature=ANSWER_TEMPERATURE, max_tokens=max_tokens):
             yield token
     except LocalLLMUnavailable as exc:
         raise _unavailable(exc) from exc
@@ -619,9 +668,12 @@ def grounding_prompt(passages: list, question: str = "") -> str:
     if found:
         how = (f"\n\nThese excerpts are {', '.join(found)} from their own material: the problem statement and/or "
                "the short answers from the solutions section, with page numbers. The page is on their screen. "
-               "Explain it step by step for a student: what is given, the idea (which law or method), the key "
-               "formulas in the course's notation, then the results, using the given answers as the check. "
+               "Give a short overview for a student: what is given, what is asked, the key idea (which law or "
+               "method) and the result from the answers, in at most five sentences; offer to go through it step "
+               "by step. "
                "Cite the excerpts like [1]. If the statement refers to a figure, use what the text says. "
+               "If they ask for one specific quantity, give its value exactly as written in the answers "
+               "excerpt first, then one sentence on how it follows. "
                "Since this is spoken, keep it to about five sentences unless they ask for more.")
     else:
         how = ("\n\nIf these excerpts answer the question, base your answer on them, keep the course's notation "
@@ -845,13 +897,17 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "calculate",
-            "description": "Calculate a math expression or unit conversion",
+            "description": "Exact maths — use it for EVERY number you give instead of calculating yourself: "
+                           "arithmetic, sqrt, exp, log, sin/cos/tan, pi, percentages, solving equations, "
+                           "derivatives, integrals and unit conversions.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "expression": {
                         "type": "string",
-                        "description": "The math expression to evaluate",
+                        "description": "e.g. '100*exp(-0.3*pi/sqrt(1-0.3^2))', '15 percent of 240', "
+                                       "'solve x^2 - 5x + 6 = 0', 'derivative of x^3*sin(x)', "
+                                       "'integral of x^2 from 0 to 3', '90 km/h to m/s'",
                     },
                 },
                 "required": ["expression"],
@@ -1723,6 +1779,7 @@ async def _tool_pipeline(
     seen_calls: set[tuple[str, str]] = set()
     assistant_response = ""
     _visual_spoken.set(None)
+    cap = None if wants_detail(message) else ANSWER_MAX_TOKENS     # same length rule as chat answers
     for step in range(MAX_TOOL_STEPS + 1):
         # The big model picks the first tool; the fast 8B model handles the
         # follow-up steps (reading results, chaining another call, answering),
@@ -1734,7 +1791,8 @@ async def _tool_pipeline(
         last_failed = step > 0 and str(messages[-1].get("content", "")).find("failed:") != -1
         allow_tools = step == 0 or (step < MAX_TOOL_STEPS and (multi_part or last_failed))
         completion = await _complete(
-            model, messages, tools=TOOLS if allow_tools else None, temperature=0
+            model, messages, tools=TOOLS if allow_tools else None, temperature=0,
+            max_tokens=(cap + 80) if cap else None,      # room for a tool call; final text trimmed below
         )
 
         if not completion.tool_calls and step == 0 and (
@@ -1759,7 +1817,7 @@ async def _tool_pipeline(
         signature = (tool_name, json.dumps(args, sort_keys=True))
         if signature in seen_calls:
             # Model is looping on the same call — force a final answer.
-            completion = await _complete(INTENT_MODEL_NAME, messages, temperature=0)
+            completion = await _complete(INTENT_MODEL_NAME, messages, temperature=0, max_tokens=cap)
             assistant_response = completion.content
             break
         seen_calls.add(signature)
@@ -1799,6 +1857,8 @@ async def _tool_pipeline(
 
     # Code blocks can't be spoken and diagrams/plots are already on screen.
     assistant_response = re.sub(r"```.*?(?:```|$)", "", assistant_response, flags=re.DOTALL).strip()
+    if cap:
+        assistant_response = trim_unfinished(assistant_response)
     shown = _visual_spoken.get()
     if shown:
         if not multi_part:
@@ -2019,6 +2079,38 @@ async def stream_with_tools(message: str):
         yield reply
         return
 
+    if _CAPABILITIES.match(message):
+        print("Instant answer: capabilities")
+        save_message("user", message)
+        save_message("assistant", CAPABILITIES)
+        yield CAPABILITIES
+        return
+
+    from arya.study.formulas import quick_formula_answer
+    exact = quick_formula_answer(message)               # course formulas with numbers: computed, never guessed
+    if exact:
+        print("Instant answer: course formula")
+        save_message("user", message)
+        save_message("assistant", exact)
+        yield exact
+        return
+
+    try:
+        from arya.knowledge import library as _library
+        found = await asyncio.wait_for(asyncio.to_thread(_library.locate, message), timeout=12.0)
+    except Exception as exc:
+        print(f"Where-is lookup skipped: {type(exc).__name__}: {exc}")
+        found = None
+    if found is not None:                               # "which page explains X?": pages from the search, not guessed
+        print("Instant answer: where in your material")
+        if found:
+            emit_artifact("SOURCES", [p.as_dict() for p in found])
+        reply = _library.where_answer(message, found)
+        save_message("user", message)
+        save_message("assistant", reply)
+        yield reply
+        return
+
     try:
         from arya.knowledge import library as _library
         listing = await asyncio.to_thread(_library.overview, message)
@@ -2056,7 +2148,7 @@ async def stream_with_tools(message: str):
     try:
         last = None
         async for sentence in inner:
-            sentence = latex_to_text(_guard_claim(sentence))     # ζ, ωₙ², k/m on screen — never raw LaTeX
+            sentence = plain_text(latex_to_text(_guard_claim(sentence)))   # ζ, ωₙ² on screen; no LaTeX/markdown
             if sentence == _NOT_DONE and last == _NOT_DONE:
                 continue            # say it once, not once per sentence
             last = sentence
@@ -2107,6 +2199,12 @@ async def _stream_with_tools(message: str):
         needs_tool(message),
         _get_semantic_context(message, recent_contents),
     )
+    if needs_tool_result and not _MUST_ACT.search(message):
+        from arya.knowledge.library import exercise_refs
+        if exercise_refs(message):
+            # "Explain exercise 113": the answer is the exercise page itself. Through the tool
+            # route the model sometimes calls a study tool with the number dropped and loses it.
+            needs_tool_result = False
     print(f"Needs tool: {needs_tool_result}")
 
     if needs_tool_result:
@@ -2128,9 +2226,11 @@ async def _stream_with_tools(message: str):
     buffer = ""
     full_response_parts: list[str] = []
 
+    cap = None if wants_detail(message) else (
+        EXERCISE_MAX_TOKENS if any(getattr(p, "note", "") for p in passages) else ANSWER_MAX_TOKENS)
     try:
         try:
-            async for token in _stream_tokens(INTENT_MODEL_NAME, messages):
+            async for token in _stream_tokens(INTENT_MODEL_NAME, messages, max_tokens=cap):
                 buffer += token
 
                 while True:
@@ -2153,8 +2253,11 @@ async def _stream_with_tools(message: str):
             return
 
         if buffer.strip():
-            full_response_parts.append(buffer)
-            yield buffer
+            if cap and full_response_parts and not re.search(r"[.!?…:)\]]\s*$", buffer):
+                print(f"Answer reached the length cap — dropped the unfinished last sentence: {buffer[:40]!r}")
+            else:
+                full_response_parts.append(buffer)
+                yield buffer
     finally:
         # Runs on normal completion *and* when the user interrupts ARYA, so
         # history records what was actually said instead of a dangling question.

@@ -537,14 +537,19 @@ RELEVANT_SIMILARITY = float(os.getenv("ARYA_KB_MIN_SIMILARITY", "0.42"))
 
 def relevant(query: str, k: int = 4) -> list[Passage]:
     """Passages good enough to ground an answer on — empty when the material doesn't cover it."""
-    hits = search(query, k=k + 2)
+    hits = search(query, k=k + 6)
     if not hits:
         return []
     top = max(h.similarity for h in hits)
     if top < RELEVANT_SIMILARITY:
         return []
-    keep = [h for h in hits if h.similarity >= max(RELEVANT_SIMILARITY - 0.08, top - 0.15)]
-    return keep[:k]
+    keep = [h for h in hits if h.similarity >= max(RELEVANT_SIMILARITY - 0.08, top - 0.15)][:k]
+    # The checked core notes are the most reliable source: if one is relevant but was
+    # crowded out by keyword-heavy pages (lab reports), it goes in first.
+    core = [h for h in hits if h.title == "ARYA core notes" and h.similarity >= RELEVANT_SIMILARITY - 0.05]
+    if core and not any(h.title == "ARYA core notes" for h in keep):
+        keep = [core[0]] + keep[:k - 1]
+    return keep
 
 
 # ── Exercises by number ───────────────────────────────────────────────────────
@@ -625,6 +630,63 @@ def find_exercise(refs: list[str], question: str = "", k: int = 4) -> list[Passa
             if found:                       # the first reading of the number that exists wins
                 break
     return found[:k]
+
+
+# ── Where is it in my material? ───────────────────────────────────────────────
+
+_WHERE = re.compile(
+    r"\b(?:which|what) (?:page|pages|section|chapter|slide|slides)\b"
+    r"|\bwhere (?:in|do|does|did|can i find|is|are)\b.{0,60}\b(?:my|the) (?:book|notes|script|slides|lecture|"
+    r"material|course|pdf|documents?|exercises?)\b"
+    r"|\bfind\b.{0,40}\bin my (?:notes|book|material|script|slides|lectures?)\b", re.IGNORECASE)
+_WHERE_FILLER = re.compile(
+    r"\b(?:which|what|page|pages|section|chapter|slides?|of|in|on|my|the|a|an|book|notes|script|lecture|lectures|"
+    r"material|course|pdf|documents?|explains?|explained|covers?|covered|discuss(?:es|ed)?|talks?|about|where|is|are|"
+    r"does|do|did|can|i|find|me|show|it|there)\b", re.IGNORECASE)
+
+
+def locate(question: str, k: int = 3) -> list[Passage] | None:
+    """'Which page of my dynamics book explains the Coriolis acceleration?' -> the pages, from the
+    search itself (the model guessed page numbers). None if this isn't a where-is question."""
+    if not _WHERE.search(question):
+        return None
+    topic = re.sub(r"\s+", " ", _WHERE_FILLER.sub(" ", question)).strip(" ?.!,")
+    with _lock, _connect() as c:
+        collections = [r["collection"] for r in c.execute("SELECT DISTINCT collection FROM documents")]
+    wanted = [col for col in collections if col and col.lower() in question.lower()]
+    for col in wanted:                                       # "dynamics" names the course, not the topic
+        topic = re.sub(rf"\b{re.escape(col)}\b", " ", topic, flags=re.IGNORECASE).strip()
+    if len(topic) < 3:
+        return None
+    hits = [h for h in search(topic, k=k * 4) if h.title != "ARYA core notes"]
+    if wanted:
+        hits = [h for h in hits if h.collection in wanted] or hits
+    hits = [h for h in hits if h.similarity >= RELEVANT_SIMILARITY - 0.08][:k]
+    return hits
+
+
+def where_answer(question: str, hits: list[Passage]) -> str:
+    topic = re.sub(r"\s+", " ", _WHERE_FILLER.sub(" ", question)).strip(" ?.!,")
+    with _lock, _connect() as c:
+        for (col,) in c.execute("SELECT DISTINCT collection FROM documents"):
+            if col and col.lower() in question.lower():
+                topic = re.sub(rf"\b{re.escape(col)}\b", " ", topic, flags=re.IGNORECASE)
+    topic = re.sub(r"\s+", " ", topic).strip() or "that"
+    if not hits:
+        return f"I couldn't find {topic} in your course material."
+    first, rest = hits[0], hits[1:]
+    more = ""
+    if rest:
+        same = [h for h in rest if h.doc_id == first.doc_id]
+        other = [h for h in rest if h.doc_id != first.doc_id]
+        bits = []
+        if same:
+            unit = first.label().rsplit(", ", 1)[1].split(" ")[0]                     # "p." / "slide" / "section"
+            pages = " and ".join(str(h.page) for h in same)
+            bits.append(f"on {'pp.' if unit == 'p.' and len(same) > 1 else unit} {pages}")
+        bits += [f"in {h.label()}" for h in other]
+        more = " It also comes up " + ", and ".join(bits) + "."
+    return f"{topic[:1].upper() + topic[1:]} is covered in {first.label()}; it's on screen.{more}"
 
 
 # ── What's in the library ─────────────────────────────────────────────────────

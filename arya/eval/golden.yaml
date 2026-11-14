@@ -81,7 +81,7 @@ questions:
   - id: pid-parts
     tags: [control, fundamentals]
     q: What do the P, I and D parts of a PID controller do?
-    include: [["proportional"], ["integral"], ["derivative"]]
+    include: [["proportional"], ["integral", "accumulat", "past error", "sum of"], ["derivative", "rate of change", "anticipat", "future"]]
   - id: pid-steady-state
     tags: [control, fundamentals]
     q: Which part of a PID controller removes steady-state error?
@@ -104,7 +104,7 @@ questions:
   - id: coriolis-formula
     tags: [dynamics, fundamentals, from-log]
     q: What is the Coriolis acceleration?
-    include: [["2"], ["ω", "omega", "angular velocity"], ["relative"]]
+    include: [["2"], ["ω", "omega", "angular velocity"], ["relative", "rotating frame", "rotating reference frame", "moving frame"]]
   - id: coriolis-zero
     tags: [dynamics, fundamentals]
     q: When is the Coriolis acceleration zero?
@@ -172,7 +172,7 @@ questions:
   - id: exercise-1-13-alpha
     tags: [library, exercises, numbers]
     q: What is the angular acceleration alpha 2 in exercise 1-13?
-    include: [["2.55"]]
+    include: [["2.55", "8/π", "8/pi", "2.546"]]
   - id: exercise-missing
     tags: [library, exercises, from-log]
     q: in case you have a solution in chapter one, question 30.

@@ -114,9 +114,10 @@ async def chat_local(
 async def stream_local(
     messages: list[dict],
     temperature: float | None = None,
+    max_tokens: int | None = None,
 ) -> AsyncIterator[str]:
     """Streaming chat. Yields content tokens as they arrive."""
-    payload = _payload(messages, True, None, temperature, None)
+    payload = _payload(messages, True, None, temperature, max_tokens)
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
             async with client.stream("POST", f"{OLLAMA_HOST}/api/chat", json=payload) as response:
