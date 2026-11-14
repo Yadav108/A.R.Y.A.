@@ -900,9 +900,10 @@ TOOLS = [
                         ],
                         "description": "The media action. 'mute' toggles mute on/off.",
                     },
-                    "steps": {
+                    "percent": {
                         "type": "integer",
-                        "description": "For volume_up/volume_down: how many 2% steps, default 5 (10%).",
+                        "description": "For volume_up/volume_down: how many percent to change, as the user said "
+                                       "it ('by 15%' -> 15). Default 10.",
                     },
                 },
                 "required": ["action"],
@@ -1242,11 +1243,14 @@ async def _dispatch_tool(tool_name: str, args: dict) -> str:
     elif tool_name == "media_control":
         from arya.tools.media import media_control
 
-        steps = args.get("steps")
-        return await media_control(
-            action=str(args.get("action", "")),
-            steps=int(steps) if steps is not None else 5,
-        )
+        # Each volume key press is 2 %, so percent -> presses ("by 15%" = 8 presses ≈ 16 %).
+        if args.get("percent") is not None:
+            steps = max(1, round(float(args["percent"]) / 2))
+        elif args.get("steps") is not None:
+            steps = int(args["steps"])
+        else:
+            steps = 5
+        return await media_control(action=str(args.get("action", "")), steps=steps)
     elif tool_name == "set_reminder":
         try:
             reminder_message = str(args["message"])
@@ -1600,11 +1604,15 @@ _LOT = re.compile(r"\s*\b(?:a lot|way|much)\b")
 
 def quick_media_command(message: str) -> dict | None:
     """'Turn the volume up a bit' -> {'action': 'volume_up', 'steps': 3}; None if not a media command."""
-    text = re.sub(r"[^\w\s']", " ", message.lower())
+    text = re.sub(r"[^\w\s']", " ", message.lower().replace("%", " percent"))
     text = _QUICK_LEADING.sub("", re.sub(r"\s+", " ", text).strip())
     text = re.sub(r"\s+(?:please|now|thanks|thank you)$", "", text).strip()
     steps = 5
-    if _LITTLE.search(text):
+    amount = re.search(r"\s*\bby\s+(\d{1,3})\s*(?:%|percent)?|\s*\b(\d{1,3})\s*(?:%|percent\b)", text)
+    if amount:                              # "volume down by 15%" -> 15 % (each key press is 2 %)
+        steps = max(1, round(int(amount.group(1) or amount.group(2)) / 2))
+        text = (text[:amount.start()] + text[amount.end():]).strip()
+    elif _LITTLE.search(text):
         steps, text = 3, _LITTLE.sub("", text).strip()
     elif _LOT.search(text):
         steps, text = 12, _LOT.sub("", text).strip()

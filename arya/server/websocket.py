@@ -16,7 +16,7 @@ from collections.abc import AsyncIterator, Iterable
 from pathlib import Path
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
@@ -121,7 +121,9 @@ def _classify_closing(text: str) -> str | None:
 
 @app.on_event("startup")
 async def preload_models() -> None:
+    global _loop
     loop = asyncio.get_event_loop()
+    _loop = loop
 
     print("STT: loading Whisper medium (CUDA)...")
     await loop.run_in_executor(None, load_model)
@@ -165,9 +167,8 @@ async def preload_models() -> None:
     log_event("server_start", host=security.HOST, port=security.PORT)
 
 
-@app.get("/")
-async def index(request: Request) -> HTMLResponse:
-    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+def _page(request: Request, filename: str) -> HTMLResponse:
+    html = (STATIC_DIR / filename).read_text(encoding="utf-8")
     # The page gets the WebSocket token only when loaded on this machine.
     # (Other web pages can't read this response — the browser's same-origin
     # rule and the Host check above stop them.)
@@ -175,6 +176,116 @@ async def index(request: Request) -> HTMLResponse:
         tag = f'<script>window.ARYA_TOKEN = "{security.TOKEN}";</script>'
         html = html.replace("</head>", tag + "\n</head>", 1)
     return HTMLResponse(html, headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
+
+
+@app.get("/")
+async def index(request: Request) -> HTMLResponse:
+    return _page(request, "app.html")
+
+
+@app.get("/classic")
+async def classic(request: Request) -> HTMLResponse:
+    return _page(request, "index.html")
+
+
+# ── App API (token-protected) ─────────────────────────────────────────────────
+
+def _authorised(request: Request) -> bool:
+    return security.token_ok(request.headers.get("x-arya-token")) and security.origin_ok(request.headers.get("origin"))
+
+
+def _deny() -> JSONResponse:
+    return JSONResponse({"error": "unauthorised"}, status_code=401)
+
+
+@app.get("/api/status")
+async def api_status(request: Request) -> JSONResponse:
+    if not _authorised(request):
+        return _deny()
+    import arya.core.llm as llm
+    from arya.core import tts
+
+    engine = type(wake_engine).__name__
+    return JSONResponse({
+        "mode": llm.ARYA_MODE,
+        "brain": OLLAMA_MODEL,
+        "cloud_brain": llm.INTENT_MODEL_NAME,
+        "cloud_configured": bool(os.getenv("GROQ_API_KEY")),
+        "voice": tts.PIPER_VOICE if tts.TTS_ENGINE != "edge" else tts.VOICE_NAME,
+        "voice_engine": "Piper (local)" if tts.TTS_ENGINE != "edge" else "Microsoft Edge (online)",
+        "wake_engine": "Dedicated detector + verification" if engine == "HotwordEngine" else "Whisper-based",
+        "muted": bool(getattr(wake_engine, "is_muted", lambda: False)()),
+        "conversation_seconds_left": int(getattr(wake_engine, "followup_seconds_left", lambda: 0)()),
+        "local_only": security.is_loopback_bind(),
+        "pending_confirmation": policy.has_pending(),
+    })
+
+
+@app.post("/api/mute")
+async def api_mute(request: Request) -> JSONResponse:
+    if not _authorised(request):
+        return _deny()
+    body = await request.json()
+    ok = set_microphone_muted(bool(body.get("muted")))
+    return JSONResponse({"ok": ok})
+
+
+@app.post("/api/mode")
+async def api_mode(request: Request) -> JSONResponse:
+    if not _authorised(request):
+        return _deny()
+    body = await request.json()
+    mode = str(body.get("mode", "")).lower()
+    if mode not in ("offline", "cloud"):
+        return JSONResponse({"error": "mode must be offline or cloud"}, status_code=400)
+    set_privacy_mode(mode)
+    return JSONResponse({"ok": True, "mode": mode})
+
+
+@app.get("/api/history")
+async def api_history(request: Request, limit: int = 30) -> JSONResponse:
+    if not _authorised(request):
+        return _deny()
+    from arya.memory.database import get_history
+
+    return JSONResponse({"messages": get_history(limit=max(1, min(limit, 100)))})
+
+
+_ACTIVITY_KINDS = {"tool", "confirmation_requested", "confirmation_approved", "confirmation_declined",
+                   "blocked", "cloud_request", "connection_rejected"}
+
+
+@app.get("/api/activity")
+async def api_activity(request: Request, limit: int = 20) -> JSONResponse:
+    """Recent entries from the local action log — what ARYA actually did."""
+    if not _authorised(request):
+        return _deny()
+    import json as _json
+
+    items = []
+    try:
+        lines = LOG_FILE.read_text(encoding="utf-8").splitlines()[-400:]
+    except OSError:
+        lines = []
+    for line in reversed(lines):
+        try:
+            entry = _json.loads(line)
+        except ValueError:
+            continue
+        if entry.get("kind") in _ACTIVITY_KINDS:
+            items.append(entry)
+            if len(items) >= max(1, min(limit, 100)):
+                break
+    return JSONResponse({"items": items})
+
+
+@app.post("/api/window/show")
+async def api_window_show(request: Request) -> JSONResponse:
+    """A second launch (e.g. the desktop shortcut) asks the running app to show its window."""
+    if not _authorised(request):
+        return _deny()
+    emit_status("__SHOW_WINDOW__", to_browsers=False)
+    return JSONResponse({"ok": True})
 
 
 # ── Fan-out to browser windows ────────────────────────────────────────────────
@@ -190,12 +301,22 @@ def add_status_listener(callback) -> None:
     _status_listeners.append(callback)
 
 
-def emit_status(event: str) -> None:
+_loop: asyncio.AbstractEventLoop | None = None
+
+
+def emit_status(event: str, to_browsers: bool = True) -> None:
+    """Tell in-process listeners and (optionally) every open app window.
+    Safe to call from any thread (audio thread, tray menu, event loop)."""
     for callback in list(_status_listeners):
         try:
             callback(event)
         except Exception as exc:
             print(f"Status listener error: {exc}")
+    if to_browsers and _loop is not None and _connections:
+        try:
+            asyncio.run_coroutine_threadsafe(_broadcast(event), _loop)
+        except RuntimeError:
+            pass
 
 
 def set_microphone_muted(muted: bool) -> bool:
@@ -207,9 +328,23 @@ def set_microphone_muted(muted: bool) -> bool:
     return True
 
 
+def set_privacy_mode(mode: str) -> None:
+    """offline / cloud — from the app window or the tray; everyone is told."""
+    import arya.core.llm as llm
+
+    llm.ARYA_MODE = mode
+    log_event("privacy_mode", mode=mode)
+    print(f"Privacy mode: {mode}")
+    emit_status(f"ARYA_MODE:{mode}")
+
+
 async def _send_all(payload: str | bytes) -> None:
     if isinstance(payload, str):
-        emit_status(payload)
+        emit_status(payload, to_browsers=False)
+    await _broadcast(payload)
+
+
+async def _broadcast(payload: str | bytes) -> None:
     for ws in list(_connections):
         try:
             if isinstance(payload, bytes):
@@ -354,6 +489,8 @@ async def _run_turn(message: str, wake_triggered: bool, announce_transcript: boo
             try:
                 await _speak_stream(stream_with_tools(message))
                 print("Response complete")
+                if policy.has_pending():
+                    await _send_all("ARYA_CONFIRM")     # app shows Yes / No buttons
             except asyncio.CancelledError:
                 raise
             except Exception as exc:

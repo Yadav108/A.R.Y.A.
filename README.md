@@ -154,18 +154,24 @@ python main.py
 
 Then open **http://localhost:8000** in Chrome or Edge.
 
-**Desktop app (recommended for daily use)** — no browser, no console window:
+**Desktop app (recommended for daily use)** — ARYA's own window, no browser or console:
 ```bash
-.venv\Scripts\pythonw.exe arya_desktop.py
+.venv\Scripts\python.exe arya_desktop.py --install-shortcuts   # once: "ARYA" on the Desktop + Start menu
 ```
-ARYA lives in the system tray (Windows 11 may tuck new icons behind the **^** arrow — drag it
-onto the taskbar, or enable it under *Settings → Personalization → Taskbar → Other system tray icons*).
-The icon's colour shows what ARYA is doing: grey = ready, green = listening, amber = thinking,
-blue = speaking, teal = in conversation, red = microphone muted. Right-click for: open the chat
-page, **mute microphone**, privacy mode (offline / cloud), status overlay on/off, **start with
-Windows**, open the action log, quit. A small overlay above the taskbar shows what ARYA heard and
-is saying, then fades away (click to dismiss). Logs go to `%LOCALAPPDATA%\ARYA\logs\arya.log`.
-Only one ARYA runs at a time — a second launch just opens the chat page.
+Then just double-click **ARYA** on your Desktop. The window shows ARYA's living orb (its colour
+and motion follow what ARYA is doing), the conversation as it happens, **Yes / No buttons** when ARYA
+asks before deleting/moving/closing something, the **microphone** switch and **Offline / Cloud**
+privacy switch, which brain/voice/security is active, and **recent actions** from the local action
+log. Type to ARYA, hold the mic button to talk, or just say "Hey ARYA". Everything is served by ARYA
+itself on this laptop — no web fonts, CDNs or trackers.
+
+Closing the window keeps ARYA listening in the **system tray** (Windows 11 may tuck the orb icon
+behind the **^** arrow — drag it onto the taskbar). Tray colours: indigo = ready, green = listening,
+amber = thinking, blue = speaking, teal = in conversation, red = muted. Right-click for: open ARYA,
+mute, privacy mode, status overlay (a small card above the taskbar while the window is closed),
+**start with Windows** (starts quietly in the tray), the action log, quit. Opening the shortcut again
+brings the window back; only one ARYA ever runs. Logs: `%LOCALAPPDATA%\ARYA\logsrya.log`.
+The previous browser page is still at `http://localhost:8000/classic`.
 
 **Security.** ARYA can run commands and read your clipboard, so it only obeys this computer:
 - The server listens on `127.0.0.1` only — nothing else on your network can connect.

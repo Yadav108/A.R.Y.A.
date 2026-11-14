@@ -1,16 +1,20 @@
 """
-ARYA desktop app — no browser, no console window.
+ARYA desktop app.
 
-  * Tray icon: its colour shows what ARYA is doing (starting, ready, listening,
-    thinking, speaking, in conversation, muted). Right-click for the menu:
-    open the chat page, mute the microphone, privacy mode (offline / cloud),
-    status overlay on/off, start with Windows, open the action log, quit.
-  * Status overlay: a small always-on-top card above the taskbar that appears
-    when you talk to ARYA — what it heard, what it's saying — then fades away.
-    Click it to dismiss.
+  * App window — ARYA's interface (arya/static/app.html) in a native window
+    (Edge WebView2): the living orb, the conversation, Yes/No confirmations,
+    microphone and privacy controls, system status and recent actions.
+    Closing it hides it to the tray; ARYA keeps listening for "Hey ARYA".
+  * Tray icon — colour shows ARYA's state; right-click for open, mute,
+    privacy mode, overlay, start with Windows, action log, quit.
+  * Status overlay — when the window isn't open, a small card above the
+    taskbar shows what ARYA heard and is saying, then fades away.
   * The voice server runs in a background thread of this same process.
 
-Run:  .venv\\Scripts\\pythonw.exe arya_desktop.py   (or tick "Start with Windows")
+Threads: main = window (WinForms/WebView2, must be main), "overlay" = Tk,
+pystray = its own message loop, "arya-server" = uvicorn + models.
+
+Run:  .venv\\Scripts\\pythonw.exe arya_desktop.py [--background]
 """
 from __future__ import annotations
 
@@ -31,11 +35,14 @@ ROOT = system.ROOT
 DATA_DIR = Path(os.getenv("ARYA_DATA_DIR") or Path(os.getenv("LOCALAPPDATA") or Path.home()) / "ARYA")
 SETTINGS_FILE = DATA_DIR / "desktop.json"
 LOG_FILE = DATA_DIR / "logs" / "arya.log"
+ICON_FILE = ROOT / "arya" / "static" / "arya.ico"
+APP_ID = "ARYA.VoiceAssistant"
+WINDOW_TITLE = "ARYA"
 
-# state -> (colour, tooltip)
+# state -> (colour, tooltip) — same palette as the app window
 STATES = {
-    "starting": ("#94a3b8", "ARYA — starting up…"),
-    "idle": ("#475569", "ARYA — say \"Hey ARYA\""),
+    "starting": ("#64748b", "ARYA — starting up…"),
+    "idle": ("#6366f1", "ARYA — say \"Hey ARYA\""),
     "listening": ("#22c55e", "ARYA — listening"),
     "thinking": ("#f59e0b", "ARYA — thinking"),
     "speaking": ("#3b82f6", "ARYA — speaking"),
@@ -44,7 +51,51 @@ STATES = {
     "failed": ("#7f1d1d", "ARYA — failed to start (see log)"),
 }
 
-BG, FG, MUTED_FG = "#0f172a", "#f8fafc", "#94a3b8"
+BG, FG, MUTED_FG = "#0b0d14", "#f8fafc", "#94a3b8"
+
+SPLASH = """<!doctype html><html><head><meta charset="utf-8"><style>
+html,body{height:100%;margin:0;background:#06070b;color:#eef0f6;font:15px "Segoe UI",system-ui,sans-serif;
+display:flex;align-items:center;justify-content:center;flex-direction:column;overflow:hidden}
+.orb{width:120px;height:120px;border-radius:50%;position:relative;
+background:radial-gradient(circle at 34% 28%,#fff 0%,#a5b4fc 14%,#6366f1 48%,#1e1b4b 100%);
+box-shadow:0 0 60px #6366f180;animation:b 2.4s ease-in-out infinite}
+.orb::after{content:"";position:absolute;inset:-14px;border-radius:50%;
+background:conic-gradient(from 0deg,transparent 0 55%,#a5b4fc 80%,transparent);
+-webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 2.5px),#000 calc(100% - 2px));animation:s 1.4s linear infinite}
+h1{font:600 22px "Segoe UI Variable Display","Segoe UI";letter-spacing:.14em;margin:36px 0 6px}
+p{color:#9aa2b6;margin:0}
+@keyframes s{to{transform:rotate(360deg)}}@keyframes b{50%{transform:scale(1.04)}}
+</style></head><body><div class="orb"></div><h1>ARYA</h1><p id="m">Waking up — loading voice and brain on this laptop…</p></body></html>"""
+
+FAILED = SPLASH.replace("Waking up — loading voice and brain on this laptop…",
+                        "ARYA couldn't start — usually low memory. Close some apps and start ARYA again. "
+                        "Details: %LOCALAPPDATA%\\\\ARYA\\\\logs\\\\arya.log")
+
+
+def find_app_window(pid: int | None = None) -> int:
+    """ARYA's main window handle. Several hidden helper windows (the tray icon's
+    message window, Tk) can share the title, so pick this process's largest
+    top-level window called "ARYA"."""
+    import win32gui
+    import win32process
+
+    pid = os.getpid() if pid is None else pid
+    best, best_area = 0, 0
+
+    def visit(hwnd, _):
+        nonlocal best, best_area
+        if win32gui.GetWindowText(hwnd) != WINDOW_TITLE:
+            return True
+        if win32process.GetWindowThreadProcessId(hwnd)[1] != pid:
+            return True
+        left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+        area = (right - left) * (bottom - top)
+        if area > best_area:
+            best, best_area = hwnd, area
+        return True
+
+    win32gui.EnumWindows(visit, None)
+    return best
 
 
 # ── Settings & logging ────────────────────────────────────────────────────────
@@ -77,23 +128,30 @@ def redirect_output_to_log() -> None:
 # ── Tray icon images ──────────────────────────────────────────────────────────
 
 def make_icon(colour: str):
-    from PIL import Image, ImageDraw, ImageFont
+    """A small glowing orb in the state colour (matches the app's orb)."""
+    from PIL import Image, ImageDraw, ImageFilter
 
-    size = 64
-    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
-    draw.ellipse((2, 2, size - 2, size - 2), fill=colour)
-    try:
-        font = ImageFont.truetype("segoeuib.ttf", 38)
-    except OSError:
-        font = ImageFont.load_default()
-    box = draw.textbbox((0, 0), "A", font=font)
-    w, h = box[2] - box[0], box[3] - box[1]
-    draw.text(((size - w) / 2 - box[0], (size - h) / 2 - box[1]), "A", font=font, fill="white")
-    return img
+    big = 256
+    img = Image.new("RGBA", (big, big), (0, 0, 0, 0))
+    r, g, b = (int(colour[i:i + 2], 16) for i in (1, 3, 5))
+    glow = Image.new("RGBA", (big, big), (0, 0, 0, 0))
+    ImageDraw.Draw(glow).ellipse((20, 20, big - 20, big - 20), fill=(r, g, b, 140))
+    img.alpha_composite(glow.filter(ImageFilter.GaussianBlur(14)))
+    sphere = Image.new("RGBA", (big, big), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(sphere)
+    for i in range(60, 0, -1):          # light from the top-left
+        t = i / 60
+        col = (int(r + (255 - r) * (1 - t) ** 3), int(g + (255 - g) * (1 - t) ** 3), int(b + (255 - b) * (1 - t) ** 3), 255)
+        inset = 34 + (60 - i) * 0.9
+        draw.ellipse((inset - (60 - i) * 0.45, inset - (60 - i) * 0.55,
+                      big - 34 - (60 - i) * 1.35, big - 34 - (60 - i) * 1.25), fill=col)
+    mask = Image.new("L", (big, big), 0)
+    ImageDraw.Draw(mask).ellipse((34, 34, big - 34, big - 34), fill=255)
+    img.paste(sphere, (0, 0), mask)
+    return img.resize((64, 64), Image.LANCZOS)
 
 
-# ── Status overlay ────────────────────────────────────────────────────────────
+# ── Status overlay (Tk, own thread) ───────────────────────────────────────────
 
 class Overlay:
     WIDTH = 380
@@ -104,7 +162,7 @@ class Overlay:
         root.attributes("-topmost", True)
         root.attributes("-alpha", 0.0)
         root.configure(bg=BG)
-        card = tk.Frame(root, bg=BG, padx=16, pady=12, highlightthickness=1, highlightbackground="#334155")
+        card = tk.Frame(root, bg=BG, padx=16, pady=12, highlightthickness=1, highlightbackground="#272b3a")
         card.pack(fill="both", expand=True)
         top = tk.Frame(card, bg=BG)
         top.pack(fill="x")
@@ -199,25 +257,25 @@ class Overlay:
 # ── App ───────────────────────────────────────────────────────────────────────
 
 class DesktopApp:
-    def __init__(self) -> None:
+    def __init__(self, background: bool = False) -> None:
         self.settings = load_settings()
+        self.background = background
         self.events: queue.Queue[str] = queue.Queue()
         self.state = "starting"
         self.muted = False
         self.quitting = False
+        self.ready = False
         self.server = None
         self.server_thread: threading.Thread | None = None
+        self.window = None
+        self.window_visible = False
+        self._ws = None
         self._reply = ""
         self._conversation_job = None
+        self.root: tk.Tk | None = None
+        self.overlay: Overlay | None = None
+        self._ui_ready = threading.Event()
         self._icons = {name: make_icon(colour) for name, (colour, _) in STATES.items()}
-
-        try:
-            ctypes.windll.shcore.SetProcessDpiAwareness(1)   # crisp text on scaled displays
-        except Exception:
-            pass
-        self.root = tk.Tk()
-        self.root.title("ARYA")
-        self.overlay = Overlay(self.root)
         self.icon = self._build_tray()
 
     # ── tray ──
@@ -229,38 +287,30 @@ class DesktopApp:
             return lambda _item: self._current_mode() == mode
 
         menu = Menu(
-            Item("Open ARYA", self._open_page, default=True),
-            Item("Mute microphone", self._toggle_mute, checked=lambda _i: self.muted),
+            Item("Open ARYA", lambda *_: self.events.put("__SHOW_WINDOW__"), default=True),
+            Item("Mute microphone", lambda *_: self.events.put("__TOGGLE_MUTE__"), checked=lambda _i: self.muted),
             Menu.SEPARATOR,
             Item("Privacy", Menu(
-                Item("Offline — everything stays on this laptop", lambda: self._set_mode("offline"),
+                Item("Offline — everything stays on this laptop", lambda *_: self._set_mode("offline"),
                      checked=mode_is("offline"), radio=True),
-                Item("Cloud — Groq first (faster, less private)", lambda: self._set_mode("cloud"),
+                Item("Cloud — Groq first (faster, less private)", lambda *_: self._set_mode("cloud"),
                      checked=mode_is("cloud"), radio=True),
             )),
-            Item("Show status overlay", self._toggle_overlay, checked=lambda _i: self.settings["overlay"]),
+            Item("Status overlay when the window is closed", self._toggle_overlay,
+                 checked=lambda _i: self.settings["overlay"]),
             Item("Start with Windows", self._toggle_autostart, checked=lambda _i: system.autostart_enabled()),
             Item("Open action log", self._open_action_log),
             Menu.SEPARATOR,
-            Item("Quit ARYA", self._quit),
+            Item("Quit ARYA", lambda *_: self.events.put("__QUIT__")),
         )
-        colour, tip = STATES["starting"]
-        return pystray.Icon("ARYA", self._icons["starting"], tip, menu)
+        return pystray.Icon("ARYA", self._icons["starting"], STATES["starting"][1], menu)
 
     def _set_state(self, state: str) -> None:
-        if self.muted and state not in ("failed",):
+        if self.muted and state != "failed":
             state = "muted"
         self.state = state
         self.icon.icon = self._icons[state]
         self.icon.title = STATES[state][1]
-
-    # Menu callbacks run on pystray's thread → hand work to the Tk thread.
-    def _open_page(self, *_):
-        from arya.server import security
-        webbrowser.open(f"http://localhost:{security.PORT}")
-
-    def _toggle_mute(self, *_):
-        self.events.put("__TOGGLE_MUTE__")
 
     def _toggle_overlay(self, *_):
         self.settings["overlay"] = not self.settings["overlay"]
@@ -284,16 +334,10 @@ class DesktopApp:
             return self.settings.get("mode") or "offline"
 
     def _set_mode(self, mode: str) -> None:
-        import arya.core.llm as llm
-        llm.ARYA_MODE = mode
-        self.settings["mode"] = mode
-        save_settings(self.settings)
-        print(f"Privacy mode switched to {mode}")
+        if self._ws is not None:
+            self._ws.set_privacy_mode(mode)          # tells the app window too
         if mode == "cloud" and not os.getenv("GROQ_API_KEY"):
             self.icon.notify("No GROQ_API_KEY in .env — ARYA will keep answering locally.", "ARYA")
-
-    def _quit(self, *_):
-        self.events.put("__QUIT__")
 
     # ── server ──
     def _run_server(self) -> None:
@@ -320,18 +364,103 @@ class DesktopApp:
             if not self.quitting:
                 self.events.put("__FAILED__")
 
-    # ── events (Tk thread) ──
+    # ── window (main thread) ──
+    def _create_window(self):
+        import webview
+
+        width, height, x, y = self._fit_window(1180, 780)
+        self.window = webview.create_window(
+            WINDOW_TITLE, html=SPLASH, width=width, height=height, x=x, y=y, min_size=(760, 540),
+            background_color="#06070b", hidden=self.background, text_select=True,
+        )
+        self.window_visible = not self.background
+        self.window.events.closing += self._on_closing
+        self.window.events.shown += self._style_window
+        self.window.events.minimized += lambda: self._set_window_visible(False)
+        self.window.events.restored += lambda: self._set_window_visible(True)
+        return self.window
+
+    @staticmethod
+    def _fit_window(width: int, height: int) -> tuple[int, int, int | None, int | None]:
+        """Preferred size, shrunk to fit the screen's work area (above the
+        taskbar) and centred in it. pywebview uses scaled pixels, so undo
+        display scaling."""
+        try:
+            import win32api
+
+            left, top, right, bottom = win32api.GetMonitorInfo(win32api.MonitorFromPoint((0, 0), 2))["Work"]
+            scale = ctypes.windll.user32.GetDpiForSystem() / 96.0
+            avail_w, avail_h = (right - left) / scale, (bottom - top) / scale
+            w, h = int(min(width, avail_w - 48)), int(min(height, avail_h - 32))
+            return w, h, int(left / scale + (avail_w - w) / 2), int(top / scale + (avail_h - h) / 2)
+        except Exception:
+            return width, height, None, None
+
+    def _set_window_visible(self, visible: bool) -> None:
+        self.window_visible = visible
+        if visible:
+            self.events.put("__HIDE_OVERLAY__")
+
+    def _on_closing(self):
+        """Closing the window hides it — ARYA keeps listening in the tray."""
+        if self.quitting:
+            return True
+        self.window.hide()
+        self._set_window_visible(False)
+        if not self.settings.get("closed_once"):
+            self.settings["closed_once"] = True
+            save_settings(self.settings)
+            self.icon.notify("ARYA is still listening in the tray. Right-click the orb to quit.", "ARYA")
+        return False
+
+    def _style_window(self):
+        """Dark title bar and Mica backdrop, whatever the Windows theme."""
+        try:
+            hwnd = find_app_window()
+            if hwnd:
+                dwm = ctypes.windll.dwmapi
+                for attr, value in ((20, 1), (38, 2)):      # immersive dark mode, Mica
+                    v = ctypes.c_int(value)
+                    dwm.DwmSetWindowAttribute(hwnd, attr, ctypes.byref(v), ctypes.sizeof(v))
+        except Exception as exc:
+            print(f"Window styling skipped: {exc}")
+
+    def _show_window(self) -> None:
+        if self.window is None:
+            return
+        self.window.show()
+        self.window.restore()
+        # Bring to front: briefly on top (a plain show() can open behind other windows).
+        self.window.on_top = True
+        self.window.on_top = False
+        self._set_window_visible(True)
+
+    # ── events (overlay thread) ──
+    def _overlay_thread(self) -> None:
+        try:
+            ctypes.windll.shcore.SetProcessDpiAwareness(1)
+        except Exception:
+            pass
+        self.root = tk.Tk()
+        self.root.title("ARYA status")
+        self.overlay = Overlay(self.root)
+        self._ui_ready.set()
+        self.root.after(50, self._poll)
+        self.root.mainloop()
+
     def _poll(self) -> None:
         try:
             while True:
                 self._handle(self.events.get_nowait())
         except queue.Empty:
             pass
+        except Exception as exc:
+            print(f"Desktop event error: {exc}")
         if not self.quitting:
             self.root.after(50, self._poll)
 
     def _overlay(self, **kw) -> None:
-        if self.settings["overlay"]:
+        if self.settings["overlay"] and not self.window_visible:
             self.overlay.set(**kw)
             self.overlay.show()
 
@@ -339,21 +468,33 @@ class DesktopApp:
         colour = lambda s: STATES[s][0]
         if ev == "__QUIT__":
             return self._shutdown()
+        if ev == "__SHOW_WINDOW__":
+            self.overlay.hide()
+            return self._show_window()
         if ev == "__TOGGLE_MUTE__":
-            ws = getattr(self, "_ws", None)
-            if ws is not None and ws.set_microphone_muted(not self.muted):
-                return
+            if self._ws is not None:
+                self._ws.set_microphone_muted(not self.muted)
             return
         if ev == "__HIDE_OVERLAY__":
             return self.overlay.hide()
         if ev == "__FAILED__":
             self._set_state("failed")
-            self.icon.notify("ARYA couldn't start — usually low memory. See the log in %LOCALAPPDATA%\\ARYA\\logs.",
-                             "ARYA")
+            if self.window is not None:
+                self.window.load_html(FAILED)
+            self.icon.notify("ARYA couldn't start — usually low memory. See %LOCALAPPDATA%\\ARYA\\logs.", "ARYA")
             return
         if ev == "ARYA_READY":
+            self.ready = True
             self._set_state("idle")
-            self.icon.notify("Ready — say \"Hey ARYA\".", "ARYA")
+            from arya.server import security
+            if self.window is not None:
+                self.window.load_url(f"http://localhost:{security.PORT}/")
+            if not self.window_visible:
+                self.icon.notify("Ready — say \"Hey ARYA\".", "ARYA")
+            return
+        if ev.startswith("ARYA_MODE:"):
+            self.settings["mode"] = ev.split(":", 1)[1]
+            save_settings(self.settings)
             return
         if ev == "ARYA_MUTED":
             self.muted = True
@@ -402,11 +543,14 @@ class DesktopApp:
             if self.overlay.visible:
                 self.overlay.set(status="Interrupted")
                 self.overlay.hide_later(1500)
+        elif ev == "ARYA_CONFIRM":
+            self._overlay(status="Waiting for your yes or no", colour=colour("thinking"))
+            self.overlay.hide_later(15000)
         elif ev.startswith("NOTIFY:"):
             self._overlay(status="Reminder", colour=colour("speaking"), heard="", reply=ev[len("NOTIFY:"):])
             self.overlay.hide_later(8000)
-        elif ev.startswith("ARYA_"):
-            pass                                         # other control messages
+        elif ev.startswith("ARYA_") or ev.startswith("__"):
+            pass
         else:                                            # a sentence of ARYA's reply
             from arya.core.tts import clean_for_speech   # same clean-up as the voice: no markdown
             self._reply = (self._reply + " " + clean_for_speech(ev)).strip()
@@ -426,10 +570,9 @@ class DesktopApp:
     def _shutdown(self) -> None:
         self.quitting = True
         print("ARYA desktop: shutting down")
-        ws = getattr(self, "_ws", None)
-        if ws is not None:
+        if self._ws is not None:
             try:
-                ws.wake_engine.stop()
+                self._ws.wake_engine.stop()
             except Exception:
                 pass
         if self.server is not None:
@@ -437,23 +580,55 @@ class DesktopApp:
         if self.server_thread is not None:
             self.server_thread.join(timeout=6)
         self.icon.stop()
-        self.root.destroy()
+        if self.window is not None:
+            self.window.destroy()                        # ends webview.start() on the main thread
+        self.root.quit()
 
     def run(self) -> None:
+        import webview
+
+        try:   # own taskbar identity, so Windows shows ARYA's icon (not Python's)
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_ID)
+        except Exception:
+            pass
         self.icon.run_detached()
+        threading.Thread(target=self._overlay_thread, name="overlay", daemon=True).start()
+        self._ui_ready.wait(10)
         self.server_thread = threading.Thread(target=self._run_server, name="arya-server", daemon=True)
         self.server_thread.start()
-        self.root.after(50, self._poll)
-        self.root.mainloop()
+        self._create_window()
+        webview.start(gui="edgechromium", icon=str(ICON_FILE), private_mode=False,
+                      storage_path=str(DATA_DIR / "webview"))
+        if not self.quitting:                            # window destroyed some other way
+            self.events.put("__QUIT__")
+            time.sleep(1)
 
 
-def main() -> None:
+def _ask_running_instance_to_show() -> bool:
+    """Second launch (desktop shortcut): bring the running ARYA's window forward."""
+    import urllib.request
+
+    from arya.server import security
+
+    for _ in range(3):
+        try:
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{security.PORT}/api/window/show", data=b"{}", method="POST",
+                headers={"X-ARYA-Token": security.TOKEN, "Content-Type": "application/json"})
+            urllib.request.urlopen(req, timeout=3).read()
+            return True
+        except Exception:
+            time.sleep(1)       # still starting up — its window shows the splash already
+    return False
+
+
+def main(argv: list[str] | None = None) -> None:
+    argv = sys.argv[1:] if argv is None else argv
     os.chdir(ROOT)
     if sys.stdout is None or os.getenv("ARYA_LOG_TO_FILE") == "1" or Path(sys.executable).name.lower() == "pythonw.exe":
         redirect_output_to_log()
     if not system.acquire_single_instance():
-        print("ARYA is already running — opening it instead of starting a second copy.")
-        from arya.server import security
-        webbrowser.open(f"http://localhost:{security.PORT}")
+        print("ARYA is already running — bringing its window forward.")
+        _ask_running_instance_to_show()
         return
-    DesktopApp().run()
+    DesktopApp(background="--background" in argv).run()

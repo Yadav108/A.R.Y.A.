@@ -681,6 +681,8 @@
           return;
         }
 
+        if (msg.startsWith("ARYA_")) return;   // control events this page doesn't use
+
         // Regular response text chunk
         appendAssistantChunk(msg);
         if (!isPlaying) setStatus("Thinking...", "thinking");

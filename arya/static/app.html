@@ -1,0 +1,735 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ARYA</title>
+<link rel="icon" href="/static/arya.png">
+<!-- Fully offline: no web fonts, CDNs or trackers — system fonts only. -->
+<style>
+  :root {
+    --bg: #06070b;
+    --panel: rgba(255, 255, 255, 0.035);
+    --panel-2: rgba(255, 255, 255, 0.06);
+    --line: rgba(255, 255, 255, 0.08);
+    --line-2: rgba(255, 255, 255, 0.14);
+    --text: #eef0f6;
+    --dim: #9aa2b6;
+    --faint: #5f6880;
+
+    --c-idle: #6366f1;
+    --c-listen: #22c55e;
+    --c-think: #f59e0b;
+    --c-speak: #3b82f6;
+    --c-conv: #14b8a6;
+    --c-muted: #ef4444;
+    --c-error: #f43f5e;
+    --state: var(--c-idle);
+
+    --radius: 16px;
+    --font: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+    --font-display: "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+  }
+  body[data-state="listening"]    { --state: var(--c-listen); }
+  body[data-state="thinking"]     { --state: var(--c-think); }
+  body[data-state="speaking"]     { --state: var(--c-speak); }
+  body[data-state="conversation"] { --state: var(--c-conv); }
+  body[data-state="muted"]        { --state: var(--c-muted); }
+  body[data-state="offline"]      { --state: #475569; }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.5 var(--font);
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+  /* soft aurora that follows ARYA's state */
+  body::before {
+    content: ""; position: fixed; inset: -20%;
+    background:
+      radial-gradient(40% 35% at 62% 18%, color-mix(in srgb, var(--state) 22%, transparent), transparent 70%),
+      radial-gradient(35% 30% at 20% 90%, rgba(20, 184, 166, 0.08), transparent 70%);
+    transition: background 0.8s ease;
+    pointer-events: none; z-index: 0;
+  }
+  button, input, textarea { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  :focus-visible { outline: 2px solid color-mix(in srgb, var(--c-idle) 70%, white); outline-offset: 2px; }
+
+  .app { position: relative; z-index: 1; display: grid; grid-template-columns: 300px 1fr; grid-template-rows: 100%; height: 100%; }
+
+  /* ── Sidebar ─────────────────────────────────────────────── */
+  aside {
+    border-right: 1px solid var(--line);
+    background: rgba(8, 9, 14, 0.72);
+    backdrop-filter: blur(20px);
+    display: flex; flex-direction: column; gap: 14px;
+    padding: 20px 16px; overflow-y: auto;
+  }
+  aside::-webkit-scrollbar, .thread::-webkit-scrollbar { width: 8px; }
+  aside::-webkit-scrollbar-thumb, .thread::-webkit-scrollbar-thumb { background: var(--line); border-radius: 8px; }
+
+  .brand { display: flex; align-items: center; gap: 12px; padding: 2px 6px 6px; }
+  .brand img { width: 36px; height: 36px; }
+  .brand h1 { margin: 0; font: 600 20px/1 var(--font-display); letter-spacing: 0.14em; }
+  .brand p { margin: 3px 0 0; color: var(--dim); font-size: 12px; }
+
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; }
+  .card h2 {
+    margin: 0 0 10px; font-size: 11px; font-weight: 600; letter-spacing: 0.12em;
+    text-transform: uppercase; color: var(--faint);
+  }
+
+  .status-line { display: flex; align-items: center; gap: 10px; }
+  .status-dot {
+    width: 10px; height: 10px; border-radius: 50%; background: var(--state);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--state) 22%, transparent);
+    transition: background 0.4s, box-shadow 0.4s; flex: none;
+  }
+  .status-title { font: 600 15px/1.2 var(--font-display); }
+  .status-hint { color: var(--dim); font-size: 12.5px; margin-top: 6px; }
+
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .row + .row { margin-top: 12px; }
+  .row label { color: var(--text); }
+  .row small { display: block; color: var(--dim); font-size: 12px; }
+
+  .switch { position: relative; width: 42px; height: 24px; flex: none; }
+  .switch input { opacity: 0; width: 0; height: 0; position: absolute; }
+  .switch span {
+    position: absolute; inset: 0; border-radius: 99px; background: var(--panel-2);
+    border: 1px solid var(--line-2); transition: background 0.25s;
+  }
+  .switch span::after {
+    content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%;
+    background: #fff; transition: transform 0.25s;
+  }
+  .switch input:checked + span { background: var(--c-listen); border-color: transparent; }
+  .switch input:checked + span::after { transform: translateX(18px); }
+  .switch input:focus-visible + span { outline: 2px solid var(--c-idle); outline-offset: 2px; }
+
+  .segmented { display: grid; grid-template-columns: 1fr 1fr; background: var(--panel-2); border: 1px solid var(--line); border-radius: 12px; padding: 3px; }
+  .segmented button {
+    border: 0; background: transparent; border-radius: 9px; padding: 7px 8px; color: var(--dim);
+    font-weight: 600; font-size: 13px; transition: background 0.2s, color 0.2s;
+  }
+  .segmented button[aria-pressed="true"] { background: rgba(255, 255, 255, 0.1); color: var(--text); }
+  .segmented button:disabled { opacity: 0.4; cursor: not-allowed; }
+  .seg-note { color: var(--dim); font-size: 12px; margin: 8px 2px 0; }
+
+  dl.kv { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 7px 12px; font-size: 12.5px; }
+  dl.kv dt { color: var(--faint); }
+  dl.kv dd { margin: 0; color: var(--text); text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pill-ok { color: #4ade80; }
+
+  .activity { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 9px; }
+  .activity li { display: grid; grid-template-columns: 22px 1fr auto; gap: 8px; align-items: start; font-size: 12.5px; }
+  .activity .ico {
+    width: 22px; height: 22px; border-radius: 7px; display: grid; place-items: center;
+    background: var(--panel-2); font-size: 12px;
+  }
+  .activity .warn .ico { background: rgba(244, 63, 94, 0.15); }
+  .activity time { color: var(--faint); font-size: 11.5px; white-space: nowrap; }
+  .activity .empty { color: var(--faint); display: block; }
+
+  aside footer { margin-top: auto; color: var(--faint); font-size: 11.5px; padding: 4px 6px 0; display: flex; justify-content: space-between; }
+  aside footer a { color: var(--dim); text-decoration: none; }
+  aside footer a:hover { color: var(--text); }
+
+  /* ── Main ───────────────────────────────────────────────── */
+  main { display: flex; flex-direction: column; min-width: 0; min-height: 0; height: 100%; overflow: hidden; }
+
+  .stage {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    padding: 28px 24px 8px; transition: padding 0.5s ease; flex: none;
+  }
+  body:not(.has-messages) .stage { flex: 1; }
+  .state-label { margin-top: 26px; font: 600 22px/1.2 var(--font-display); letter-spacing: 0.01em; text-align: center; transition: margin 0.5s, font-size 0.5s; }
+  .state-sub { color: var(--dim); margin-top: 6px; text-align: center; min-height: 21px; }
+  body.has-messages .state-label { margin-top: 12px; font-size: 15px; }
+  body.has-messages .state-sub { display: none; }
+
+  /* The orb */
+  .orb { --size: 200px; position: relative; width: var(--size); height: var(--size); transition: width 0.5s ease, height 0.5s ease; }
+  body.has-messages .orb { --size: 96px; }
+  .orb > * { position: absolute; border-radius: 50%; }
+  .orb-glow {
+    inset: -35%;
+    background: radial-gradient(circle, color-mix(in srgb, var(--state) 55%, transparent) 0%, transparent 62%);
+    filter: blur(18px); opacity: 0.75; transition: background 0.6s;
+    animation: glow 4s ease-in-out infinite;
+  }
+  .orb-core {
+    inset: 14%;
+    background:
+      radial-gradient(circle at 34% 28%, rgba(255, 255, 255, 0.95) 0%, color-mix(in srgb, var(--state) 45%, white) 14%, var(--state) 48%, color-mix(in srgb, var(--state) 35%, #05050a) 100%);
+    box-shadow: inset -10px -14px 30px rgba(0, 0, 0, 0.45), 0 0 40px color-mix(in srgb, var(--state) 50%, transparent);
+    transition: background 0.6s, box-shadow 0.6s;
+    animation: breathe 4.5s ease-in-out infinite;
+  }
+  .orb-ring {
+    inset: 2%;
+    background: conic-gradient(from 0deg, transparent 0 55%, color-mix(in srgb, var(--state) 90%, white) 80%, transparent 100%);
+    -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2px));
+            mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2px));
+    animation: spin 6s linear infinite;
+  }
+  .orb-ring.r2 { inset: -6%; opacity: 0.35; animation-duration: 11s; animation-direction: reverse; }
+  .orb-ripple { inset: 14%; border: 2px solid var(--state); opacity: 0; }
+  .orb-wave { inset: 0; display: flex; align-items: center; justify-content: center; gap: 6%; opacity: 0; transition: opacity 0.3s; }
+  .orb-wave span { width: 5%; height: 16%; border-radius: 99px; background: rgba(255, 255, 255, 0.9); animation: wave 0.9s ease-in-out infinite; }
+  .orb-wave span:nth-child(2) { animation-delay: -0.15s; }
+  .orb-wave span:nth-child(3) { animation-delay: -0.3s; }
+  .orb-wave span:nth-child(4) { animation-delay: -0.45s; }
+  .orb-wave span:nth-child(5) { animation-delay: -0.6s; }
+
+  body[data-state="listening"] .orb-ripple { animation: ripple 1.6s ease-out infinite; }
+  body[data-state="listening"] .orb-ripple.d2 { animation-delay: 0.8s; }
+  body[data-state="listening"] .orb-core { animation: breathe 1.4s ease-in-out infinite; }
+  body[data-state="thinking"] .orb-ring { animation-duration: 1.1s; }
+  body[data-state="thinking"] .orb-ring.r2 { animation-duration: 2.2s; opacity: 0.6; }
+  body[data-state="speaking"] .orb-wave { opacity: 1; }
+  body[data-state="speaking"] .orb-core { animation: breathe 0.9s ease-in-out infinite; }
+  body[data-state="muted"] .orb-core, body[data-state="offline"] .orb-core { animation: none; filter: saturate(0.6) brightness(0.8); }
+  body[data-state="muted"] .orb-ring, body[data-state="offline"] .orb-ring { animation: none; opacity: 0.25; }
+  body[data-state="muted"] .orb-glow, body[data-state="offline"] .orb-glow { animation: none; opacity: 0.3; }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes breathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.035); } }
+  @keyframes glow { 0%, 100% { opacity: 0.6; } 50% { opacity: 0.9; } }
+  @keyframes ripple { 0% { transform: scale(1); opacity: 0.6; } 100% { transform: scale(1.7); opacity: 0; } }
+  @keyframes wave { 0%, 100% { height: 14%; } 50% { height: 46%; } }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+  }
+
+  .suggestions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 26px; max-width: 620px; }
+  .suggestions button {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 99px; padding: 8px 14px;
+    color: var(--dim); font-size: 13px; transition: border-color 0.2s, color 0.2s, background 0.2s;
+  }
+  .suggestions button:hover { color: var(--text); border-color: var(--line-2); background: var(--panel-2); }
+  body.has-messages .suggestions { display: none; }
+
+  /* min-height: 0 lets the thread shrink and scroll instead of pushing the composer off-screen */
+  .thread { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 0 18px; display: none; }
+  body.has-messages .thread { display: block; }
+  .thread-inner { max-width: 760px; margin: 0 auto; padding: 0 24px; display: flex; flex-direction: column; gap: 14px; }
+
+  .divider { display: flex; align-items: center; gap: 12px; color: var(--faint); font-size: 11.5px; letter-spacing: 0.08em; text-transform: uppercase; margin: 6px 0; }
+  .divider::before, .divider::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+
+  .msg { display: flex; gap: 10px; max-width: 86%; animation: rise 0.25s ease-out; }
+  .msg .bubble { padding: 10px 14px; border-radius: 16px; white-space: pre-wrap; word-wrap: break-word; }
+  .msg time { display: block; color: var(--faint); font-size: 11px; margin-top: 4px; }
+  .msg.user { align-self: flex-end; flex-direction: row-reverse; }
+  .msg.user .bubble { background: color-mix(in srgb, var(--c-idle) 22%, rgba(255,255,255,0.03)); border: 1px solid color-mix(in srgb, var(--c-idle) 35%, transparent); border-bottom-right-radius: 6px; }
+  .msg.user time { text-align: right; }
+  .msg.arya .avatar {
+    width: 26px; height: 26px; border-radius: 50%; flex: none; margin-top: 4px;
+    background: radial-gradient(circle at 34% 28%, #fff 0%, #a5b4fc 18%, var(--c-idle) 55%, #1e1b4b 100%);
+    box-shadow: 0 0 12px color-mix(in srgb, var(--c-idle) 55%, transparent);
+  }
+  .msg.arya .bubble { background: var(--panel); border: 1px solid var(--line); border-bottom-left-radius: 6px; }
+  .msg.history { opacity: 0.72; }
+  .msg.interrupted .bubble::after { content: " — interrupted"; color: var(--faint); font-style: italic; }
+  .typing { display: inline-flex; gap: 4px; padding: 4px 0; }
+  .typing i { width: 6px; height: 6px; border-radius: 50%; background: var(--dim); animation: blink 1.2s infinite; }
+  .typing i:nth-child(2) { animation-delay: 0.2s; }
+  .typing i:nth-child(3) { animation-delay: 0.4s; }
+  @keyframes blink { 0%, 80%, 100% { opacity: 0.25; } 40% { opacity: 1; } }
+  @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+  .notice { align-self: center; background: var(--panel); border: 1px solid var(--line); border-radius: 99px; padding: 6px 14px; color: var(--dim); font-size: 12.5px; animation: rise 0.25s ease-out; }
+
+  .confirm { display: flex; gap: 8px; margin-top: 10px; }
+  .confirm button { border-radius: 10px; padding: 7px 18px; font-weight: 600; border: 1px solid var(--line-2); background: var(--panel-2); }
+  .confirm button.yes { background: var(--c-listen); border-color: transparent; color: #04140a; }
+  .confirm button:disabled { opacity: 0.45; cursor: default; }
+
+  /* ── Composer ───────────────────────────────────────────── */
+  .composer-wrap { padding: 12px 24px 22px; flex: none; }
+  .composer {
+    max-width: 760px; margin: 0 auto; display: flex; align-items: flex-end; gap: 8px;
+    background: rgba(18, 20, 28, 0.85); border: 1px solid var(--line-2); border-radius: 20px; padding: 8px;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.35); backdrop-filter: blur(12px);
+    transition: border-color 0.2s;
+  }
+  .composer:focus-within { border-color: color-mix(in srgb, var(--c-idle) 60%, transparent); }
+  .composer textarea {
+    flex: 1; resize: none; border: 0; outline: 0; background: transparent; padding: 8px 8px; max-height: 120px;
+    line-height: 1.45;
+  }
+  .composer textarea::placeholder { color: var(--faint); }
+  .icon-btn {
+    width: 38px; height: 38px; border-radius: 12px; border: 0; display: grid; place-items: center; flex: none;
+    background: var(--panel-2); color: var(--dim); transition: background 0.2s, color 0.2s, transform 0.1s;
+  }
+  .icon-btn:hover { color: var(--text); background: rgba(255,255,255,0.1); }
+  .icon-btn:active { transform: scale(0.96); }
+  .icon-btn.send { background: var(--c-idle); color: #fff; }
+  .icon-btn.send:disabled { background: var(--panel-2); color: var(--faint); cursor: default; }
+  .icon-btn.recording { background: var(--c-listen); color: #04140a; }
+  .composer-hint { max-width: 760px; margin: 8px auto 0; color: var(--faint); font-size: 11.5px; text-align: center; }
+
+  .banner {
+    position: fixed; top: 14px; left: 50%; transform: translateX(-50%); z-index: 10;
+    background: rgba(30, 20, 24, 0.92); border: 1px solid rgba(244, 63, 94, 0.4); color: #fecdd3;
+    padding: 8px 16px; border-radius: 99px; font-size: 13px; display: none;
+  }
+  .banner.show { display: block; }
+  .toast {
+    position: fixed; bottom: 96px; left: 50%; transform: translateX(-50%) translateY(10px); z-index: 10;
+    background: rgba(20, 22, 30, 0.95); border: 1px solid var(--line-2); padding: 8px 16px; border-radius: 12px;
+    font-size: 13px; opacity: 0; transition: opacity 0.25s, transform 0.25s; pointer-events: none;
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%); }
+
+  .menu-btn { display: none; position: fixed; top: 14px; left: 14px; z-index: 5; }
+  @media (max-width: 860px) {
+    .app { grid-template-columns: 1fr; }
+    aside { position: fixed; inset: 0 auto 0 0; width: 300px; z-index: 6; transform: translateX(-100%); transition: transform 0.3s; }
+    body.sidebar-open aside { transform: none; }
+    .menu-btn { display: grid; }
+    .msg { max-width: 94%; }
+  }
+</style>
+</head>
+<body data-state="offline">
+<div class="banner" id="banner" role="status">Reconnecting to ARYA…</div>
+<button class="icon-btn menu-btn" id="menuBtn" aria-label="Show panel">
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+</button>
+
+<div class="app">
+  <aside id="sidebar">
+    <div class="brand">
+      <img src="/static/arya.png" alt="">
+      <div><h1>ARYA</h1><p>Private · offline · hands-free</p></div>
+    </div>
+
+    <section class="card" aria-live="polite">
+      <div class="status-line"><span class="status-dot"></span><span class="status-title" id="statusTitle">Connecting…</span></div>
+      <div class="status-hint" id="statusHint">Starting up</div>
+    </section>
+
+    <section class="card">
+      <h2>Controls</h2>
+      <div class="row">
+        <div><label for="micToggle">Microphone</label><small id="micNote">Listening for “Hey ARYA”</small></div>
+        <label class="switch"><input type="checkbox" id="micToggle" checked aria-label="Microphone on"><span></span></label>
+      </div>
+      <div style="margin-top:14px">
+        <div class="segmented" role="group" aria-label="Privacy mode">
+          <button id="modeOffline" aria-pressed="true">Offline</button>
+          <button id="modeCloud" aria-pressed="false">Cloud</button>
+        </div>
+        <p class="seg-note" id="modeNote">Everything stays on this laptop.</p>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>System</h2>
+      <dl class="kv">
+        <dt>Brain</dt><dd id="kvBrain">—</dd>
+        <dt>Voice</dt><dd id="kvVoice">—</dd>
+        <dt>Wake word</dt><dd id="kvWake">—</dd>
+        <dt>Access</dt><dd id="kvAccess">—</dd>
+      </dl>
+    </section>
+
+    <section class="card">
+      <h2>Recent actions</h2>
+      <ul class="activity" id="activity"><li><span class="empty">Nothing yet</span></li></ul>
+    </section>
+
+    <footer><span>Logged locally · nothing leaves this PC</span><a href="/classic" title="Previous interface">Classic</a></footer>
+  </aside>
+
+  <main>
+    <section class="stage">
+      <div class="orb" id="orb" aria-hidden="true">
+        <div class="orb-glow"></div>
+        <div class="orb-ring r2"></div>
+        <div class="orb-ripple"></div>
+        <div class="orb-ripple d2"></div>
+        <div class="orb-core"></div>
+        <div class="orb-ring"></div>
+        <div class="orb-wave"><span></span><span></span><span></span><span></span><span></span></div>
+      </div>
+      <div class="state-label" id="stateLabel">Connecting…</div>
+      <div class="state-sub" id="stateSub"></div>
+      <div class="suggestions" id="suggestions">
+        <button>What's the weather in Munich?</button>
+        <button>What's in my Downloads?</button>
+        <button>Set a timer for 10 minutes</button>
+        <button>Battery and CPU usage</button>
+        <button>Ask the cloud, explain entropy</button>
+      </div>
+    </section>
+
+    <section class="thread" id="thread" aria-live="polite"><div class="thread-inner" id="threadInner"></div></section>
+
+    <div class="composer-wrap">
+      <form class="composer" id="composer" autocomplete="off">
+        <button type="button" class="icon-btn" id="pttBtn" aria-label="Hold to talk" title="Hold to talk">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+        </button>
+        <textarea id="input" rows="1" placeholder="Message ARYA — or just say “Hey ARYA”" aria-label="Message ARYA"></textarea>
+        <button type="submit" class="icon-btn send" id="sendBtn" aria-label="Send" disabled>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+        </button>
+      </form>
+      <div class="composer-hint">Enter to send · hold the mic to talk · deletes, moves and closing apps always ask first</div>
+    </div>
+  </main>
+</div>
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+(() => {
+  "use strict";
+  const TOKEN = window.ARYA_TOKEN || new URLSearchParams(location.hash.slice(1)).get("token") || "";
+  const $ = (id) => document.getElementById(id);
+  const body = document.body;
+
+  // ── API ────────────────────────────────────────────────
+  async function api(path, options = {}) {
+    const res = await fetch(path, {
+      ...options,
+      headers: { "X-ARYA-Token": TOKEN, "Content-Type": "application/json", ...(options.headers || {}) },
+    });
+    if (!res.ok) throw new Error(`${path}: ${res.status}`);
+    return res.json();
+  }
+
+  // ── State & labels ─────────────────────────────────────
+  const LABELS = {
+    idle:         ["Ready", "Say “Hey ARYA”, or type below"],
+    listening:    ["Listening…", "Go ahead"],
+    thinking:     ["Thinking…", ""],
+    speaking:     ["Speaking", "Say “Hey ARYA, stop” to interrupt"],
+    conversation: ["In conversation", "Just talk — no wake word needed"],
+    muted:        ["Microphone muted", "Type below, or unmute to talk"],
+    offline:      ["Connecting…", "Waiting for ARYA"],
+  };
+  let state = "offline", muted = false, conversationUntil = 0, conversationTimer = null;
+
+  function setState(next) {
+    if (muted && next !== "offline" && next !== "thinking" && next !== "speaking") next = "muted";
+    state = next;
+    body.dataset.state = next;
+    const [title, sub] = LABELS[next];
+    $("stateLabel").textContent = title;
+    $("stateSub").textContent = sub;
+    $("statusTitle").textContent = title;
+    $("statusHint").textContent = next === "conversation" ? conversationHint() : (sub || " ");
+  }
+  function conversationHint() {
+    const left = Math.max(0, Math.round((conversationUntil - Date.now()) / 1000));
+    return `Just talk — open for ${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}`;
+  }
+  function startConversation(seconds) {
+    conversationUntil = Date.now() + seconds * 1000;
+    clearInterval(conversationTimer);
+    setState("conversation");
+    conversationTimer = setInterval(() => {
+      if (state !== "conversation") return;
+      if (Date.now() >= conversationUntil) { clearInterval(conversationTimer); setState("idle"); return; }
+      $("statusHint").textContent = conversationHint();
+    }, 1000);
+  }
+
+  // ── Thread ─────────────────────────────────────────────
+  const inner = $("threadInner"), thread = $("thread");
+  let current = null;            // ARYA's bubble being streamed
+  const fmtTime = (d = new Date()) => d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const clean = (t) => t.replace(/\*\*|__|`+|^#+\s*/gm, "").replace(/^\s*[-•]\s+/gm, "• ");
+
+  function nearBottom() { return thread.scrollHeight - thread.scrollTop - thread.clientHeight < 140; }
+  function scroll(force) { if (force || nearBottom()) thread.scrollTop = thread.scrollHeight; }
+  function markHasMessages() { body.classList.add("has-messages"); }
+
+  function addMessage(role, text, opts = {}) {
+    markHasMessages();
+    const wrap = document.createElement("div");
+    wrap.className = `msg ${role}` + (opts.history ? " history" : "");
+    if (role === "arya") wrap.appendChild(Object.assign(document.createElement("div"), { className: "avatar" }));
+    const col = document.createElement("div");
+    const bubble = Object.assign(document.createElement("div"), { className: "bubble" });
+    if (opts.typing) bubble.innerHTML = '<span class="typing"><i></i><i></i><i></i></span>';
+    else bubble.textContent = clean(text);
+    col.appendChild(bubble);
+    if (!opts.history) col.appendChild(Object.assign(document.createElement("time"), { textContent: fmtTime() }));
+    wrap.appendChild(col);
+    inner.appendChild(wrap);
+    scroll(!opts.history);
+    return wrap;
+  }
+  function notice(text) {
+    markHasMessages();
+    inner.appendChild(Object.assign(document.createElement("div"), { className: "notice", textContent: text }));
+    scroll(true);
+  }
+  function ensureCurrent() {
+    if (!current) current = addMessage("arya", "", { typing: true });
+    return current;
+  }
+  function appendToCurrent(sentence) {
+    const msg = ensureCurrent();
+    const bubble = msg.querySelector(".bubble");
+    if (bubble.querySelector(".typing")) bubble.textContent = "";
+    bubble.textContent = (bubble.textContent + " " + clean(sentence)).trim();
+    scroll();
+  }
+  function finishCurrent() {
+    if (current && current.querySelector(".typing")) current.remove();
+    current = null;
+  }
+  function addConfirm() {
+    const target = current || [...inner.querySelectorAll(".msg.arya")].pop();
+    if (!target || target.querySelector(".confirm")) return;
+    const bar = Object.assign(document.createElement("div"), { className: "confirm" });
+    const yes = Object.assign(document.createElement("button"), { className: "yes", textContent: "Yes, do it" });
+    const no = Object.assign(document.createElement("button"), { textContent: "No" });
+    const answer = (text) => { yes.disabled = no.disabled = true; send(text); };
+    yes.onclick = () => answer("yes");
+    no.onclick = () => answer("no");
+    bar.append(yes, no);
+    target.querySelector(".bubble").after(bar);
+    scroll(true);
+  }
+
+  // ── Sidebar data ───────────────────────────────────────
+  const TOOL_LABELS = {
+    get_weather: ["☀", "Checked the weather"], get_battery: ["🔋", "Checked the battery"],
+    get_system_info: ["📊", "Checked CPU and memory"], set_timer: ["⏱", "Set a timer"], set_reminder: ["⏰", "Set a reminder"],
+    list_timers: ["⏱", "Listed timers"], cancel_timer: ["⏱", "Cancelled a timer"], pomodoro: ["🍅", "Started a focus session"],
+    media_control: ["🎵", "Controlled media"], open_app: ["🚀", "Opened an app"], open_url: ["🌐", "Opened a link"],
+    file_search: ["🔎", "Searched files"], list_folder: ["📁", "Listed a folder"], read_text_file: ["📄", "Read a file"],
+    move_file: ["📦", "Moved a file"], delete_file: ["🗑", "Moved a file to the Recycle Bin"], close_app: ["✕", "Closed an app"],
+    run_command: ["⌘", "Ran a command"], get_clipboard: ["📋", "Read the clipboard"], set_clipboard: ["📋", "Copied to clipboard"],
+    calculate: ["🧮", "Calculated"], search_wikipedia: ["📚", "Looked up Wikipedia"], save_note: ["📝", "Saved a note"],
+    get_notes: ["📝", "Read notes"], search_notes: ["📝", "Searched notes"], explain_concept: ["💡", "Explained a concept"],
+    formula_lookup: ["∑", "Looked up a formula"], flashcard_quiz: ["🎓", "Made a quiz"], get_daily_briefing: ["🗞", "Daily briefing"],
+  };
+  function describe(item) {
+    const tool = item.tool || "";
+    const [icon, label] = TOOL_LABELS[tool] || ["•", tool.replace(/_/g, " ")];
+    switch (item.kind) {
+      case "tool": return { icon, text: item.ok ? label : `${label} — failed`, warn: !item.ok };
+      case "confirmation_requested": return { icon: "?", text: `Asked before: ${label.toLowerCase()}` };
+      case "confirmation_approved": return { icon: "✓", text: `You approved: ${label.toLowerCase()}` };
+      case "confirmation_declined": return { icon: "✕", text: `You declined: ${label.toLowerCase()}` };
+      case "blocked": return { icon: "⛔", text: `Blocked: ${(item.reason || label).slice(0, 80)}`, warn: true };
+      case "cloud_request": return { icon: "☁", text: "Sent one question to the cloud" };
+      case "connection_rejected": return { icon: "🛡", text: `Refused a connection (${item.reason})`, warn: true };
+      default: return { icon: "•", text: item.kind };
+    }
+  }
+  function ago(ts) {
+    const s = (Date.now() - new Date(ts.replace(" ", "T")).getTime()) / 1000;
+    if (isNaN(s)) return "";
+    if (s < 60) return "now";
+    if (s < 3600) return `${Math.floor(s / 60)}m`;
+    if (s < 86400) return `${Math.floor(s / 3600)}h`;
+    return `${Math.floor(s / 86400)}d`;
+  }
+  async function refreshActivity() {
+    try {
+      const { items } = await api("/api/activity?limit=12");
+      const list = $("activity");
+      list.replaceChildren();
+      if (!items.length) { list.innerHTML = '<li><span class="empty">Nothing yet</span></li>'; return; }
+      for (const item of items) {
+        const d = describe(item);
+        const li = document.createElement("li");
+        if (d.warn) li.className = "warn";
+        li.append(
+          Object.assign(document.createElement("span"), { className: "ico", textContent: d.icon }),
+          Object.assign(document.createElement("span"), { textContent: d.text }),
+          Object.assign(document.createElement("time"), { textContent: ago(item.ts || "") }),
+        );
+        list.appendChild(li);
+      }
+    } catch { /* not critical */ }
+  }
+  function applyMode(mode, cloudConfigured = true) {
+    $("modeOffline").setAttribute("aria-pressed", String(mode === "offline"));
+    $("modeCloud").setAttribute("aria-pressed", String(mode === "cloud"));
+    $("modeCloud").disabled = !cloudConfigured;
+    $("modeNote").textContent = !cloudConfigured
+      ? "Cloud isn't set up (no Groq key) — everything stays local."
+      : mode === "offline"
+        ? "Everything stays on this laptop. Say “ask the cloud, …” for one question."
+        : "Groq answers first — faster and smarter, but requests leave the laptop.";
+  }
+  function applyMuted(m) {
+    muted = m;
+    $("micToggle").checked = !m;
+    $("micNote").textContent = m ? "Muted — nothing is heard" : "Listening for “Hey ARYA”";
+    if (m) setState("muted"); else if (state === "muted") setState("idle");
+  }
+  let cloudConfigured = true;
+  async function refreshStatus() {
+    const s = await api("/api/status");
+    cloudConfigured = s.cloud_configured;
+    applyMode(s.mode, s.cloud_configured);
+    applyMuted(s.muted);
+    $("kvBrain").textContent = s.mode === "offline" ? `${s.brain} · local` : `${s.cloud_brain} · cloud`;
+    $("kvBrain").title = `Local: ${s.brain}`;
+    $("kvVoice").textContent = s.voice_engine;
+    $("kvVoice").title = s.voice;
+    $("kvWake").textContent = s.wake_engine;
+    $("kvAccess").innerHTML = s.local_only ? '<span class="pill-ok">This PC only</span> · token' : "Network · token";
+    if (s.conversation_seconds_left > 0 && !s.muted) startConversation(s.conversation_seconds_left);
+    else if (!s.muted && state === "offline") setState("idle");
+    return s;
+  }
+  async function loadHistory() {
+    try {
+      const { messages } = await api("/api/history?limit=20");
+      if (!messages.length) return;
+      for (const m of messages) addMessage(m.role === "user" ? "user" : "arya", m.content, { history: true });
+      inner.appendChild(Object.assign(document.createElement("div"), { className: "divider", textContent: "Now" }));
+      scroll(true);
+    } catch { /* not critical */ }
+  }
+
+  // ── WebSocket ──────────────────────────────────────────
+  let ws = null, retry = 0;
+  function connect() {
+    const proto = location.protocol === "https:" ? "wss" : "ws";
+    ws = new WebSocket(`${proto}://${location.host}/ws?token=${encodeURIComponent(TOKEN)}`);
+    ws.binaryType = "arraybuffer";
+    ws.onopen = async () => {
+      retry = 0;
+      $("banner").classList.remove("show");
+      try { await refreshStatus(); } catch { setState("idle"); }
+      refreshActivity();
+    };
+    ws.onclose = () => {
+      setState("offline");
+      $("banner").textContent = TOKEN ? "Reconnecting to ARYA…" : "Not authorised — open ARYA from this computer";
+      $("banner").classList.add("show");
+      setTimeout(connect, Math.min(8000, 800 * 2 ** retry++));
+    };
+    ws.onmessage = (event) => {
+      if (event.data instanceof ArrayBuffer) return playAudio(event.data);
+      handle(event.data);
+    };
+  }
+  function handle(msg) {
+    if (msg === "ARYA_LISTENING" || msg === "ARYA_WAKE") { if (state !== "thinking" && state !== "speaking") setState("listening"); return; }
+    if (msg.startsWith("TRANSCRIPT:")) {
+      finishCurrent();
+      addMessage("user", msg.slice(11));
+      ensureCurrent();
+      setState("thinking");
+      return;
+    }
+    if (msg === "ARYA_SPEAKING") { setState("speaking"); return; }
+    if (msg === "ARYA_CONFIRM") { addConfirm(); return; }
+    if (msg === "ARYA_DONE") { finishCurrent(); if (state !== "conversation") setState("idle"); setTimeout(refreshActivity, 400); return; }
+    if (msg.startsWith("ARYA_FOLLOWUP")) { startConversation(parseInt(msg.split(":")[1], 10) || 12); return; }
+    if (msg === "ARYA_INTERRUPT") { if (current) current.classList.add("interrupted"); finishCurrent(); setState("idle"); return; }
+    if (msg === "ARYA_NO_SPEECH") { toast("I didn't catch that"); setState("idle"); return; }
+    if (msg === "ARYA_MUTED") { applyMuted(true); return; }
+    if (msg === "ARYA_UNMUTED") { applyMuted(false); return; }
+    if (msg.startsWith("ARYA_MODE:")) { applyMode(msg.slice(10), cloudConfigured); refreshStatus().catch(() => {}); return; }
+    if (msg === "ARYA_READY") { refreshStatus().catch(() => {}); return; }
+    if (msg.startsWith("NOTIFY:")) { notice("⏰ " + msg.slice(7)); return; }
+    if (msg.startsWith("ARYA_")) return;
+    appendToCurrent(msg);
+    if (state === "thinking") setState("speaking");
+  }
+
+  // Browser audio (only when AUDIO_OUTPUT=browser; normally ARYA speaks through the PC speakers).
+  const audioQueue = []; let playing = false;
+  function playAudio(buf) {
+    const h = new Uint8Array(buf, 0, Math.min(4, buf.byteLength));
+    const wav = h[0] === 0x52 && h[1] === 0x49 && h[2] === 0x46 && h[3] === 0x46;
+    audioQueue.push(URL.createObjectURL(new Blob([buf], { type: wav ? "audio/wav" : "audio/mpeg" })));
+    if (!playing) playNext();
+  }
+  function playNext() {
+    const url = audioQueue.shift();
+    if (!url) { playing = false; return; }
+    playing = true;
+    const a = new Audio(url);
+    a.onended = a.onerror = () => { URL.revokeObjectURL(url); playNext(); };
+    a.play().catch(() => playNext());
+  }
+
+  // ── Composer ───────────────────────────────────────────
+  const input = $("input");
+  function send(text) {
+    text = text.trim();
+    if (!text || !ws || ws.readyState !== WebSocket.OPEN) { if (text) toast("Not connected yet"); return; }
+    ws.send(text);
+  }
+  function autosize() { input.style.height = "auto"; input.style.height = Math.min(120, input.scrollHeight) + "px"; $("sendBtn").disabled = !input.value.trim(); }
+  input.addEventListener("input", autosize);
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("composer").requestSubmit(); }
+  });
+  $("composer").addEventListener("submit", (e) => {
+    e.preventDefault();
+    send(input.value);
+    input.value = ""; autosize();
+  });
+  document.querySelectorAll("#suggestions button").forEach((b) => b.addEventListener("click", () => send(b.textContent)));
+
+  // Push-to-talk: hold the mic button; audio is transcribed locally by Whisper.
+  let recorder = null, chunks = [], stream = null;
+  async function startRecording() {
+    try {
+      stream = stream || await navigator.mediaDevices.getUserMedia({ audio: true });
+      chunks = [];
+      recorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
+      recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+      recorder.onstop = async () => {
+        $("pttBtn").classList.remove("recording");
+        const blob = new Blob(chunks, { type: "audio/webm" });
+        if (blob.size > 2000 && ws && ws.readyState === WebSocket.OPEN) { ws.send(await blob.arrayBuffer()); setState("thinking"); }
+      };
+      recorder.start();
+      $("pttBtn").classList.add("recording");
+      setState("listening");
+    } catch { toast("Microphone not available here — just say “Hey ARYA”"); }
+  }
+  function stopRecording() { if (recorder && recorder.state === "recording") recorder.stop(); }
+  $("pttBtn").addEventListener("pointerdown", (e) => { e.preventDefault(); startRecording(); });
+  ["pointerup", "pointerleave", "pointercancel"].forEach((ev) => $("pttBtn").addEventListener(ev, stopRecording));
+
+  // ── Controls ───────────────────────────────────────────
+  $("micToggle").addEventListener("change", async (e) => {
+    try { await api("/api/mute", { method: "POST", body: JSON.stringify({ muted: !e.target.checked }) }); }
+    catch { toast("Couldn't change the microphone"); e.target.checked = !e.target.checked; }
+  });
+  for (const [id, mode] of [["modeOffline", "offline"], ["modeCloud", "cloud"]]) {
+    $(id).addEventListener("click", async () => {
+      try { await api("/api/mode", { method: "POST", body: JSON.stringify({ mode }) }); }
+      catch { toast("Couldn't switch privacy mode"); }
+    });
+  }
+  $("menuBtn").addEventListener("click", () => body.classList.toggle("sidebar-open"));
+
+  let toastTimer = null;
+  function toast(text) {
+    const t = $("toast");
+    t.textContent = text; t.classList.add("show");
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove("show"), 2600);
+  }
+
+  setState("offline");
+  loadHistory();
+  connect();
+  setInterval(refreshActivity, 30000);
+})();
+</script>
+</body>
+</html>
