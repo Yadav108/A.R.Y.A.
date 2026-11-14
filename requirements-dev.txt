@@ -1,0 +1,4 @@
+# Tests and the quality benchmark (not needed to run ARYA)
+-r requirements.txt
+pytest>=8
+pyyaml            # arya/eval/golden.yaml

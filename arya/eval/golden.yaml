@@ -1,0 +1,284 @@
+# ARYA golden questions — the quality benchmark (python -m arya.eval).
+#
+# Each answer is checked on the text shown on screen (LaTeX already converted):
+#   include:  list of groups; every group needs at least one of its alternatives
+#   exclude:  none of these may appear (wrong facts, LaTeX, "I have no access")
+#   max_sentences: upper bound for the whole answer (default 8)
+# Matching ignores case and spaces. Entries starting with "re:" are regular expressions.
+# Facts follow standard textbook results and the course material in the library.
+
+defaults:
+  max_sentences: 8
+  exclude:
+    - "re:\\\\(frac|sqrt|zeta|omega|\\(|\\[)"          # raw LaTeX on screen
+    - "re:(don'?t|do not) have access to (your|specific)"
+    - "re:can'?t access your"
+
+questions:
+  # ── Control: second-order systems ─────────────────────────────────────────
+  - id: stability-2nd-order
+    tags: [control, fundamentals, from-log]
+    q: Tell me what are the parameters that will predict the stability of second-order system?
+    include: [["ζ > 0", "zeta > 0", "ζ is greater than 0", "zeta is greater than 0", "greater than zero", "ζ and ω_n are positive", "both ζ and ω_n are positive", "positive"]]
+    exclude:
+      - "re:ζ\\s*=\\s*0[^.]{0,40}critically"
+      - "re:stab[^.]{0,60}between 0 and 1"
+      - "re:stab[^.]{0,40}(positive|greater than (0|zero)) (and|but) less than (1|one)"
+      - "re:ζ\\s*<\\s*0\\.5[^.]{0,30}overdamped"
+      - "re:overdamped[^.]{0,30}oscillates more"
+  - id: critically-damped
+    tags: [control, fundamentals]
+    q: What damping ratio makes a second-order system critically damped?
+    include: [["ζ = 1", "zeta = 1", "ζ equals 1", "zeta equals 1", "equal to 1", "equal to one", "of 1", "of one", "exactly 1"]]
+    exclude: ["re:ζ\\s*=\\s*0[^.]{0,30}critically", "re:0\\.5[^.]{0,30}critically"]
+  - id: underdamped
+    tags: [control, fundamentals]
+    q: When is a second-order system underdamped?
+    include: [["less than 1", "less than one", "< 1", "between 0 and 1", "0 < ζ < 1", "below 1", "below one"]]
+    exclude: ["re:greater than (1|one)[^.]{0,30}underdamped"]
+  - id: overdamped-oscillation
+    tags: [control, fundamentals]
+    q: Does an overdamped system oscillate?
+    include: [["no", "does not", "doesn't", "without oscillat", "not oscillate"]]
+    exclude: ["re:overdamped[^.]{0,30}oscillates more", "re:yes, (an )?overdamped"]
+  - id: overshoot-formula
+    tags: [control, fundamentals, from-log]
+    q: What is the formula for percent overshoot of a second order system?
+    include: [["e^", "exp", "e to the", "e^("], ["π", "pi"], ["√", "sqrt", "square root"]]
+  - id: overshoot-0.3
+    tags: [control, numbers]
+    q: What is the percent overshoot for a damping ratio of 0.3?
+    include: [["37"]]
+    exclude: ["16.3"]
+  - id: settling-time
+    tags: [control, fundamentals]
+    q: What is the 2 percent settling time of a second-order system?
+    include: [["4"], ["ζ", "zeta"], ["ω", "omega"]]
+  - id: damped-frequency
+    tags: [control, fundamentals]
+    q: What is the damped natural frequency of a second-order system?
+    include: [["1 - ζ²", "1-ζ²", "1 − ζ²", "1 minus zeta squared", "1 - zeta^2", "1-zeta^2", "1 - zeta²"]]
+  - id: first-order-63
+    tags: [control, fundamentals]
+    q: How long does a first-order system take to reach 63 percent of its final value?
+    include: [["τ", "tau", "time constant"]]
+  - id: first-order-tf
+    tags: [control, fundamentals]
+    q: What is the transfer function of a first-order system?
+    include: [["τs + 1", "τ s + 1", "tau s + 1", "Ts + 1", "T s + 1", "τ·s + 1", "1 + τs", "1 + τ s", "1 + Ts", "1 + sT", "s + 1/τ"]]
+  - id: poles-stability
+    tags: [control, fundamentals]
+    q: When is a linear system stable in terms of its poles?
+    include: [["left half", "negative real part", "real parts are negative", "real part is negative", "real parts less than zero"]]
+  - id: laplace-step
+    tags: [control, fundamentals]
+    q: What is the Laplace transform of a unit step?
+    include: [["1/s", "1 / s", "one over s", "1 over s"]]
+  - id: final-value
+    tags: [control, fundamentals]
+    q: What does the final value theorem say?
+    include: [["lim", "limit"], ["s → 0", "s goes to 0", "s→0", "s approaches 0", "s approaches zero", "s tends to 0", "s to zero", "s goes to zero", "s → zero"]]
+  - id: pid-parts
+    tags: [control, fundamentals]
+    q: What do the P, I and D parts of a PID controller do?
+    include: [["proportional"], ["integral"], ["derivative"]]
+  - id: pid-steady-state
+    tags: [control, fundamentals]
+    q: Which part of a PID controller removes steady-state error?
+    include: [["integral", "I part", "I-part", "I action", "I-action", "I term"]]
+    exclude: ["re:^the derivative"]
+  - id: bode-bandwidth
+    tags: [control, fundamentals]
+    q: How is the bandwidth defined on a Bode plot?
+    include: [["3 dB", "-3", "−3", "3 decibel"]]
+  - id: phase-margin
+    tags: [control, fundamentals]
+    q: What is the phase margin?
+    include: [["180"], ["crossover", "0 dB", "gain crossover", "magnitude is 1", "unity gain"]]
+  - id: linearization
+    tags: [control, fundamentals]
+    q: What does linearization around an operating point mean?
+    include: [["operating point", "equilibrium"], ["taylor", "first-order", "first order", "tangent", "derivative", "small", "approximat"]]
+
+  # ── Dynamics ──────────────────────────────────────────────────────────────
+  - id: coriolis-formula
+    tags: [dynamics, fundamentals, from-log]
+    q: What is the Coriolis acceleration?
+    include: [["2"], ["ω", "omega", "angular velocity"], ["relative"]]
+  - id: coriolis-zero
+    tags: [dynamics, fundamentals]
+    q: When is the Coriolis acceleration zero?
+    include: [["parallel", "relative velocity is zero", "no relative", "zero relative", "not rotating", "ω = 0", "does not rotate", "isn't rotating", "is zero"]]
+  - id: centripetal
+    tags: [dynamics, fundamentals]
+    q: What is the formula for centripetal acceleration?
+    include: [["ω²r", "rω²", "r ω²", "ω² r", "ω²·r", "v²/r", "v² / r", "v^2/r", "omega squared"]]
+  - id: newton-2
+    tags: [dynamics, fundamentals]
+    q: State Newton's second law.
+    include: [["F = ma", "F = m a", "F = m·a", "mass times acceleration", "ma", "m·a", "m a"]]
+  - id: kinetic-energy
+    tags: [dynamics, fundamentals]
+    q: What is the kinetic energy of a moving mass?
+    include: [["½", "1/2", "one half", "half"], ["v²", "v squared", "v^2", "velocity squared"]]
+  - id: rotational-energy
+    tags: [dynamics, fundamentals]
+    q: What is the kinetic energy of a rotating body?
+    include: [["ω²", "omega squared", "ω^2"], ["moment of inertia", "J", "I", "Θ"]]
+  - id: mechanical-power
+    tags: [dynamics, fundamentals]
+    q: What is mechanical power?
+    include: [["F·v", "F · v", "F v", "force times velocity", "work per", "rate", "per unit time", "dW/dt"]]
+  - id: friction-direction
+    tags: [dynamics, fundamentals, from-log]
+    q: Can you explain the direction of sliding friction?
+    include: [["opposite", "opposes", "against"]]
+  - id: friction-force
+    tags: [dynamics, fundamentals]
+    q: What is the formula for the sliding friction force?
+    include: [["μ", "mu", "coefficient"], ["N", "normal"]]
+  - id: static-vs-kinetic
+    tags: [dynamics, fundamentals]
+    q: Is static friction larger or smaller than kinetic friction?
+    include: [["larger", "greater", "higher", "bigger", "more"]]
+    exclude: ["re:static friction is (smaller|less|lower)"]
+  - id: impulse
+    tags: [dynamics, fundamentals]
+    q: What is the impulse-momentum theorem?
+    include: [["momentum"], ["impulse", "force times time", "integral of force", "F Δt", "FΔt", "∫"]]
+  - id: restitution
+    tags: [dynamics, fundamentals]
+    q: What does a coefficient of restitution of 1 mean?
+    include: [["elastic"]]
+    exclude: ["re:perfectly inelastic", "re:plastic"]
+  - id: rod-inertia
+    tags: [dynamics, fundamentals]
+    q: What is the moment of inertia of a thin rod about its centre?
+    include: [["1/12", "one twelfth", "/12", "over 12", "1 / 12"]]
+  - id: parallel-axis
+    tags: [dynamics, fundamentals]
+    q: What is the parallel axis theorem?
+    include: [["md²", "m d²", "m·d²", "ma²", "m a²", "md^2", "m d squared", "mass times the distance squared", "m times d squared", "m·a²"]]
+  - id: work-energy
+    tags: [dynamics, fundamentals]
+    q: What does the work-energy theorem say?
+    include: [["kinetic energy"], ["work"]]
+
+  # ── Your course library ───────────────────────────────────────────────────
+  - id: exercise-113
+    tags: [library, exercises, from-log]
+    q: Can you look dynamics exercise 113 and explain me?
+    include: [["robot"], ["angular"]]
+  - id: exercise-1-13-alpha
+    tags: [library, exercises, numbers]
+    q: What is the angular acceleration alpha 2 in exercise 1-13?
+    include: [["2.55"]]
+  - id: exercise-missing
+    tags: [library, exercises, from-log]
+    q: in case you have a solution in chapter one, question 30.
+    include: [["not", "couldn't", "can't find", "don't have", "isn't", "no exercise"]]
+  - id: exercise-3-14
+    tags: [library, exercises]
+    q: What is exercise 3-14 about?
+    include: [["cyclist", "bicycle", "bike", "cycling"]]
+  - id: exercise-1-9-scan
+    tags: [library, exercises, ocr]
+    q: Explain exercise 1-9.
+    include: [["merry-go-round", "roundabout", "platform"]]
+  - id: library-overview
+    tags: [library, from-log]
+    q: tell me what you have in your resources about dynamics.
+    include: [["Book Dynamics"], ["Exercises"]]
+  - id: library-page
+    tags: [library]
+    q: Which page of my dynamics book explains the Coriolis acceleration?
+    include: [["re:\\b3[0-4]\\d\\b"]]
+
+  # ── Electrical ────────────────────────────────────────────────────────────
+  - id: ohm
+    tags: [electrical, fundamentals]
+    q: What is Ohm's law?
+    include: [["V = IR", "V = I R", "U = R·I", "U = RI", "U = R I", "V = R I", "U = I·R", "V = I·R", "U = IR", "voltage equals", "V = RI"]]
+  - id: rc-time-constant
+    tags: [electrical, fundamentals]
+    q: What is the time constant of an RC circuit?
+    include: [["RC", "R·C", "R C", "R times C", "resistance times capacitance", "τ = R"]]
+  - id: rl-time-constant
+    tags: [electrical, fundamentals]
+    q: What is the time constant of an RL circuit?
+    include: [["L/R", "L / R", "L over R", "inductance divided by", "inductance over resistance"]]
+  - id: capacitor-impedance
+    tags: [electrical, fundamentals]
+    q: What is the impedance of a capacitor?
+    include: [["1/(jωC)", "1/(j ω C)", "1/(jωc)", "-j/(ωC)", "1/(sC)", "1/(ωC)", "1 / (jωC)", "1 over j omega", "1/jωC", "−j/(ωC)"]]
+  - id: inductor-impedance
+    tags: [electrical, fundamentals]
+    q: What is the impedance of an inductor?
+    include: [["jωL", "j ω L", "jwL", "sL", "ωL", "j omega L"]]
+  - id: electrical-power
+    tags: [electrical, fundamentals]
+    q: How do you calculate electrical power?
+    include: [["P = U·I", "P = V·I", "P = VI", "P = UI", "P = IV", "P = U I", "P = V I", "voltage times current", "voltage and current", "I²R", "I² R", "V × I", "U × I"]]
+  - id: kcl
+    tags: [electrical, fundamentals]
+    q: What is Kirchhoff's current law?
+    include: [["node", "junction"], ["sum", "zero", "equal", "equals"]]
+
+  # ── Tools and numbers ─────────────────────────────────────────────────────
+  - id: percent-of
+    tags: [tools, numbers]
+    q: What is 15 percent of 240?
+    include: [["36"]]
+  - id: multiply
+    tags: [tools, numbers]
+    q: What is 17 times 23?
+    include: [["391"]]
+  - id: unit-conversion
+    tags: [tools, numbers]
+    q: Convert 90 kilometres per hour to metres per second.
+    include: [["25"]]
+  - id: step-plot
+    tags: [tools, visuals, from-log]
+    q: Plot the step response with damping ratio 0.3 and natural frequency 2
+    include: [["37.2"], ["5.62"]]
+  - id: block-diagram
+    tags: [tools, visuals, from-log]
+    q: Draw a block diagram of a speed control loop with a PI controller, motor driver, DC motor and encoder
+    include: [["block diagram"]]
+    exclude: ["->", "u003e"]
+  - id: time
+    tags: [tools]
+    q: What time is it?
+    include: [["re:\\d{1,2}[:.]\\d{2}|o'clock|\\b\\d{1,2} ?(am|pm)\\b"]]
+
+  # ── Behaviour ─────────────────────────────────────────────────────────────
+  - id: small-talk
+    tags: [behaviour, from-log]
+    q: How are you?
+    include: [["re:\\w"]]
+    max_sentences: 3
+  - id: capabilities
+    tags: [behaviour, from-log]
+    q: What can you do?
+    include: [["timer", "weather", "note", "course", "plot", "explain", "remind", "files", "material"]]
+    max_sentences: 6
+  - id: identity
+    tags: [behaviour]
+    q: Who are you?
+    include: [["ARYA"]]
+    max_sentences: 3
+  - id: formula-no-latex
+    tags: [behaviour, speech]
+    q: Write down the formula for the natural frequency of a mass-spring system.
+    include: [["k/m", "k over m", "√(k/m)", "k / m", "sqrt(k/m)"]]
+    exclude: ["\\frac", "\\sqrt", "$$"]
+  - id: short-explanation
+    tags: [behaviour, speech]
+    q: Explain what a transfer function is.
+    include: [["laplace", "output", "input"]]
+    max_sentences: 6
+  - id: no-invented-example
+    tags: [behaviour, numbers, from-log]
+    q: What is the formula for percent overshoot? Give an example with zeta 0.2.
+    include: [["52"]]
+    exclude: ["16.3"]
