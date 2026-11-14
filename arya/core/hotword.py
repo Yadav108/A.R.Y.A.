@@ -151,18 +151,38 @@ def _strip_wake_words(text: str) -> str:
     return leading.sub("", text).strip()
 
 
+# Words people wrap around "stop" when they interrupt ("Uh, stop.", "Okay, let's stop audio.").
+_STOP_FILLER = set("""uh um umm erm er ah oh hmm okay ok hey yo bro dude please now just so well yeah right
+lets let's let us can could would will you it its it's that talking speaking audio there arya aria ariya aarya
+area harya hi i said""".split())
+_STOP_WORDS = {"stop", "quiet", "silence", "enough", "cancel", "shush", "hush", "shut", "up", "be", "that's",
+               "thats", "never", "mind", "nevermind", "pause", "wait"}
+_NEGATION = re.compile(r"\b(?:don'?t|do not|not|can'?t|won'?t|doesn'?t|didn'?t|never stop)\b")
+_STOP_CORE = {"stop", "quiet", "silence", "enough", "cancel", "shush", "hush", "shut", "nevermind", "pause"}
+
+
+def stop_words_in(text: str) -> set[str]:
+    words = set(re.findall(r"[a-z']+", (text or "").lower()))
+    return (words & _STOP_CORE) | ({"never mind"} if "never mind" in (text or "").lower() else set())
+
+
 def is_stop_phrase(text: str) -> bool:
-    """'Stop.', 'stop, stop', 'be quiet please', 'ARYA, stop' -> True; 'stop the motor' -> False."""
+    """'Stop.', 'Uh, stop.', 'Okay, let's stop audio.', 'no no stop', 'ARYA, be quiet' -> True;
+    'stop the motor', "don't stop", 'stop talking about it', 'No.' -> False."""
     t = re.sub(r"[^\w\s']", " ", _strip_wake_words(text or "")).lower()
-    t = re.sub(r"\b(?:please|now|okay|ok)\b", " ", t)
     t = re.sub(r"\s+", " ", t).strip()
-    if not t:
+    if not t or _NEGATION.search(t):
         return False
-    phrases = _ww().BARGE_IN_STOP_PHRASES
-    if t in phrases:
-        return True
-    words = t.split()                                   # "stop stop", "stop, be quiet"
-    return all(w in ("stop", "quiet", "silence", "enough", "cancel") for w in words)
+    words = [w for w in t.split() if w not in _STOP_FILLER]
+    if not words:
+        return False
+    if all(w == "no" for w in words):
+        return len(words) >= 2                          # "no, no, no" — a lone "No." could be anything
+    words = [w for w in words if w != "no"]
+    if not words or not all(w in _STOP_WORDS for w in words):
+        return False                                    # "stop the motor": a real sentence, not an interrupt
+    present = set(words)
+    return bool(present & _STOP_CORE) or {"never", "mind"} <= present
 
 
 def _transcribe(audio: np.ndarray) -> str:
@@ -199,6 +219,7 @@ class HotwordEngine:
         self._muted = False
         self._event: Callable[[str], None] | None = None
         self._echo_levels: deque = deque(maxlen=ECHO_HISTORY_CHUNKS)   # mic level while ARYA talks
+        self._recent_spoken: deque = deque(maxlen=4)                  # (time, sentence) ARYA just said
 
     # ── Public API (matches WakeWordEngine) ──────────────────────────────────
 
@@ -220,6 +241,19 @@ class HotwordEngine:
 
     def followup_active(self) -> bool:
         return self._followup_mode_enabled()
+
+    def note_spoken(self, sentence: str) -> None:
+        """The server tells us each sentence as ARYA starts saying it, so a 'stop' heard
+        while ARYA itself is saying 'stop' isn't mistaken for the user."""
+        self._recent_spoken.append((time.monotonic(), sentence or ""))
+
+    def _arya_said_stop_recently(self, seconds: float = 6.0) -> set[str]:
+        now = time.monotonic()
+        said: set[str] = set()
+        for t, s in self._recent_spoken:
+            if now - t <= seconds:
+                said |= stop_words_in(s)
+        return said
 
     def set_muted(self, muted: bool) -> None:
         """Microphone off: nothing is detected, captured or transcribed."""
@@ -415,6 +449,9 @@ class HotwordEngine:
             heard = _transcribe(np.concatenate(cap["audio"]))
         except Exception as exc:
             print(f"WakeWord: stop check failed ({exc})")
+            return
+        if is_stop_phrase(heard) and stop_words_in(heard) & self._arya_said_stop_recently():
+            print(f"WakeWord: ignored {heard!r} — ARYA itself just said that word")
             return
         if is_stop_phrase(heard):
             print(f"WakeWord BARGE-IN stop (no wake word): {heard!r}")

@@ -22,6 +22,9 @@ OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:3b")
 NUM_CTX = int(os.getenv("OLLAMA_NUM_CTX", "8192"))
 # Keep the model in VRAM between requests — reloading it costs ~40 s cold.
 KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE", "60m")
+# Spoken answers: low randomness keeps a small model close to the facts and course
+# excerpts it was given (Ollama's default ~0.8 lets it drift, e.g. mixing up damping cases).
+ANSWER_TEMPERATURE = float(os.getenv("OLLAMA_TEMPERATURE", "0.3"))
 
 # Generous read timeout: the first request after idle loads the model into VRAM.
 _TIMEOUT = httpx.Timeout(120.0, connect=3.0)

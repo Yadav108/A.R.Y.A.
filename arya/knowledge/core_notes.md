@@ -98,7 +98,10 @@ Closed loop with negative feedback: T(s) = G(s) / (1 + G(s) H(s)).
 ## First- and second-order system responses
 
 First order: G(s) = K / (τ s + 1). Step response y(t) = K (1 − e^(−t/τ)); 63.2 % at t = τ; 2 % settling ≈ 4τ; rise time (10–90 %) ≈ 2.2 τ.
-Second order: G(s) = K ω_n² / (s² + 2 ζ ω_n s + ω_n²).
+Second order: G(s) = K ω_n² / (s² + 2 ζ ω_n s + ω_n²). Its two parameters are the damping ratio ζ and the natural frequency ω_n.
+Stability of a second-order system: stable when both poles have negative real parts, which means ζ > 0 and ω_n > 0 (all coefficients of s² + 2ζω_n s + ω_n² positive). Stability does NOT require ζ < 1: overdamped systems are stable too. ζ = 0 is marginally stable; ζ < 0 is unstable (the response grows). Overshoot and settling time describe performance, not stability.
+Damping cases: ζ = 0 undamped (oscillates forever at ω_n, never settles); 0 < ζ < 1 underdamped (decaying oscillation with overshoot); ζ = 1 critically damped (fastest response without overshoot); ζ > 1 overdamped (no oscillation, slower). Damped frequency ω_d = ω_n · sqrt(1 − ζ²).
+ω_n sets the speed: a larger ω_n gives a faster response (same shape, shorter time scale).
 Percent overshoot: %OS = 100 · e^(−ζπ / sqrt(1 − ζ²)) for 0 < ζ < 1 (e.g. ζ = 0.3 gives about 37 %, ζ = 0.7 about 4.6 %).
 Peak time t_p = π / ω_d. 2 % settling time t_s ≈ 4 / (ζ ω_n). Poles at s = −ζ ω_n ± j ω_d.
 
