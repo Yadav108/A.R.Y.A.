@@ -16,3 +16,5 @@ sentence-transformers
 onnxruntime
 openwakeword
 scikit-learn  # only for tools/train_wakeword.py
+pystray>=0.19.5  # desktop app: tray icon
+Pillow           # desktop app: tray icon images
