@@ -316,7 +316,8 @@ async def _stream_tokens(model: str, messages: list[dict]) -> AsyncIterator[str]
             raise
 
     try:
-        async for token in stream_local(messages):
+        from arya.core.llm_local import ANSWER_TEMPERATURE
+        async for token in stream_local(messages, temperature=ANSWER_TEMPERATURE):
             yield token
     except LocalLLMUnavailable as exc:
         raise _unavailable(exc) from exc
@@ -624,8 +625,10 @@ def grounding_prompt(passages: list, question: str = "") -> str:
                "Since this is spoken, keep it to about five sentences unless they ask for more.")
     else:
         how = ("\n\nIf these excerpts answer the question, base your answer on them, keep the course's notation "
-               "and cite them like [1] or [2]. If they don't cover it, say it's not in their course material and "
-               "answer briefly from general knowledge.")
+               "and cite them like [1] or [2]. When an excerpt states the answer directly (a rule, condition or "
+               "definition), repeat that sentence nearly word for word instead of paraphrasing it, and never "
+               "contradict it with what you remember. If they don't cover it, say it's not in their course "
+               "material and answer briefly from general knowledge.")
     return (
         "\n\nExcerpts from the user's own course material (and ARYA's core notes):\n"
         + context_block(passages) + how
