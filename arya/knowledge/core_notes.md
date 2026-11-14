@@ -119,7 +119,7 @@ Steady-state error for a unit step with unity feedback: e_ss = 1 / (1 + K_pos), 
 Routh–Hurwitz: all characteristic-equation coefficients must be positive and the first column of the Routh array must have no sign changes (each sign change = one right-half-plane pole).
 Bode plot: magnitude in dB and phase versus log frequency. A pole adds −20 dB/decade and −90°; a zero adds +20 dB/decade and +90°.
 Gain margin: how much gain can increase before instability (measured where the phase is −180°).
-Phase margin: extra phase lag tolerated at the gain-crossover frequency (where |G| = 0 dB). Typical design target: 45°–60°.
+Phase margin: extra phase lag tolerated at the gain-crossover frequency ω_gc (where |G| = 0 dB): PM = 180° + ∠G(jω_gc), i.e. how far the phase is from −180° there. Typical design target: 45°–60°.
 Bandwidth: frequency where the closed-loop gain drops 3 dB below its low-frequency value.
 
 ## State-space models

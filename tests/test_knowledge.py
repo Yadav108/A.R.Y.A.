@@ -86,3 +86,26 @@ def test_ocr_reads_a_scanned_page(tmp_path, kb):
     scan.save(path)
     pages = lib._pages(Path(path))
     assert "merry-go-round" in pages[0][1] and "1-9)" in pages[0][1]
+
+
+@pytest.mark.parametrize("question, located", [
+    ("Which page of my notes explains the percent overshoot?", True),
+    ("find the Bode plot in my notes", True),
+    ("What is the percent overshoot?", False),
+    ("where is Munich", False),
+])
+def test_where_is_it_in_my_material(question, located, kb):
+    lib = kb["library"]
+    hits = lib.locate(question)
+    if not located:
+        assert hits is None
+        return
+    answer = lib.where_answer(question, hits)
+    assert hits and hits[0].title in ("lecture2",) and "it's on screen" in answer
+    assert "lecture2, section" in answer
+
+
+def test_where_is_missing_topic_is_admitted(kb):
+    lib = kb["library"]
+    q = "which page covers quantum chromodynamics gluons"
+    assert lib.where_answer(q, lib.locate(q)).startswith("I couldn't find")

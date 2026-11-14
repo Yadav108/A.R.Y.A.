@@ -158,6 +158,7 @@ _WORD_SYMBOLS = [
     ("≥", " greater than or equal to "), ("≠", " is not equal to "), ("→", " goes to "), ("⇒", " which means "),
     ("∞", " infinity "), ("∝", " is proportional to "), ("∂", " partial "), ("·", " times "), ("×", " times "),
     ("÷", " divided by "), ("∫", " the integral of "), ("…", " "), ("−", "-"),
+    ("∠", " the angle of "), ("°", " degrees "),
 ]
 
 
@@ -205,7 +206,7 @@ def speakable(text: str) -> str:
     t = latex_to_text(text)
     units = "|".join(sorted(map(re.escape, _UNIT_WORDS), key=len, reverse=True))
     t = re.sub(rf"(\d+(?:\.\d+)?)\s*({units})\s*/\s*({units})(²|³|2|3)?\b", _unit_rate, t)
-    if not re.search(r"[=<>^/+√±≈≤≥≠→·×∞Ͱ-Ͽ⁰-₟]|\b\w_\w|(?<=\w)\*(?=\w)|\bsqrt\b", t):
+    if not re.search(r"[=<>^/+√±≈≤≥≠→·×∞°∠Ͱ-Ͽ⁰-₟]|\b\w_\w|(?<=\w)\*(?=\w)|\bsqrt\b", t):
         return t
     t = re.sub(r"\bsqrt\b\s*", "√", t)
     t = re.sub(r"\b([A-Za-z])\(([A-Za-z])\)", r"\1 of \2", t)         # x(t) -> x of t, G(s) -> G of s

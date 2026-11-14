@@ -13,16 +13,18 @@ SYSTEM_PROMPTS = {
     ),
     "exam": (
         "You are ARYA, a study assistant. Give a concise exam-ready "
-        "definition and key points for this concept. Format as: "
-        "Definition, Key points, Common exam traps. Keep it sharp and direct."
+        "definition, the key points and one common exam trap for this concept, "
+        "in at most five plain spoken sentences. No lists, headings or markdown."
     ),
 }
+_SPOKEN_STYLE = (" Your answer is spoken aloud: plain sentences only, no lists, numbering, headings, "
+                 "markdown or LaTeX. Never invent numbers or examples.")
 
 
 async def explain_concept(topic: str, level: str = "simple") -> str:
     selected_level = level if level in SYSTEM_PROMPTS else "simple"
     passages = await knowledge_for(topic)
-    system_prompt = SYSTEM_PROMPTS[selected_level] + (grounding_prompt(passages) if passages else "")
+    system_prompt = SYSTEM_PROMPTS[selected_level] + _SPOKEN_STYLE + grounding_prompt(passages, topic)
 
     try:
         response = await _complete(
@@ -40,20 +42,14 @@ async def explain_concept(topic: str, level: str = "simple") -> str:
 
 async def formula_lookup(topic: str) -> str:
     system_prompt = (
-        "You are ARYA, an engineering reference assistant for a Mechatronics "
-        "student. When given a topic, provide the most relevant formula(s) with:\n"
-        "1. The formula in clear notation\n"
-        "2. What each variable means\n"
-        "3. Units\n"
-        "4. One practical example of when to use it\n"
-        "Keep it concise and exam-ready. Cover these domains when relevant:\n"
-        "control theory, signal processing, mechanics, electronics,\n"
-        "thermodynamics, mathematics, embedded systems."
+        "You are ARYA, an engineering reference assistant for a Mechatronics student. "
+        "Give the formula for the topic and say in one sentence what each symbol means and its unit. "
+        "At most three plain sentences: no lists, numbering, headings, markdown, worked examples or "
+        "example numbers. If the course excerpts contain the formula, copy it exactly as written there; "
+        "if they don't, give the standard textbook formula and don't guess."
     )
     passages = await knowledge_for(f"formula for {topic}")
-    if passages:
-        system_prompt += grounding_prompt(passages) + (
-            " Prefer the formula exactly as written in the course material.")
+    system_prompt += grounding_prompt(passages, topic)
 
     try:
         response = await _complete(
