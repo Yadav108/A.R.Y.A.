@@ -15,22 +15,29 @@ import re
 from collections.abc import AsyncIterator, Iterable
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from arya.core.audit import LOG_FILE, log_event
 from arya.core.embedder import load_embedder
-from arya.core.llm import LLMUnavailableError, stream_with_tools
+from arya.core.llm import ARYA_MODE, LLMUnavailableError, stream_with_tools
+from arya.core.llm_local import OLLAMA_MODEL, warm_up as warm_up_local_llm
+from arya.core.tts import TTS_ENGINE
 from arya.core.speaker import speaker
 from arya.core.stt import load_model, transcribe
 from arya.core.tts import speak_sentence
 from arya.core.wakeword import engine as wake_engine
 from arya.tools.productivity import set_notify_callback
+from arya.server import security
 
 
 LOCAL_AUDIO = os.getenv("AUDIO_OUTPUT", "local").strip().lower() != "browser"
 
-app = FastAPI()
+app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)   # no API explorer
+# Reject any request whose Host isn't this machine (blocks DNS rebinding).
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=sorted(security.ALLOWED_HOSTS | {"[::1]"}))
 STATIC_DIR = Path(__file__).resolve().parents[1] / "static"
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
@@ -141,13 +148,29 @@ async def preload_models() -> None:
             await _synthesize(phrase)
 
     asyncio.create_task(_warm_cache())
+    if ARYA_MODE == "offline":
+        asyncio.create_task(warm_up_local_llm())    # load the local model into VRAM now
+    brain = f"local {OLLAMA_MODEL}" + (" (say 'ask the cloud, …' to use Groq for one question)"
+                                       if ARYA_MODE == "offline" else ", Groq first")
+    voice = "local Piper" if TTS_ENGINE != "edge" else "Microsoft Edge (online)"
+    print(f"Privacy: {ARYA_MODE} mode — brain: {brain}; voice: {voice}")
     output = "PC speakers" if LOCAL_AUDIO else "browser"
     print(f"ARYA ready — voice output: {output}. Say 'ARYA ...' (no browser tab needed).")
+    where = "this computer only" if security.is_loopback_bind() else f"NETWORK ({security.HOST}) — token required"
+    print(f"Security: accepting connections from {where}; actions logged to {LOG_FILE}")
+    log_event("server_start", host=security.HOST, port=security.PORT)
 
 
 @app.get("/")
-async def index() -> FileResponse:
-    return FileResponse(STATIC_DIR / "index.html")
+async def index(request: Request) -> HTMLResponse:
+    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    # The page gets the WebSocket token only when loaded on this machine.
+    # (Other web pages can't read this response — the browser's same-origin
+    # rule and the Host check above stop them.)
+    if security.is_local_client(request.client.host if request.client else None):
+        tag = f'<script>window.ARYA_TOKEN = "{security.TOKEN}";</script>'
+        html = html.replace("</head>", tag + "\n</head>", 1)
+    return HTMLResponse(html, headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
 
 
 # ── Fan-out to browser windows ────────────────────────────────────────────────
@@ -335,7 +358,20 @@ async def announce(text: str) -> None:
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket) -> None:
+    client = websocket.client.host if websocket.client else "?"
+    origin = websocket.headers.get("origin")
+    if not security.origin_ok(origin):
+        log_event("connection_rejected", client=client, origin=origin, reason="foreign origin")
+        print(f"Security: rejected WebSocket from foreign origin {origin!r}")
+        await websocket.close(code=1008)
+        return
+    if not security.token_ok(websocket.query_params.get("token")):
+        log_event("connection_rejected", client=client, origin=origin, reason="bad or missing token")
+        print(f"Security: rejected WebSocket from {client} (bad or missing token)")
+        await websocket.close(code=1008)
+        return
     await websocket.accept()
+    log_event("connected", client=client)
     _connections.add(websocket)
     print(f"ARYA connected  ({len(_connections)} client(s))")
 

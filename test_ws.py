@@ -1,10 +1,15 @@
 import asyncio
+import sys
+from pathlib import Path
 
 import websockets
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from arya.server.security import PORT, TOKEN  # noqa: E402  (reads the local token file)
+
 
 async def main() -> None:
-    uri = "ws://localhost:8000/ws"
+    uri = f"ws://127.0.0.1:{PORT}/ws?token={TOKEN}"
     message = "What is the weather in Munich right now?"
 
     async with websockets.connect(uri) as websocket:

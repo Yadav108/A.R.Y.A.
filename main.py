@@ -1,13 +1,12 @@
-import asyncio
 import uvicorn
 
-from arya.core.llm import chat, chat_with_tools
+from arya.server import security
 from arya.server.websocket import app
 
 
 if __name__ == "__main__":
-    # response = chat("Hey ARYA, introduce yourself in one sentence.")
-    # print(response)
-    # response = asyncio.run(chat_with_tools("What is the weather in Berlin right now?"))
-    # print(response)
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    # Loopback only by default — nothing else on the network can reach ARYA.
+    # Set ARYA_HOST (and ARYA_ALLOWED_HOSTS) only if you really want LAN access.
+    if not security.is_loopback_bind():
+        print(f"WARNING: ARYA is listening on {security.HOST} — reachable from your network (token still required).")
+    uvicorn.run(app, host=security.HOST, port=security.PORT, server_header=False)

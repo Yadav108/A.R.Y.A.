@@ -1,7 +1,8 @@
 """
 Local LLM backend — thin async wrapper around Ollama's /api/chat endpoint.
 
-Used as the offline fallback when Groq is rate-limited or unreachable.
+ARYA's default brain (ARYA_MODE=offline), and the fallback when Groq is
+rate-limited or unreachable in cloud mode.
 Accepts and returns OpenAI-style messages so llm.py can treat both backends alike.
 """
 import json
@@ -14,7 +15,13 @@ from dotenv import load_dotenv
 load_dotenv()
 
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
+# qwen2.5:3b: reliable tool calling and fits a 4 GB GPU next to Whisper medium.
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:3b")
+
+# Ollama's default 2048-token context truncates ARYA's ~3k-token tool schemas.
+NUM_CTX = int(os.getenv("OLLAMA_NUM_CTX", "8192"))
+# Keep the model in VRAM between requests — reloading it costs ~40 s cold.
+KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE", "60m")
 
 # Generous read timeout: the first request after idle loads the model into VRAM.
 _TIMEOUT = httpx.Timeout(120.0, connect=3.0)
@@ -51,7 +58,7 @@ def _to_ollama_messages(messages: list[dict]) -> list[dict]:
 
 def _payload(messages: list[dict], stream: bool, tools: list | None,
              temperature: float | None, max_tokens: int | None) -> dict:
-    options: dict = {}
+    options: dict = {"num_ctx": NUM_CTX}
     if temperature is not None:
         options["temperature"] = temperature
     if max_tokens is not None:
@@ -60,11 +67,11 @@ def _payload(messages: list[dict], stream: bool, tools: list | None,
         "model": OLLAMA_MODEL,
         "messages": _to_ollama_messages(messages),
         "stream": stream,
+        "keep_alive": KEEP_ALIVE,
     }
     if tools:
         payload["tools"] = tools
-    if options:
-        payload["options"] = options
+    payload["options"] = options
     return payload
 
 
@@ -126,3 +133,24 @@ async def stream_local(
                         break
     except httpx.HTTPError as exc:
         raise LocalLLMUnavailable(f"Cannot reach Ollama at {OLLAMA_HOST}: {exc!r}") from exc
+
+
+async def warm_up(attempts: int = 2) -> bool:
+    """Load the model into VRAM now (at startup) so the first request isn't slow.
+    Retries once — a load can fail transiently while Whisper is still settling."""
+    import asyncio
+
+    for attempt in range(1, attempts + 1):
+        try:
+            async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+                response = await client.post(f"{OLLAMA_HOST}/api/chat", json={
+                    **_payload([{"role": "user", "content": "hi"}], False, None, None, 1),
+                })
+                _raise_for_status(response, response.text)
+            print(f"LLM: local model {OLLAMA_MODEL} ready")
+            return True
+        except (httpx.HTTPError, LocalLLMUnavailable) as exc:
+            print(f"LLM: local model warm-up failed (attempt {attempt}): {str(exc)[:160]}")
+            if attempt < attempts:
+                await asyncio.sleep(5)
+    return False

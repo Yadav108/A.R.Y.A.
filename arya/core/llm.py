@@ -4,6 +4,7 @@ import json
 import re
 import time
 from collections.abc import AsyncIterator
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -23,6 +24,44 @@ load_dotenv()
 # key can use with:  python -c "import groq; print([m.id for m in groq.Groq().models.list().data])"
 MODEL_NAME = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")             # tool selection
 INTENT_MODEL_NAME = os.getenv("GROQ_FAST_MODEL", "openai/gpt-oss-20b")  # intent, chat, follow-ups
+
+
+# ── Privacy mode ──────────────────────────────────────────────────────────────
+# offline (default): everything runs on the local Ollama model. Groq is used only
+#   for a request that explicitly asks for it ("ask the cloud, …"), and then only
+#   that one question is sent — no history, memories, name or location.
+# cloud: the old behaviour — Groq first, local model as fallback.
+ARYA_MODE = os.getenv("ARYA_MODE", "offline").strip().lower()
+if ARYA_MODE not in ("offline", "cloud"):
+    ARYA_MODE = "offline"
+
+# True while serving a request the user explicitly sent to the cloud.
+_cloud_turn: ContextVar[bool] = ContextVar("_cloud_turn", default=False)
+
+# "Ask the cloud, explain …" / "Use the cloud to …" / "… — ask the cloud."
+_CLOUD_PREFIX = re.compile(
+    r"^\W*(?:(?:hey|ok|okay)\W+)?(?:(?:arya|aria)\W+)?(?:please\W+)?"
+    r"(?:ask|use|check with|try)\s+(?:the\s+)?(?:cloud|groq|online model|big model)\b"
+    r"[\s,:;.\-]*(?:(?:and|to|about|for|whether|if)\s+)?",
+    re.IGNORECASE,
+)
+_CLOUD_SUFFIX = re.compile(
+    r"[\s,;.\-]*(?:please\s+)?(?:ask|use|check with)\s+(?:the\s+)?(?:cloud|groq|online model|big model)\W*$",
+    re.IGNORECASE,
+)
+
+
+def split_cloud_request(message: str) -> tuple[bool, str]:
+    """('Ask the cloud, explain entropy') -> (True, 'Explain entropy')."""
+    for pattern in (_CLOUD_PREFIX, _CLOUD_SUFFIX):
+        stripped = pattern.sub("", message, count=1).strip()
+        if stripped != message.strip() and stripped:
+            return True, stripped[0].upper() + stripped[1:]
+    return False, message
+
+
+def _groq_allowed() -> bool:
+    return (ARYA_MODE == "cloud" or _cloud_turn.get()) and _breaker.allow()
 
 
 def _groq_extra(model: str) -> dict:
@@ -174,8 +213,8 @@ async def _complete(
     temperature: float | None = None,
     max_tokens: int | None = None,
 ) -> _Completion:
-    """One chat completion: Groq if healthy, otherwise the local Ollama model."""
-    if _breaker.allow():
+    """One chat completion: Groq if allowed and healthy, otherwise the local model."""
+    if _groq_allowed():
         kwargs: dict = {"model": model, "messages": messages, **_groq_extra(model)}
         if tools:
             kwargs.update(tools=tools, tool_choice="auto", parallel_tool_calls=False)
@@ -220,7 +259,7 @@ async def _complete(
 async def _stream_tokens(model: str, messages: list[dict]) -> AsyncIterator[str]:
     """Stream content tokens: Groq if healthy, otherwise the local Ollama model.
     Falls back only if Groq fails before producing any output."""
-    if _breaker.allow():
+    if _groq_allowed():
         yielded = False
         try:
             request = dict(model=model, messages=messages, stream=True, **_groq_extra(model))
@@ -377,7 +416,9 @@ _INTENT_PROMPT = (
 
 
 async def needs_tool(message: str) -> bool:
-    if not _breaker.allow():
+    # Offline: the keyword check is instant and as accurate as asking the
+    # local model (15/15 on the benchmark set) — no extra inference.
+    if not _groq_allowed():
         return _keyword_needs_tool(message)
     try:
         response = await _get_client().chat.completions.create(
@@ -467,14 +508,14 @@ TOOLS = [
                     },
                     "latitude": {
                         "type": "number",
-                        "description": "Latitude of the city",
+                        "description": "Latitude of the city (optional — looked up from the name if omitted)",
                     },
                     "longitude": {
                         "type": "number",
-                        "description": "Longitude of the city",
+                        "description": "Longitude of the city (optional — looked up from the name if omitted)",
                     },
                 },
-                "required": ["city", "latitude", "longitude"],
+                "required": ["city"],
             },
         },
     },
@@ -584,20 +625,25 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "set_timer",
-            "description": "Set a timer for a specified number of seconds",
+            "description": "Start a countdown timer. Give the duration as minutes and/or seconds, "
+                           "exactly as the user said it (10 minutes -> minutes=10).",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "duration_seconds": {
+                    "minutes": {
+                        "type": "number",
+                        "description": "Minutes part of the duration",
+                    },
+                    "seconds": {
                         "type": "integer",
-                        "description": "Number of seconds for the timer",
+                        "description": "Seconds part of the duration",
                     },
                     "label": {
                         "type": "string",
                         "description": "Label or name for the timer",
                     },
                 },
-                "required": ["duration_seconds"],
+                "required": [],
             },
         },
     },
@@ -926,14 +972,18 @@ async def _dispatch_tool(tool_name: str, args: dict) -> str:
         if not (isinstance(v, str) and v.strip().lower() in {"", "null", "none", "undefined"})
     }
     if tool_name == "get_weather":
+        from arya.tools.weather import geocode, get_weather
+
         try:
-            city = args["city"]
-            latitude = float(args["latitude"])
-            longitude = float(args["longitude"])
+            city = str(args["city"])
         except (KeyError, TypeError, ValueError) as exc:
             raise RuntimeError("Model returned incomplete or invalid weather arguments.") from exc
-
-        from arya.tools.weather import get_weather
+        try:
+            latitude = float(args["latitude"])
+            longitude = float(args["longitude"])
+        except (KeyError, TypeError, ValueError):
+            # Small local models don't know coordinates — look the city up.
+            latitude, longitude, city = await geocode(city)
 
         return await get_weather(city=city, latitude=latitude, longitude=longitude)
     elif tool_name == "open_app":
@@ -983,10 +1033,13 @@ async def _dispatch_tool(tool_name: str, args: dict) -> str:
         return await get_battery()
     elif tool_name == "set_timer":
         try:
-            duration_seconds = int(args["duration_seconds"])
+            duration_seconds = round(float(args.get("minutes") or 0) * 60 + float(args.get("seconds") or 0)
+                                     + float(args.get("duration_seconds") or 0))
             label = str(args.get("label", "Timer"))
-        except (KeyError, TypeError, ValueError) as exc:
-            raise RuntimeError("Model returned incomplete or invalid timer arguments.") from exc
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("Model returned invalid timer arguments.") from exc
+        if duration_seconds <= 0:
+            raise RuntimeError("Timer needs a duration — ask the user how long.")
 
         from arya.tools.productivity import set_timer
 
@@ -1144,11 +1197,16 @@ async def _execute_tool(tool_name: str, args: dict) -> str:
     """Run one tool. Failures come back as text so the model can recover
     (retry with fixed arguments, or explain the problem) instead of the whole
     turn crashing with 'ARYA encountered an error'."""
+    from arya.core.audit import log_tool
+
+    started = time.monotonic()
     try:
         result = await _dispatch_tool(tool_name, args)
     except Exception as exc:
         print(f"Tool error ({tool_name}): {exc}")
+        log_tool(tool_name, args, ok=False, ms=(time.monotonic() - started) * 1000, error=str(exc))
         return f"Tool '{tool_name}' failed: {exc}"
+    log_tool(tool_name, args, ok=True, ms=(time.monotonic() - started) * 1000)
     return str(result)
 
 
@@ -1255,7 +1313,116 @@ async def chat_with_tools(message: str) -> str:
     return await _tool_pipeline(message)
 
 
+# ── Instant commands (no LLM) ─────────────────────────────────────────────────
+# Short, unambiguous media commands are matched directly: instant, and immune to
+# small local models fumbling the tool call ("volume up" → empty reply).
+_QUICK_LEADING = re.compile(
+    r"^(?:(?:hey|ok|okay)\s+)?(?:arya\s+|aria\s+)?(?:please\s+|can you\s+|could you\s+|would you\s+)*")
+_QUICK_MEDIA = [
+    (re.compile(r"^(?:turn|crank|bump|put|bring)\s+(?:the\s+)?(?:volume|sound|music|it)\s+up$|^(?:volume|sound)\s+up$"
+                r"|^(?:make\s+it\s+)?louder$|^increase\s+(?:the\s+)?volume$"
+                r"|^turn\s+up\s+(?:the\s+)?(?:volume|sound|music)$"), "volume_up"),
+    (re.compile(r"^(?:turn|bring|put)\s+(?:the\s+)?(?:volume|sound|music|it)\s+down$|^(?:volume|sound)\s+down$"
+                r"|^(?:make\s+it\s+)?(?:quieter|softer)$|^(?:lower|decrease|reduce)\s+(?:the\s+)?volume$"
+                r"|^turn\s+down\s+(?:the\s+)?(?:volume|sound|music)$"), "volume_down"),
+    (re.compile(r"^(?:un)?mute(?:\s+(?:the\s+)?(?:sound|volume|audio|it|music|pc|computer))?$"), "mute"),
+    (re.compile(r"^(?:pause|resume|unpause|continue)(?:\s+(?:the\s+)?(?:music|song|video|playback|it|track))?$"
+                r"|^play(?:\s+(?:the\s+)?(?:music|song|video|it))?$"), "play_pause"),
+    (re.compile(r"^(?:next|skip)(?:\s+(?:this\s+|the\s+)?(?:song|track|one|video))?$"
+                r"|^(?:play\s+)?(?:the\s+)?next\s+(?:song|track)$"), "next"),
+    (re.compile(r"^(?:previous|go\s+back)(?:\s+(?:song|track))?$"
+                r"|^(?:play\s+)?(?:the\s+)?(?:previous|last)\s+(?:song|track)$"), "previous"),
+    (re.compile(r"^stop\s+(?:the\s+)?(?:music|song|video|playback)$"), "stop"),
+]
+_LITTLE = re.compile(r"\s*\b(?:a (?:little )?bit|a little|slightly)\b")
+_LOT = re.compile(r"\s*\b(?:a lot|way|much)\b")
+
+
+def quick_media_command(message: str) -> dict | None:
+    """'Turn the volume up a bit' -> {'action': 'volume_up', 'steps': 3}; None if not a media command."""
+    text = re.sub(r"[^\w\s']", " ", message.lower())
+    text = _QUICK_LEADING.sub("", re.sub(r"\s+", " ", text).strip())
+    text = re.sub(r"\s+(?:please|now|thanks|thank you)$", "", text).strip()
+    steps = 5
+    if _LITTLE.search(text):
+        steps, text = 3, _LITTLE.sub("", text).strip()
+    elif _LOT.search(text):
+        steps, text = 12, _LOT.sub("", text).strip()
+    for pattern, action in _QUICK_MEDIA:
+        if pattern.search(text):
+            args: dict = {"action": action}
+            if action in ("volume_up", "volume_down"):
+                args["steps"] = steps
+            return args
+    return None
+
+
+def _cloud_system_prompt() -> str:
+    """For explicit cloud requests: speaking rules and the date only — no name,
+    location or memories leave the machine."""
+    now = datetime.now().strftime("%A, %d %B %Y")
+    return (
+        "You are a voice assistant. Today is " + now + ". Your reply is spoken aloud: answer in one to "
+        "four short sentences, no markdown, lists or emojis, numbers said the way a person would."
+    )
+
+
 async def stream_with_tools(message: str):
+    """Yield the reply sentence by sentence (so TTS can start on sentence one).
+    Routes: instant media command → explicit cloud question → LLM (local by default)."""
+    quick = quick_media_command(message)
+    if quick is not None:
+        print(f"Instant command: media_control {quick}")
+        result = await _execute_tool("media_control", quick)
+        save_message("user", message)
+        save_message("assistant", result)
+        yield result
+        return
+
+    is_cloud, question = split_cloud_request(message)
+    inner = (_stream_cloud_question(question) if is_cloud and ARYA_MODE == "offline"
+             else _stream_with_tools(message))
+    try:
+        async for sentence in inner:
+            yield sentence
+    finally:
+        # Close the inner generator *now* when the user interrupts, so its
+        # cleanup (saving the partial reply to history) runs immediately.
+        await inner.aclose()
+
+
+async def _stream_cloud_question(question: str):
+    """Send one question — and nothing else — to Groq. Falls back to the local
+    model if Groq isn't configured or reachable."""
+    from arya.core.audit import log_event
+
+    print(f"Cloud request (only this question is sent): {question[:80]}")
+    log_event("cloud_request", chars=len(question))
+    save_message("user", question)
+    messages = [{"role": "system", "content": _cloud_system_prompt()}, {"role": "user", "content": question}]
+    token = _cloud_turn.set(True)
+    parts: list[str] = []
+    buffer = ""
+    try:
+        if not os.getenv("GROQ_API_KEY"):
+            yield "The cloud isn't set up, so I'll answer locally."
+        async for tok in _stream_tokens(INTENT_MODEL_NAME, messages):
+            buffer += tok
+            while (match := _SENTENCE_END.search(buffer)):
+                sentence, buffer = buffer[: match.end()], buffer[match.end():]
+                if sentence.strip():
+                    parts.append(sentence)
+                    yield sentence
+        if buffer.strip():
+            parts.append(buffer)
+            yield buffer
+    finally:
+        _cloud_turn.reset(token)
+        if parts:
+            save_message("assistant", "".join(parts).strip())
+
+
+async def _stream_with_tools(message: str):
     """Yield the reply sentence by sentence (so TTS can start on sentence one)."""
     # Intent check and memory lookup are independent — run them together.
     history = get_history(limit=10)
