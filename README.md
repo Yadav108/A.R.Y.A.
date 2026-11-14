@@ -108,7 +108,8 @@ USER_NAME=Aryan                    # ARYA addresses you by name
 GROQ_MODEL=openai/gpt-oss-120b     # tool-calling model
 GROQ_FAST_MODEL=openai/gpt-oss-20b # intent, chat, follow-ups
 AUDIO_OUTPUT=local                 # local = PC speakers (hands-free); browser = play in the tab
-WAKE_ACCURATE_COMMANDS=1           # re-transcribe commands with Whisper medium (0 to save RAM)
+WAKE_ACCURATE_COMMANDS=1           # re-transcribe commands with Whisper (0 to save RAM)
+WHISPER_MODEL=medium               # speech model: medium (default) | small (about half the memory) | base | tiny
 ARYA_MODE=offline                  # offline (default) = local brain; cloud = Groq first
 OLLAMA_MODEL=qwen2.5:3b            # local brain
 TTS_ENGINE=piper                   # piper (local, default) | edge (online Microsoft voice)
