@@ -40,11 +40,12 @@ qwen2.5:3b (~2.3 GB) and the app window fit only just. Levers: BIOS "UMA Frame B
 - [x] This roadmap brought up to date
 - [ ] Memory profile documented (`WHISPER_MODEL=small`, context size)
 
-### M1 — Trustworthy answers
-- [ ] Hard-question router: offers the cloud for derivations / exam problems, asks first, sends only question + excerpt
-- [ ] `sympy` maths tool — numbers come from a tool, never from the model's head
-- [ ] Corrections memory: "that's wrong — …" is saved and outranks other sources next time
-- [ ] Checked one-page fundamentals per course in the core notes
+### M1 — Trustworthy answers  (benchmark 78 % → 93–100 %)
+- [x] Hard-question router: offers the cloud for derivations / exam problems, asks first, sends only question + excerpt (`arya/core/router.py`)
+- [x] `sympy` maths tool — numbers come from a tool, never from the model's head (`arya/tools/mathsolve.py`)
+- [x] Exact course formulas and formula cards answered without the model (`arya/study/formulas.py`)
+- [x] Corrections memory: "that's wrong — …" is saved and outranks other sources next time (`arya/knowledge/corrections.py`)
+- [ ] Checked one-page fundamentals per course in the core notes (control and electrical fixes done; Dynamics, PID depth next)
 
 ### M2 — Exercise tutor
 - [ ] Walkthrough mode (given / wanted / idea, Socratic next steps, hints)

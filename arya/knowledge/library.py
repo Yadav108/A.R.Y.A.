@@ -31,6 +31,9 @@ import numpy as np
 DATA_DIR = Path(os.getenv("ARYA_DATA_DIR") or Path(os.getenv("LOCALAPPDATA") or Path.home()) / "ARYA")
 DB_PATH = Path(os.getenv("ARYA_KNOWLEDGE_DB") or DATA_DIR / "knowledge.db")
 CORE_NOTES = Path(__file__).resolve().parent / "core_notes.md"
+# What the user told ARYA was wrong ("that's wrong — ζ = 0 is undamped"); outranks everything.
+CORRECTIONS = DATA_DIR / "corrections.md"
+CORRECTIONS_TITLE = "Your corrections"
 EXTENSIONS = {".pdf", ".docx", ".pptx", ".txt", ".md"}
 SKIP_DIRS = {".git", ".venv", "venv", "node_modules", "__pycache__", "site-packages"}
 
@@ -247,6 +250,8 @@ def _title_and_collection(path: Path, roots: list[Path]) -> tuple[str, str]:
     title = re.sub(r"[_]+", " ", path.stem).strip()
     if path == CORE_NOTES:
         return "ARYA core notes", "ARYA core notes"
+    if path == CORRECTIONS:
+        return CORRECTIONS_TITLE, CORRECTIONS_TITLE
     for root in roots:
         try:
             rel = path.relative_to(root)
@@ -291,6 +296,8 @@ def _files(roots: list[Path]) -> list[Path]:
                     files.append(p)
     if CORE_NOTES.exists():
         files.append(CORE_NOTES)
+    if CORRECTIONS.exists():
+        files.append(CORRECTIONS)
     return files
 
 
@@ -503,10 +510,12 @@ def search(query: str, k: int = 5) -> list[Passage]:
         rows = {r["id"]: r for r in c.execute(
             f"SELECT chunks.id, doc_id, page, text, title, collection, kind, path FROM chunks "
             f"JOIN documents ON documents.id = chunks.doc_id WHERE chunks.id IN ({','.join('?' * len(ids_))})", ids_)}
-    core = str(CORE_NOTES)
+    core, corrections = str(CORE_NOTES), str(CORRECTIONS)
     for cid, r in rows.items():
         if r["path"] == core:
             scores[cid] *= CORE_NOTES_BOOST       # checked fundamentals beat a lab report that shares keywords
+        elif r["path"] == corrections:
+            scores[cid] *= CORE_NOTES_BOOST * 1.3  # your own corrections beat everything
         if len(r["text"]) < SHORT_CHUNK_CHARS:
             scores[cid] *= SHORT_CHUNK_PENALTY     # near-empty pages (titles, figure captions) match too easily
     best = sorted(scores, key=scores.get, reverse=True)[: k * 3]
@@ -549,7 +558,36 @@ def relevant(query: str, k: int = 4) -> list[Passage]:
     core = [h for h in hits if h.title == "ARYA core notes" and h.similarity >= RELEVANT_SIMILARITY - 0.05]
     if core and not any(h.title == "ARYA core notes" for h in keep):
         keep = [core[0]] + keep[:k - 1]
+    # A correction you gave earlier on this topic always goes first.
+    fixes = [h for h in hits if h.title == CORRECTIONS_TITLE and h.similarity >= RELEVANT_SIMILARITY - 0.05]
+    if fixes:
+        keep = [fixes[0]] + [h for h in keep if h.chunk_id != fixes[0].chunk_id][:k - 1]
     return keep
+
+
+def index_file(path: Path) -> None:
+    """(Re)index one file right away — e.g. a new correction — without a full library pass."""
+    from arya.core.embedder import load_embedder
+
+    path = Path(path)
+    model = load_embedder()
+    with _lock, _connect() as c:
+        row = c.execute("SELECT * FROM documents WHERE path = ?", (str(path),)).fetchone()
+    if not path.exists():
+        if row is not None:
+            with _lock, _connect() as c:
+                _delete_doc(c, row["id"])
+        _matrix_cache.clear()
+        return
+    title, collection = _title_and_collection(path, [])
+    pages = _pages(path)
+    items = [(page, piece) for page, text in pages for piece in _chunk(text)]
+    vectors = (model.encode([f"{title}: {p}" for _, p in items], normalize_embeddings=True,
+                            convert_to_numpy=True, show_progress_bar=False)
+               if items else np.zeros((0, 384), np.float32))
+    _save_doc(path, title, collection, path.stat(), _fingerprint(path), len(pages), list(zip(items, vectors)),
+              0, "indexed", row)
+    _matrix_cache.clear()
 
 
 # ── Exercises by number ───────────────────────────────────────────────────────
@@ -658,7 +696,7 @@ def locate(question: str, k: int = 3) -> list[Passage] | None:
         topic = re.sub(rf"\b{re.escape(col)}\b", " ", topic, flags=re.IGNORECASE).strip()
     if len(topic) < 3:
         return None
-    hits = [h for h in search(topic, k=k * 4) if h.title != "ARYA core notes"]
+    hits = [h for h in search(topic, k=k * 4) if h.title not in ("ARYA core notes", CORRECTIONS_TITLE)]
     if wanted:
         hits = [h for h in hits if h.collection in wanted] or hits
     hits = [h for h in hits if h.similarity >= RELEVANT_SIMILARITY - 0.08][:k]
@@ -709,8 +747,8 @@ def overview(question: str) -> str | None:
     q = question.lower()
     with _lock, _connect() as c:
         docs = c.execute("SELECT title, collection, pages, status, kind FROM documents "
-                         "WHERE status NOT LIKE 'duplicate%' AND path != ? ORDER BY collection, title",
-                         (str(CORE_NOTES),)).fetchall()
+                         "WHERE status NOT LIKE 'duplicate%' AND path NOT IN (?, ?) ORDER BY collection, title",
+                         (str(CORE_NOTES), str(CORRECTIONS))).fetchall()
     if not docs:
         return "Your course library is empty so far — I haven't indexed any documents yet."
     by_col: dict[str, list] = {}

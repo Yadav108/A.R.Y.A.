@@ -681,6 +681,9 @@ def grounding_prompt(passages: list, question: str = "") -> str:
                "definition), repeat that sentence nearly word for word instead of paraphrasing it, and never "
                "contradict it with what you remember. If they don't cover it, say it's not in their course "
                "material and answer briefly from general knowledge.")
+    if any(getattr(p, "title", "") == "Your corrections" for p in passages):
+        how += (" Excerpts from 'Your corrections' are corrections the user gave you earlier: they override "
+                "everything else, including the course material and what you remember. Follow them exactly.")
     return (
         "\n\nExcerpts from the user's own course material (and ARYA's core notes):\n"
         + context_block(passages) + how
@@ -2029,6 +2032,21 @@ async def stream_with_tools(message: str):
 
     pending = policy.take_pending()
     policy.begin_turn(message)
+    if pending is not None and pending.tool == "ask_cloud":
+        answer = policy.parse_yes_no(message)
+        if answer is not None:
+            log_event("cloud_offer_accepted" if answer else "cloud_offer_declined")
+            if answer:
+                inner = _stream_cloud_question(pending.args["question"], context=pending.args.get("context", ""),
+                                               model=MODEL_NAME)
+            else:
+                yield "Okay, I'll answer it myself."
+                inner = _stream_with_tools(pending.args["question"])
+            async for sentence in _clean_stream(inner):
+                yield sentence
+            return
+        log_event("cloud_offer_dropped")                  # moved on to something else
+        pending = None
     if pending is not None:
         answer = policy.parse_yes_no(message)
         if answer is True:
@@ -2051,6 +2069,22 @@ async def stream_with_tools(message: str):
     elif policy.parse_yes_no(message) is True and policy.asked_recently():
         reply = "That confirmation timed out, so I didn't do it. Tell me again and I'll check with you."
         yield reply
+        return
+
+    try:                                                # "that's wrong — …": remember it (corrections memory)
+        from arya.knowledge import corrections as _corrections
+        recent = get_history(limit=6)
+        last_answer = next((m["content"] for m in reversed(recent) if m["role"] == "assistant"), "")
+        last_question = next((m["content"] for m in reversed(recent) if m["role"] == "user"), "")
+        correction_reply = await asyncio.to_thread(_corrections.handle, message, last_question, last_answer)
+    except Exception as exc:
+        print(f"Corrections skipped: {type(exc).__name__}: {exc}")
+        correction_reply = None
+    if correction_reply:
+        print("Instant answer: corrections memory")
+        save_message("user", message)
+        save_message("assistant", correction_reply)
+        yield correction_reply
         return
 
     from arya.knowledge import visuals as _visuals
@@ -2143,8 +2177,28 @@ async def stream_with_tools(message: str):
         return
 
     is_cloud, question = split_cloud_request(message)
+
+    # Hard question while offline: offer the cloud, and ask first (arya/core/router.py).
+    from arya.core import router
+    reason = None if is_cloud or ARYA_MODE != "offline" or not router.cloud_available() else router.hard_reason(message)
+    if reason:
+        passages = await knowledge_for(message)          # shown as sources; their text goes out only on "yes"
+        from arya.knowledge.library import context_block
+        context = context_block(passages)[:4000] if passages else ""
+        offer = policy.offer("ask_cloud", {"question": message, "context": context}, router.offer_question(reason))
+        print(f"Offering the cloud ({reason}); waiting for yes/no")
+        yield offer
+        return
+
     inner = (_stream_cloud_question(question) if is_cloud and ARYA_MODE == "offline"
              else _stream_with_tools(message))
+    async for sentence in _clean_stream(inner):
+        yield sentence
+
+
+async def _clean_stream(inner):
+    """Every reply's last step: claim guard, readable maths, no markdown; closes the inner stream at once
+    when the user interrupts, so its cleanup (saving the partial reply) runs immediately."""
     try:
         last = None
         async for sentence in inner:
@@ -2154,27 +2208,34 @@ async def stream_with_tools(message: str):
             last = sentence
             yield sentence
     finally:
-        # Close the inner generator *now* when the user interrupts, so its
-        # cleanup (saving the partial reply to history) runs immediately.
         await inner.aclose()
 
 
-async def _stream_cloud_question(question: str):
-    """Send one question — and nothing else — to Groq. Falls back to the local
-    model if Groq isn't configured or reachable."""
+async def _stream_cloud_question(question: str, context: str = "", model: str | None = None):
+    """Send one question — and, when offered for a hard question, the relevant course
+    excerpt — to Groq. Nothing else leaves the machine. Falls back to the local model
+    if Groq isn't configured or reachable."""
     from arya.core.audit import log_event
 
-    print(f"Cloud request (only this question is sent): {question[:80]}")
-    log_event("cloud_request", chars=len(question))
+    print(f"Cloud request (only this question{' and the course excerpt' if context else ''} is sent): "
+          f"{question[:80]}")
+    log_event("cloud_request", chars=len(question), excerpt_chars=len(context))
     save_message("user", question)
-    messages = [{"role": "system", "content": _cloud_system_prompt()}, {"role": "user", "content": question}]
+    system = _cloud_system_prompt()
+    if context:
+        system += ("\n\nRelevant excerpts from the student's own course material (use their notation, base the "
+                   "answer on them where they apply, cite like [1]):\n" + context +
+                   "\n\nFor derivations and multi-step problems, give the key steps and the result clearly; "
+                   "you may use up to eight short sentences.")
+    messages = [{"role": "system", "content": system}, {"role": "user", "content": question}]
+    model = model or INTENT_MODEL_NAME
     token = _cloud_turn.set(True)
     parts: list[str] = []
     buffer = ""
     try:
         if not os.getenv("GROQ_API_KEY"):
             yield "The cloud isn't set up, so I'll answer locally."
-        async for tok in _stream_tokens(INTENT_MODEL_NAME, messages):
+        async for tok in _stream_tokens(model, messages):
             buffer += tok
             while (cut := _sentence_cut(buffer)) is not None:
                 sentence, buffer = buffer[:cut], buffer[cut:]

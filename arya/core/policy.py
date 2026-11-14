@@ -235,6 +235,14 @@ def request_confirmation(tool: str, args: dict, cloud_mode: bool) -> str:
     return question
 
 
+def offer(action: str, args: dict, question: str) -> str:
+    """Ask a yes/no question that isn't a tool call (e.g. "ask the cloud?"); the answer comes back via
+    take_pending() like a tool confirmation, and the app shows the Yes/No buttons."""
+    _state.pending = Pending(tool=action, args=dict(args), question=question, request=_state.request)
+    _state.last_asked = time.monotonic()
+    return question
+
+
 def asked_recently(window_s: float = 600.0) -> bool:
     """A yes/no question was asked in the last few minutes (but has since expired)."""
     return time.monotonic() - _state.last_asked < window_s

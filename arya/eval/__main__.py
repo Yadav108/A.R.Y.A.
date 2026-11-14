@@ -110,6 +110,7 @@ def main() -> int:
     os.environ["ARYA_DB_PATH"] = str(Path(tempfile.mkdtemp(prefix="arya_eval_")) / "history.db")
     if args.cloud:
         os.environ["ARYA_MODE"] = "cloud"
+    os.environ["ARYA_CLOUD_OFFER"] = "0"            # measure answers, not "shall I ask the cloud?" offers
     sys.path.insert(0, str(HERE.parents[1]))
 
     import yaml
