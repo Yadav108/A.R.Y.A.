@@ -568,9 +568,9 @@ async def _speak_stream(sentences: AsyncIterator[str], max_spoken: int = 0) -> N
                 if max_spoken and spoken >= max_spoken:
                     if not cut and re.search(r"\w", sentence):
                         cut = True
-                        await queue.put(asyncio.create_task(_synthesize(REST_ON_SCREEN)))
+                        await queue.put((REST_ON_SCREEN, asyncio.create_task(_synthesize(REST_ON_SCREEN))))
                     continue
-                await queue.put(asyncio.create_task(_synthesize(sentence)))
+                await queue.put((sentence, asyncio.create_task(_synthesize(sentence))))
                 if re.search(r"[A-Za-z]{2,}", sentence):     # a formula line or "1." isn't a sentence
                     spoken += 1
         finally:
@@ -580,12 +580,15 @@ async def _speak_stream(sentences: AsyncIterator[str], max_spoken: int = 0) -> N
     announced = False
     try:
         while True:
-            task = await queue.get()
-            if task is None:
+            item = await queue.get()
+            if item is None:
                 break
+            sentence, task = item
             audio = await task
             if not audio:
                 continue
+            if hasattr(wake_engine, "note_spoken"):
+                wake_engine.note_spoken(sentence)       # so ARYA's own "stop" isn't taken as yours
             if LOCAL_AUDIO:
                 if not announced:
                     await _send_all("ARYA_SPEAKING")
@@ -599,7 +602,7 @@ async def _speak_stream(sentences: AsyncIterator[str], max_spoken: int = 0) -> N
         while not queue.empty():
             pending = queue.get_nowait()
             if pending is not None:
-                pending.cancel()
+                pending[1].cancel()
         raise
 
 
