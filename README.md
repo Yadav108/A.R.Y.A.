@@ -120,6 +120,16 @@ Say "Hey ARYA, …" (or just "ARYA" and wait for "Yes?"). Once woken, the conver
 just keep talking, no wake word needed, until 8 minutes after the last exchange
 (`CONVERSATION_MINUTES=5` to change it). Say "Hey ARYA, stop" to interrupt; "that's all", "thanks" or "bye" to end.
 
+**Smart listening.** During a conversation ARYA checks whether each sentence was actually meant for
+it before answering — so a phone call, someone else in the room or a video doesn't get a reply.
+Clear cases are decided instantly (its name, a yes/no it's waiting for, "stop"/"thanks", commands;
+speech that opens with someone else's name — "Mom, …", "Sarah, …" — is ignored); everything else is
+judged by the local model from the conversation so far (~0.5 s, always on the laptop — other people's
+speech never goes to the cloud). Ignored speech isn't answered, saved or logged (only that something
+was ignored), and doesn't keep the conversation open; three in a row end it. The app shows
+"Heard — not for me" with an **It was for you** button. Switch it off in the app or tray
+(`ARYA_SMART_LISTENING=0`). "Hey ARYA, …" commands and typed messages are never filtered.
+
 **Wake word ("Hey ARYA").** ARYA uses a dedicated keyword-spotting model (openWakeWord
 features + a small classifier trained for "Hey ARYA") instead of transcribing everything it hears.
 Every detection is double-checked: the audio that triggered it is transcribed and must

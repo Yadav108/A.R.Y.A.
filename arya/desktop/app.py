@@ -296,6 +296,8 @@ class DesktopApp:
                 Item("Cloud — Groq first (faster, less private)", lambda *_: self._set_mode("cloud"),
                      checked=mode_is("cloud"), radio=True),
             )),
+            Item("Smart listening — ignore talk not meant for ARYA", self._toggle_smart,
+                 checked=lambda _i: self._smart_on()),
             Item("Status overlay when the window is closed", self._toggle_overlay,
                  checked=lambda _i: self.settings["overlay"]),
             Item("Start with Windows", self._toggle_autostart, checked=lambda _i: system.autostart_enabled()),
@@ -317,6 +319,15 @@ class DesktopApp:
         save_settings(self.settings)
         if not self.settings["overlay"]:
             self.events.put("__HIDE_OVERLAY__")
+
+    def _smart_on(self) -> bool:
+        if self._ws is not None:
+            return bool(self._ws._smart_listening)
+        return self.settings.get("smart", True) is not False
+
+    def _toggle_smart(self, *_):
+        if self._ws is not None:
+            self._ws.set_smart_listening(not self._ws._smart_listening)   # tells the app window too
 
     def _toggle_autostart(self, *_):
         system.set_autostart(not system.autostart_enabled())
@@ -350,6 +361,8 @@ class DesktopApp:
 
             if self.settings.get("mode") in ("offline", "cloud"):
                 llm.ARYA_MODE = self.settings["mode"]
+            if self.settings.get("smart") is not None:
+                ws._smart_listening = bool(self.settings["smart"])
             ws.add_status_listener(self.events.put)
             self._ws = ws
             config = uvicorn.Config(ws.app, host=security.HOST, port=security.PORT,
@@ -494,6 +507,10 @@ class DesktopApp:
             return
         if ev.startswith("ARYA_MODE:"):
             self.settings["mode"] = ev.split(":", 1)[1]
+            save_settings(self.settings)
+            return
+        if ev.startswith("ARYA_SMART:"):
+            self.settings["smart"] = ev.endswith(":on")
             save_settings(self.settings)
             return
         if ev == "ARYA_MUTED":
