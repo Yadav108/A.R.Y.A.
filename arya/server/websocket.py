@@ -538,17 +538,41 @@ async def _aiter(items: Iterable[str]) -> AsyncIterator[str]:
         yield item
 
 
-async def _speak_stream(sentences: AsyncIterator[str]) -> None:
+MAX_SPOKEN_SENTENCES = int(os.getenv("ARYA_MAX_SPOKEN_SENTENCES", "5"))      # 0 = no limit
+DETAIL_SPOKEN_SENTENCES = 12
+_WANTS_DETAIL = re.compile(r"\b(?:in detail|detailed|step by step|explain (?:it )?fully|full explanation|"
+                           r"tell me more|more detail|go on|continue|everything|walk me through)\b", re.IGNORECASE)
+REST_ON_SCREEN = "The rest is on screen."
+
+
+def spoken_limit(message: str) -> int:
+    """How many sentences ARYA says aloud; the whole reply is always shown on screen."""
+    if MAX_SPOKEN_SENTENCES <= 0:
+        return 0
+    return max(MAX_SPOKEN_SENTENCES, DETAIL_SPOKEN_SENTENCES) if _WANTS_DETAIL.search(message or "") \
+        else MAX_SPOKEN_SENTENCES
+
+
+async def _speak_stream(sentences: AsyncIterator[str], max_spoken: int = 0) -> None:
     """Text goes to the UI the moment each sentence exists, its TTS starts
     immediately, and audio plays in order as soon as it is ready — so ARYA
-    starts talking after the *first* sentence, not after the whole reply."""
+    starts talking after the *first* sentence, not after the whole reply.
+    After `max_spoken` sentences (0 = no limit) the rest is only shown."""
     queue: asyncio.Queue[asyncio.Task | None] = asyncio.Queue()
 
     async def produce() -> None:
+        spoken, cut = 0, False
         try:
             async for sentence in sentences:
                 await _send_all(sentence)
+                if max_spoken and spoken >= max_spoken:
+                    if not cut and re.search(r"\w", sentence):
+                        cut = True
+                        await queue.put(asyncio.create_task(_synthesize(REST_ON_SCREEN)))
+                    continue
                 await queue.put(asyncio.create_task(_synthesize(sentence)))
+                if re.search(r"[A-Za-z]{2,}", sentence):     # a formula line or "1." isn't a sentence
+                    spoken += 1
         finally:
             await queue.put(None)
 
@@ -684,7 +708,7 @@ async def _run_turn(message: str, wake_triggered: bool, announce_transcript: boo
 
             print(f"Processing: {message[:60]}")
             try:
-                await _speak_stream(stream_with_tools(message))
+                await _speak_stream(stream_with_tools(message), max_spoken=spoken_limit(message))
                 print("Response complete")
                 if policy.has_pending():
                     await _send_all("ARYA_CONFIRM")     # app shows Yes / No buttons

@@ -458,6 +458,10 @@ def _matrix() -> tuple[np.ndarray, np.ndarray]:
     return _matrix_cache["m"], _matrix_cache["ids"]
 
 
+CORE_NOTES_BOOST = float(os.getenv("ARYA_KB_CORE_BOOST", "1.3"))
+SHORT_CHUNK_CHARS = 200
+SHORT_CHUNK_PENALTY = 0.6
+
 _STOP = set("""a an the of to in on for and or is are was were be been what whats how why when where which who
 whom does do did can could would should explain tell me about please give show find with from by as at it its
 this that these those i you my your our formula define definition mean means""".split())
@@ -492,13 +496,20 @@ def search(query: str, k: int = 5) -> list[Passage]:
             cid = int(r["rowid"])
             keyword_ids.add(cid)
             scores[cid] = scores.get(cid, 0) + 1 / (60 + rank)
-    best = sorted(scores, key=scores.get, reverse=True)[: k * 3]
-    if not best:
+    if not scores:
         return []
     with _lock, _connect() as c:
+        ids_ = list(scores)
         rows = {r["id"]: r for r in c.execute(
-            f"SELECT chunks.id, doc_id, page, text, title, collection, kind FROM chunks "
-            f"JOIN documents ON documents.id = chunks.doc_id WHERE chunks.id IN ({','.join('?' * len(best))})", best)}
+            f"SELECT chunks.id, doc_id, page, text, title, collection, kind, path FROM chunks "
+            f"JOIN documents ON documents.id = chunks.doc_id WHERE chunks.id IN ({','.join('?' * len(ids_))})", ids_)}
+    core = str(CORE_NOTES)
+    for cid, r in rows.items():
+        if r["path"] == core:
+            scores[cid] *= CORE_NOTES_BOOST       # checked fundamentals beat a lab report that shares keywords
+        if len(r["text"]) < SHORT_CHUNK_CHARS:
+            scores[cid] *= SHORT_CHUNK_PENALTY     # near-empty pages (titles, figure captions) match too easily
+    best = sorted(scores, key=scores.get, reverse=True)[: k * 3]
     out: list[Passage] = []
     seen_pages = set()
     for cid in best:

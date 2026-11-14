@@ -621,7 +621,7 @@ def grounding_prompt(passages: list, question: str = "") -> str:
                "Explain it step by step for a student: what is given, the idea (which law or method), the key "
                "formulas in the course's notation, then the results, using the given answers as the check. "
                "Cite the excerpts like [1]. If the statement refers to a figure, use what the text says. "
-               "Since this is spoken, keep it to about six sentences unless they ask for more.")
+               "Since this is spoken, keep it to about five sentences unless they ask for more.")
     else:
         how = ("\n\nIf these excerpts answer the question, base your answer on them, keep the course's notation "
                "and cite them like [1] or [2]. If they don't cover it, say it's not in their course material and "
