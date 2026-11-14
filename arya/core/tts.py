@@ -82,6 +82,7 @@ _cache: "OrderedDict[str, bytes]" = OrderedDict()
 def clean_for_speech(text: str) -> str:
     """Strip markdown/formatting that a TTS voice would read out literally."""
     text = re.sub(r"```.*?```", " ", text, flags=re.DOTALL)        # code blocks
+    text = re.sub(r"\s*\[\d+(?:\s*[,–-]\s*\d+)*\]", "", text)      # citation markers [1], [2, 3]
     text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)          # [label](url) → label
     text = re.sub(r"https?://\S+", "the link", text)              # bare URLs
     text = re.sub(r"(?<=\d)\s*\*\s*(?=\d)", " times ", text)      # keep 2*3 as maths

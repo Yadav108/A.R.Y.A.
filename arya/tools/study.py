@@ -1,4 +1,4 @@
-from arya.core.llm import INTENT_MODEL_NAME as MODEL_NAME, _complete
+from arya.core.llm import INTENT_MODEL_NAME as MODEL_NAME, _complete, grounding_prompt, knowledge_for
 
 SYSTEM_PROMPTS = {
     "simple": (
@@ -21,7 +21,8 @@ SYSTEM_PROMPTS = {
 
 async def explain_concept(topic: str, level: str = "simple") -> str:
     selected_level = level if level in SYSTEM_PROMPTS else "simple"
-    system_prompt = SYSTEM_PROMPTS[selected_level]
+    passages = await knowledge_for(topic)
+    system_prompt = SYSTEM_PROMPTS[selected_level] + (grounding_prompt(passages) if passages else "")
 
     try:
         response = await _complete(
@@ -49,6 +50,10 @@ async def formula_lookup(topic: str) -> str:
         "control theory, signal processing, mechanics, electronics,\n"
         "thermodynamics, mathematics, embedded systems."
     )
+    passages = await knowledge_for(f"formula for {topic}")
+    if passages:
+        system_prompt += grounding_prompt(passages) + (
+            " Prefer the formula exactly as written in the course material.")
 
     try:
         response = await _complete(
@@ -87,6 +92,9 @@ async def flashcard_quiz(topic: str, num_questions: int = 3) -> str:
         "Answers should be 1-2 sentences maximum.\n"
         "Cover conceptual, formula-based, and application questions."
     )
+    passages = await knowledge_for(topic)
+    if passages:
+        system_prompt += grounding_prompt(passages) + " Base the questions on these course excerpts."
 
     try:
         response = await _complete(

@@ -6,10 +6,12 @@ Vectors are L2-normalised at produce time so dot-product == cosine similarity.
 """
 
 import asyncio
+import threading
 
 import numpy as np
 
 _model = None
+_load_lock = threading.Lock()   # memory + knowledge indexing load it concurrently at startup
 DIM = 384
 _BLOB_SIZE = DIM * 4  # bytes per stored vector
 
@@ -19,6 +21,13 @@ def load_embedder():
     global _model
     if _model is not None:
         return _model
+    with _load_lock:
+        if _model is None:                  # another thread may have loaded it while we waited
+            _model = _load()
+    return _model
+
+
+def _load():
     try:
         from sentence_transformers import SentenceTransformer
     except ImportError as exc:
@@ -27,9 +36,9 @@ def load_embedder():
         ) from exc
 
     print("Embedder: loading all-MiniLM-L6-v2 (CPU)...")
-    _model = SentenceTransformer("all-MiniLM-L6-v2")
+    model = SentenceTransformer("all-MiniLM-L6-v2")
     print("Embedder: model ready.")
-    return _model
+    return model
 
 
 def embed_sync(text: str) -> np.ndarray:

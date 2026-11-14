@@ -1,4 +1,5 @@
 import asyncio
+import contextvars
 import os
 import json
 import re
@@ -99,6 +100,8 @@ def _system_prompt(with_tools: bool = False) -> str:
         "- Never use markdown, bullet points, headings, tables, emojis or code blocks.\n"
         "- Say numbers, units and times the way a person would say them.\n"
         "- Lead with the answer; skip filler like 'Sure!' or 'Great question'.\n"
+        "- Don't add worked numeric examples on your own. When you do give a number, it must come from "
+        "a tool result or from the user's course excerpts; never calculate it in your head.\n"
         + (
             "Only call tools when the user asks for an action or live data. "
             "You may chain several tool calls to finish a multi-part request. "
@@ -110,6 +113,10 @@ def _system_prompt(with_tools: bool = False) -> str:
             if with_tools else ""
         )
     )
+
+
+# What to say after a plot/diagram was put on screen in this turn (set by _execute_tool).
+_visual_spoken: contextvars.ContextVar[str | None] = contextvars.ContextVar("_visual_spoken", default=None)
 
 
 class _ModelWantsTool(Exception):
@@ -247,6 +254,12 @@ async def _complete(
 
     try:
         msg = await chat_local(messages, tools=tools, temperature=temperature, max_tokens=max_tokens)
+        if tools and not (msg.get("content") or "").strip() and not msg.get("tool_calls"):
+            # An empty reply where a tool call was possible means the small model
+            # produced a malformed call that Ollama couldn't parse — retry once,
+            # with a little randomness so it doesn't repeat the same output.
+            print("LLM: empty local reply (malformed tool call?) — retrying once")
+            msg = await chat_local(messages, tools=tools, temperature=0.3, max_tokens=max_tokens)
     except LocalLLMUnavailable as exc:
         raise _unavailable(exc) from exc
     calls = [
@@ -319,7 +332,8 @@ _TOOL_KEYWORDS = re.compile(
     r"briefing|brief me|"
     r"delete|remove (?:the |that |this |my )?file|move (?:the |that |this |my |it)|rename|"
     r"close (?:the |my )?\w+|quit \w+|folder|downloads|documents|desktop|"
-    r"read (?:the |my |this )?(?:file|document|text)"
+    r"read (?:the |my |this )?(?:file|document|text)|"
+    r"plot|graph|draw|diagram|sketch|flowchart|flow chart|bode|step response|impulse response|visuali[sz]e"
     r")\b",
     re.IGNORECASE,
 )
@@ -498,6 +512,91 @@ async def get_daily_briefing() -> str:
         ],
     )
     return response.content
+
+
+# ── Knowledge & visuals ──────────────────────────────────────────────────────
+# Sources and visuals are shown in the app window while ARYA speaks. The server
+# installs a sink that forwards them (ARYA_SOURCES:/ARYA_VISUAL: events).
+_artifact_sink = None
+
+
+def set_artifact_sink(sink) -> None:
+    global _artifact_sink
+    _artifact_sink = sink
+
+
+def emit_artifact(kind: str, payload) -> None:
+    if _artifact_sink is not None:
+        try:
+            _artifact_sink(kind, payload)
+        except Exception as exc:
+            print(f"Artifact sink error: {exc}")
+
+
+_SMALL_TALK = re.compile(r"^\W*(?:hi|hii+|hello|hey|thanks?|thank you|good (?:morning|night|evening)|how are you|"
+                         r"what'?s up|ok(?:ay)?|cool|nice|great|bye)\b", re.IGNORECASE)
+
+
+async def knowledge_for(question: str, k: int = 4) -> list:
+    """Course-material passages good enough to ground an answer on (may be empty).
+    Shows them as sources in the app."""
+    from arya.knowledge.library import exercise_refs
+    if (len(question.split()) < 3 or _SMALL_TALK.match(question)) and not exercise_refs(question):
+        return []                  # "exercise 113" is short but is a real lookup
+    started = time.monotonic()
+    try:
+        from arya.knowledge import library
+        refs = library.exercise_refs(question)
+        passages = (await asyncio.wait_for(asyncio.to_thread(library.find_exercise, refs, question, k), timeout=12.0)
+                    if refs else [])
+        if not passages:           # no exercise number asked (or none found): search by meaning + keywords
+            passages = await asyncio.wait_for(asyncio.to_thread(library.relevant, question, k), timeout=12.0)
+    except asyncio.TimeoutError:
+        print(f"Knowledge lookup timed out after {time.monotonic() - started:.1f}s")
+        return []
+    except Exception as exc:
+        print(f"Knowledge lookup skipped: {type(exc).__name__}: {exc}")
+        return []
+    took = time.monotonic() - started
+    if took > 1.0:
+        print(f"Knowledge lookup took {took:.1f}s")
+    if passages:
+        print(f"Knowledge: {len(passages)} passage(s) — " + "; ".join(p.label() for p in passages))
+        emit_artifact("SOURCES", [p.as_dict() for p in passages])
+    return passages
+
+
+def grounding_prompt(passages: list, question: str = "") -> str:
+    """Course excerpts + how to use them ('' when there is nothing to add)."""
+    from arya.knowledge.library import context_block, exercise_refs
+
+    refs = exercise_refs(question) if question else []
+    found = sorted({p.note for p in passages if getattr(p, "note", "")})
+    missing = ""
+    if refs and not found:
+        asked = " or ".join(refs)
+        missing = (f"\n\nThe user asked about exercise {asked}, but no exercise with that number is in their "
+                   "indexed course material. Say that plainly, never make up its content, and offer to explain "
+                   "it if they read the question out.")
+    if not passages:
+        return missing
+    if found:
+        how = (f"\n\nThese excerpts are {', '.join(found)} from their own material: the problem statement and/or "
+               "the short answers from the solutions section, with page numbers. The page is on their screen. "
+               "Explain it step by step for a student: what is given, the idea (which law or method), the key "
+               "formulas in the course's notation, then the results, using the given answers as the check. "
+               "Cite the excerpts like [1]. If the statement refers to a figure, use what the text says. "
+               "Since this is spoken, keep it to about six sentences unless they ask for more.")
+    else:
+        how = ("\n\nIf these excerpts answer the question, base your answer on them, keep the course's notation "
+               "and cite them like [1] or [2]. If they don't cover it, say it's not in their course material and "
+               "answer briefly from general knowledge.")
+    return (
+        "\n\nExcerpts from the user's own course material (and ARYA's core notes):\n"
+        + context_block(passages) + how
+        + " You do have these excerpts: never claim you can't access their documents, files or course material. "
+        "Never invent page numbers or sources." + missing
+    )
 
 
 TOOLS = [
@@ -971,6 +1070,74 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "plot_function",
+            "description": "Draw a graph of one or more maths functions on screen, e.g. 'plot sin x and cos x', "
+                           "'graph e^(-t) times cos(3t)'. Use x (or t) as the variable.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "expressions": {"type": "array", "items": {"type": "string"},
+                                    "description": "Expressions like 'sin(x)', 'exp(-0.5*t)*cos(3*t)', 'x^2 - 4'"},
+                    "x_min": {"type": "number", "description": "Start of the x range as a plain decimal number "
+                                                               "(e.g. 0, -3.1416); default -10"},
+                    "x_max": {"type": "number", "description": "End of the x range as a plain decimal number "
+                                                               "(e.g. 6.2832 for 2 pi); default 10"},
+                    "title": {"type": "string"},
+                },
+                "required": ["expressions"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "plot_system",
+            "description": "Plot the step, impulse or Bode response of a control system on screen and compute "
+                           "overshoot, rise/settling time, bandwidth and stability. Give a transfer function "
+                           "(numerator/denominator coefficients, highest power of s first), or a second-order "
+                           "system (natural_frequency + damping_ratio), or a first-order one (time_constant).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "kind": {"type": "string", "enum": ["step", "impulse", "bode"]},
+                    "numerator": {"type": "array", "items": {"type": "number"},
+                                  "description": "e.g. [10] for 10"},
+                    "denominator": {"type": "array", "items": {"type": "number"},
+                                    "description": "e.g. [1, 2, 10] for s^2 + 2s + 10"},
+                    "natural_frequency": {"type": "number", "description": "ωn in rad/s"},
+                    "damping_ratio": {"type": "number", "description": "ζ"},
+                    "time_constant": {"type": "number", "description": "τ in seconds (first-order system)"},
+                    "gain": {"type": "number", "description": "static gain K (default 1)"},
+                },
+                "required": ["kind"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "draw_diagram",
+            "description": "Draw a block diagram or flowchart on screen, e.g. a control loop, signal chain or "
+                           "process. Describe it as connections 'From -> To' (optionally 'From -> To : signal'). "
+                           "For control loops include the feedback path from the sensor back to the controller "
+                           "or summing point.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "connections": {"type": "array", "items": {"type": "string"},
+                                    "description": "e.g. ['Setpoint -> Controller', 'Controller -> Motor : voltage', "
+                                                   "'Motor -> Encoder', 'Encoder -> Controller : feedback']"},
+                    "title": {"type": "string"},
+                    "direction": {"type": "string", "enum": ["LR", "TD"],
+                                  "description": "LR = left to right (block diagrams), TD = top down (flowcharts)"},
+                },
+                "required": ["connections"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "list_folder",
             "description": "List the most recent files in a folder, e.g. 'what's in my Downloads'.",
             "parameters": {
@@ -1273,6 +1440,29 @@ async def _dispatch_tool(tool_name: str, args: dict) -> str:
         from arya.tools.productivity import cancel_timer
 
         return await cancel_timer(label=args.get("label"))
+    elif tool_name in ("plot_function", "plot_system", "draw_diagram"):
+        from arya.knowledge import visuals
+
+        if tool_name == "plot_function":
+            exprs = args.get("expressions") or args.get("expression") or []
+            result = await asyncio.to_thread(
+                visuals.plot_function, exprs if isinstance(exprs, list) else [exprs],
+                args.get("x_min", -10), args.get("x_max", 10), str(args.get("title") or ""))
+        elif tool_name == "plot_system":
+            result = await asyncio.to_thread(
+                visuals.plot_system, str(args.get("kind") or "step"), args.get("numerator"), args.get("denominator"),
+                args.get("natural_frequency"), args.get("damping_ratio"), args.get("time_constant"), args.get("gain"))
+        else:
+            title = str(args.get("title") or "")
+            result = visuals.diagram(visuals.close_loop(args.get("connections") or [], title), title,
+                                     str(args.get("direction") or "LR"))
+        _visual_spoken.set(visuals.spoken_summary(result))
+        facts = "; ".join(result.get("facts") or [])
+        emit_artifact("VISUAL", {**{k: v for k, v in result.items() if k != "facts"},
+                                 "caption": result["caption"] + (f" — {facts}" if facts and result["type"] == "image" else "")})
+        return (f"Shown on screen: {result['caption']}." + (f" Computed: {facts}." if facts else "")
+                + " Don't repeat the diagram, data or code in your reply — just say it's on screen and"
+                  " mention at most two key numbers.")
     elif tool_name in ("list_folder", "read_text_file", "move_file", "delete_file", "close_app"):
         from arya.tools import files
 
@@ -1381,8 +1571,11 @@ async def _multi_part_pipeline(message: str, parts: list[str], messages: list[di
     question = None
     for i, part in enumerate(parts):
         quick = quick_media_command(part)
+        status_tool = quick_status_command(part)
         if quick is not None:
             tool_name, args, call_id = "media_control", quick, f"part_{i}"
+        elif status_tool is not None:
+            tool_name, args, call_id = status_tool, {}, f"part_{i}"
         else:
             if _REFERS_BACK.search(part) and i > 0:
                 # "…and copy the first one": needs the earlier results.
@@ -1470,8 +1663,10 @@ async def _tool_pipeline(
         msg_id = save_message("user", message)
         asyncio.create_task(_store_embedding("message", msg_id, f"[user]: {message}"))
 
+    passages = [] if _MUST_ACT.search(message) else await knowledge_for(message)
     messages: list[dict] = [
-        {"role": "system", "content": _system_prompt(with_tools=True) + mem_context},
+        {"role": "system", "content": _system_prompt(with_tools=True) + mem_context
+         + grounding_prompt(passages, message)},
         *({"role": item["role"], "content": item["content"]} for item in history),
         {"role": "user", "content": message},
     ]
@@ -1489,6 +1684,7 @@ async def _tool_pipeline(
     multi_part = bool(_MULTI_PART.search(message))
     seen_calls: set[tuple[str, str]] = set()
     assistant_response = ""
+    _visual_spoken.set(None)
     for step in range(MAX_TOOL_STEPS + 1):
         # The big model picks the first tool; the fast 8B model handles the
         # follow-up steps (reading results, chaining another call, answering),
@@ -1497,7 +1693,8 @@ async def _tool_pipeline(
         # Re-sending ~3k tokens of tool schemas on every step burns Groq's
         # free-tier per-minute budget, so after the first call only offer
         # tools again when the request sounds multi-part.
-        allow_tools = step == 0 or (step < MAX_TOOL_STEPS and multi_part)
+        last_failed = step > 0 and str(messages[-1].get("content", "")).find("failed:") != -1
+        allow_tools = step == 0 or (step < MAX_TOOL_STEPS and (multi_part or last_failed))
         completion = await _complete(
             model, messages, tools=TOOLS if allow_tools else None, temperature=0
         )
@@ -1562,6 +1759,16 @@ async def _tool_pipeline(
             ),
         })
 
+    # Code blocks can't be spoken and diagrams/plots are already on screen.
+    assistant_response = re.sub(r"```.*?(?:```|$)", "", assistant_response, flags=re.DOTALL).strip()
+    shown = _visual_spoken.get()
+    if shown:
+        if not multi_part:
+            assistant_response = shown          # the model tends to read the diagram/data back out
+        else:                                   # keep the rest of a multi-part answer, minus echoed arrows
+            assistant_response = "\n".join(
+                ln for ln in assistant_response.splitlines()
+                if not re.search(r"->|→|\\u003e", ln)).strip() or shown   # \\u003e = JSON-escaped ">"
     if not assistant_response.strip():
         assistant_response = "Done."
 
@@ -1602,6 +1809,32 @@ _LITTLE = re.compile(r"\s*\b(?:a (?:little )?bit|a little|slightly)\b")
 _LOT = re.compile(r"\s*\b(?:a lot|way|much)\b")
 
 
+_STATUS_ASK = re.compile(
+    r"^\W*(?:(?:hey|ok|okay)\s+)?(?:arya\W+)?(?:please\s+)?(?:can you\s+)?"
+    r"(?:check|show|tell me|what(?:'s| is)|how(?:'s| is| much)|give me|get)?\b", re.IGNORECASE)
+_STATUS_NOT = re.compile(r"\b(?:explain|why|how does|how do|work|works|charger|chemistry|lithium|design|"
+                         r"circuit|formula|lecture|exam|buy|replace|define|meaning)\b"
+                         r"|\bwhat(?:'s| is| are) (?:an?|the) (?:cpu|battery|ram|processor)\b"
+                         r"|\b(?:and|then|also|plus)\b|,", re.IGNORECASE)   # multi-part -> handled per part
+_STATUS = [
+    (re.compile(r"\b(?:battery|charge level|how much charge|charging status|power level)\b", re.IGNORECASE), "get_battery"),
+    (re.compile(r"\b(?:cpu|processor usage|ram usage|memory usage|system (?:status|info|usage)|how busy)\b",
+                re.IGNORECASE), "get_system_info"),
+]
+
+
+def quick_status_command(message: str) -> str | None:
+    """'Check my battery' / 'CPU usage?' -> the tool to run directly (no model).
+    Questions *about* batteries or CPUs ('explain how a battery works') aren't matched."""
+    text = message.strip()
+    if len(text.split()) > 9 or _STATUS_NOT.search(text) or not _STATUS_ASK.match(text):
+        return None
+    for pattern, tool in _STATUS:
+        if pattern.search(text):
+            return tool
+    return None
+
+
 def quick_media_command(message: str) -> dict | None:
     """'Turn the volume up a bit' -> {'action': 'volume_up', 'steps': 3}; None if not a media command."""
     text = re.sub(r"[^\w\s']", " ", message.lower().replace("%", " percent"))
@@ -1627,7 +1860,8 @@ def quick_media_command(message: str) -> dict | None:
 
 # Requests that must result in a tool call, never a text-only "done".
 _MUST_ACT = re.compile(
-    r"\b(?:delete|remove|trash|recycle|move|rename|close|quit|shut down|kill)\b", re.IGNORECASE)
+    r"\b(?:delete|remove|trash|recycle|move|rename|close|quit|shut down|kill|"
+    r"plot|graph|draw|sketch|diagram|flowchart|visuali[sz]e)\b", re.IGNORECASE)
 _ACT_NUDGE = ("The user asked you to perform an action. Respond ONLY by calling the matching tool "
               "(delete_file, move_file, close_app, …) with the right arguments. Do not reply in text, "
               "and never say an action is done unless a tool result confirms it.")
@@ -1721,6 +1955,54 @@ async def stream_with_tools(message: str):
         yield reply
         return
 
+    from arya.knowledge import visuals as _visuals
+
+    system_plot = _visuals.quick_system_request(message)
+    function_plot = None if system_plot else _visuals.quick_function_request(message)
+    diagram_req = None if (system_plot or function_plot) else _visuals.quick_diagram_request(message)
+    if system_plot is not None or function_plot is not None or diagram_req is not None:
+        if diagram_req is not None:
+            print(f"Instant diagram: {diagram_req}")
+            result = _visuals.diagram(diagram_req["connections"], diagram_req["title"], diagram_req["direction"])
+        elif system_plot is not None:
+            print(f"Instant plot: plot_system {system_plot}")
+            result = await asyncio.to_thread(_visuals.plot_system, **system_plot)
+        else:
+            print(f"Instant plot: plot_function {function_plot}")
+            result = await asyncio.to_thread(_visuals.plot_function, function_plot["expressions"],
+                                             function_plot["x_min"], function_plot["x_max"], "")
+        facts = "; ".join(result.get("facts") or [])
+        emit_artifact("VISUAL", {**{k: v for k, v in result.items() if k != "facts"},
+                                 "caption": result["caption"] + (f" — {facts}" if facts and result["type"] == "image"
+                                                                 else "")})
+        reply = _visuals.spoken_summary(result)
+        save_message("user", message)
+        save_message("assistant", reply)
+        yield reply
+        return
+
+    try:
+        from arya.knowledge import library as _library
+        listing = await asyncio.to_thread(_library.overview, message)
+    except Exception as exc:
+        print(f"Library overview skipped: {type(exc).__name__}: {exc}")
+        listing = None
+    if listing:
+        print("Instant answer: library overview")
+        save_message("user", message)
+        save_message("assistant", listing)
+        yield listing
+        return
+
+    status_tool = quick_status_command(message)
+    if status_tool is not None and quick_media_command(message) is None:
+        print(f"Instant command: {status_tool}")
+        result = await _execute_tool(status_tool, {})
+        save_message("user", message)
+        save_message("assistant", result)
+        yield result
+        return
+
     quick = quick_media_command(message)
     if quick is not None:
         print(f"Instant command: media_control {quick}")
@@ -1798,8 +2080,9 @@ async def _stream_with_tools(message: str):
     msg_id = save_message("user", message)
     asyncio.create_task(_store_embedding("message", msg_id, f"[user]: {message}"))
 
+    passages = await knowledge_for(message)
     messages = [
-        {"role": "system", "content": _system_prompt() + mem_context},
+        {"role": "system", "content": _system_prompt() + mem_context + grounding_prompt(passages, message)},
         *({"role": item["role"], "content": item["content"]} for item in history),
         {"role": "user", "content": message},
     ]
