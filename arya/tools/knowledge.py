@@ -43,6 +43,10 @@ def _safe_eval(node: ast.AST) -> float:
 
 
 async def calculate(expression: str) -> str:
+    pieces = [p for p in expression.split(";") if p.strip()]
+    if len(pieces) > 1:
+        results = [f"{p.strip()} = {(await calculate(p)).removeprefix('Result: ')}" for p in pieces]
+        return "Results: " + "; ".join(results)
     normalized = expression.lower().strip()
     normalized = normalized.replace("percent", "/100")
     normalized = normalized.replace("%", "/100")
