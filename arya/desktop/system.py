@@ -15,11 +15,37 @@ _MUTEX_NAME = "Local\\ARYA-voice-assistant"
 _mutex = None
 
 
-def _command() -> str:
+ICON = ROOT / "arya" / "static" / "arya.ico"
+
+
+def _pythonw() -> Path:
     """pythonw = no console window."""
     pythonw = Path(sys.executable).with_name("pythonw.exe")
-    exe = pythonw if pythonw.exists() else Path(sys.executable)
-    return f'"{exe}" "{LAUNCHER}"'
+    return pythonw if pythonw.exists() else Path(sys.executable)
+
+
+def _command() -> str:
+    # At login ARYA starts quietly in the tray; the window opens from the shortcut/tray.
+    return f'"{_pythonw()}" "{LAUNCHER}" --background'
+
+
+def create_shortcuts() -> list[Path]:
+    """'ARYA' on the Desktop and in the Start menu, with ARYA's icon."""
+    import win32com.client
+
+    shell = win32com.client.Dispatch("WScript.Shell")
+    made = []
+    for folder in (shell.SpecialFolders("Desktop"), shell.SpecialFolders("Programs")):
+        path = Path(folder) / "ARYA.lnk"
+        link = shell.CreateShortcut(str(path))
+        link.TargetPath = str(_pythonw())
+        link.Arguments = f'"{LAUNCHER}"'
+        link.WorkingDirectory = str(ROOT)
+        link.IconLocation = f"{ICON},0"
+        link.Description = "ARYA - your private, offline voice assistant"
+        link.Save()
+        made.append(path)
+    return made
 
 
 def autostart_enabled() -> bool:
