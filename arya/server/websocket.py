@@ -11,6 +11,7 @@ The conversation lives here on the server, not in a browser tab:
 """
 import asyncio
 import os
+import re
 from collections.abc import AsyncIterator, Iterable
 from pathlib import Path
 
@@ -50,12 +51,27 @@ _STOP_PHRASES = {
     "that's enough", "thats enough", "enough",
 }
 
-# Phrases that close the hands-free follow-up window.
-_THANKS_PHRASES = {"thanks", "thank you", "thanks arya", "thank you arya", "cheers", "perfect thanks"}
-_END_PHRASES = _THANKS_PHRASES | {
-    "that's all", "thats all", "that's it", "thats it", "goodbye", "bye",
-    "no thanks", "no thank you", "nothing", "i'm good", "im good", "all good",
+# Closing / acknowledgement phrases. An utterance made up *only* of these
+# ("Okay. Thank you. Goodbye.", "thanks, bye", "alright cool") is classified
+# as a whole by _classify_closing() — it never goes to the LLM.
+_THANKS_PHRASES = {
+    "thanks", "thank you", "thank you so much", "thank you very much", "thanks a lot",
+    "thanks so much", "many thanks", "cheers", "appreciate it", "much appreciated",
 }
+_END_PHRASES = {
+    "that's all", "thats all", "that's it", "thats it", "goodbye", "good bye", "bye", "bye bye",
+    "see you", "see ya", "see you later", "talk to you later", "later", "good night", "goodnight",
+    "no thanks", "no thank you", "nothing", "nothing else", "i'm good", "im good", "all good",
+    "i'm done", "im done", "we're done", "were done", "that will be all", "that'll be all",
+}
+# Bare acknowledgements: keep the conversation open, but don't reply.
+# (No "yes"/"sure"/"yeah" — those can answer a question ARYA just asked.)
+_ACK_PHRASES = {
+    "okay", "ok", "okey", "alright", "all right", "cool", "got it", "nice", "great", "perfect",
+    "awesome", "good", "very good", "fine", "understood", "noted", "i see", "oh", "ah", "hmm",
+}
+# Words that may appear anywhere in such an utterance without changing its meaning.
+_NEUTRAL_WORDS = {"arya", "aria", "so", "then", "well", "and", "very", "much", "again"}
 
 WAKE_ACK = "Yes?"
 THANKS_ACK = "Anytime."
@@ -63,6 +79,34 @@ THANKS_ACK = "Anytime."
 
 def _normalise(text: str) -> str:
     return text.strip().lower().strip(" .!?,")
+
+
+def _classify_closing(text: str) -> str | None:
+    """'stop' / 'end' / 'thanks' (end + say "Anytime.") / 'ack' (stay quiet, keep
+    listening) when the utterance consists only of such phrases, else None."""
+    words = re.sub(r"[^a-z' ]+", " ", text.lower().replace("’", "'")).split()
+    if not words:
+        return None
+    phrase_sets = [("stop", _STOP_PHRASES), ("thanks", _THANKS_PHRASES), ("end", _END_PHRASES), ("ack", _ACK_PHRASES)]
+    found: set[str] = set()
+    i = 0
+    while i < len(words):
+        if words[i] in _NEUTRAL_WORDS:
+            i += 1
+            continue
+        for n in (4, 3, 2, 1):                       # longest phrase first
+            chunk = " ".join(words[i:i + n])
+            kind = next((k for k, ps in phrase_sets if chunk in ps), None)
+            if kind and len(words[i:i + n]) == n:
+                found.add(kind)
+                i += n
+                break
+        else:
+            return None                              # a real request in there
+    for kind in ("stop", "thanks", "end", "ack"):
+        if kind in found:
+            return kind
+    return None
 
 
 # ── Startup ───────────────────────────────────────────────────────────────────
@@ -84,6 +128,9 @@ async def preload_models() -> None:
         await _dispatch(command, wake_triggered=wake_triggered, announce_transcript=True)
 
     wake_engine.set_callback(on_wake, loop)
+    if hasattr(wake_engine, "set_interrupt_callback"):
+        # Dedicated detector: go quiet the instant "Hey ARYA" is heard mid-reply.
+        wake_engine.set_interrupt_callback(interrupt)
     wake_engine.start()
 
     set_notify_callback(announce)
@@ -189,9 +236,8 @@ def _error_message(exc: Exception) -> str:
 
 # ── Turns ─────────────────────────────────────────────────────────────────────
 
-async def _dispatch(message: str, wake_triggered: bool = False, announce_transcript: bool = False) -> None:
-    """Cancel whatever ARYA is doing, then start the new turn."""
-    global _current_turn
+async def interrupt() -> None:
+    """Silence ARYA and cancel the in-flight turn (barge-in)."""
     if _current_turn is not None and not _current_turn.done():
         speaker.stop()
         _current_turn.cancel()
@@ -201,7 +247,13 @@ async def _dispatch(message: str, wake_triggered: bool = False, announce_transcr
             pass
         await _send_all("ARYA_INTERRUPT")
 
-    if _normalise(message) in _STOP_PHRASES:
+
+async def _dispatch(message: str, wake_triggered: bool = False, announce_transcript: bool = False) -> None:
+    """Cancel whatever ARYA is doing, then start the new turn."""
+    global _current_turn
+    await interrupt()
+
+    if _classify_closing(message) == "stop":
         speaker.stop()
         wake_engine.end_conversation()
         if announce_transcript:
@@ -230,12 +282,14 @@ async def _run_turn(message: str, wake_triggered: bool, announce_transcript: boo
             if announce_transcript:
                 await _send_all(f"TRANSCRIPT:{message}")
 
-            normalised = _normalise(message)
-            if normalised in _END_PHRASES:
+            closing = _classify_closing(message)
+            if closing in ("end", "thanks"):
                 wake_engine.end_conversation()
-                if normalised in _THANKS_PHRASES:
+                if closing == "thanks":
                     await _say(THANKS_ACK)
                 return
+            if closing == "ack":
+                return          # "Okay." — nothing to answer; the conversation stays open
 
             print(f"Processing: {message[:60]}")
             try:
@@ -251,7 +305,8 @@ async def _run_turn(message: str, wake_triggered: bool, announce_transcript: boo
             try:
                 await _send_all("ARYA_DONE")
                 if wake_engine.followup_active():
-                    await _send_all("ARYA_FOLLOWUP")
+                    left = getattr(wake_engine, "followup_seconds_left", lambda: 0)() or 12
+                    await _send_all(f"ARYA_FOLLOWUP:{int(left)}")
             except Exception:
                 pass
 

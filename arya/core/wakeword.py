@@ -42,7 +42,12 @@ PREROLL_FRAMES     = 8             # ~240 ms pre-roll so the start of "ARYA" isn
 
 # Only keep unambiguous spellings — short variants like "ria"/"ara" cause false negatives
 WAKE_VARIANTS = {"arya", "aria", "r.a.", "arja", "ariya", "ahria", "ar ya"}
-FOLLOWUP_TIMEOUT_SECONDS = 12.0
+# Hands-free conversation: after a wake word, replies need no wake word until
+# this long after the last exchange ("that's all" / "bye" end it sooner).
+try:
+    FOLLOWUP_TIMEOUT_SECONDS = max(12.0, float(os.getenv("CONVERSATION_MINUTES", "8")) * 60.0)
+except ValueError:
+    FOLLOWUP_TIMEOUT_SECONDS = 480.0
 MIN_AVG_LOGPROB = -1.0
 MAX_NO_SPEECH_PROB = 0.6
 
@@ -402,4 +407,19 @@ def _write_wav(path: str, audio: np.ndarray) -> None:
 
 
 # ── Singleton ─────────────────────────────────────────────────────────────────
-engine = WakeWordEngine()
+
+def _make_engine():
+    """Prefer the dedicated "Hey ARYA" detector (arya/core/hotword.py) when a
+    trained model exists; WAKE_ENGINE=whisper forces this module's engine."""
+    if os.getenv("WAKE_ENGINE", "auto").strip().lower() != "whisper":
+        try:
+            from arya.core.hotword import HotwordEngine, model_available
+            if model_available():
+                return HotwordEngine()
+            print("WakeWord: no trained model (run tools/train_wakeword.py) — using Whisper-based detection")
+        except Exception as exc:
+            print(f"WakeWord: dedicated detector unavailable ({exc}) — using Whisper-based detection")
+    return WakeWordEngine()
+
+
+engine = _make_engine()

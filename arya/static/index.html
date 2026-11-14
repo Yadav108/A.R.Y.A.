@@ -613,13 +613,15 @@
           return;
         }
 
-        if (msg === "ARYA_FOLLOWUP") {
-          // Hands-free conversation: ARYA is listening for a reply without the wake word.
-          setStatus("Listening — just reply, no wake word needed", "listening");
+        if (msg === "ARYA_FOLLOWUP" || msg.startsWith("ARYA_FOLLOWUP:")) {
+          // Hands-free conversation: ARYA is listening for a reply without the wake word,
+          // for as many seconds as the server says the conversation stays open.
+          const secs = parseInt(msg.split(":")[1], 10) || 12;
+          setStatus("In conversation — just talk, no wake word needed", "listening");
           clearTimeout(followupTimer);
           followupTimer = setTimeout(() => {
-            if (statusEl.textContent.startsWith("Listening — just reply")) setStatus("Ready");
-          }, 12000);
+            if (statusEl.textContent.startsWith("In conversation")) setStatus("Ready — say \"Hey ARYA\"");
+          }, secs * 1000);
           return;
         }
 

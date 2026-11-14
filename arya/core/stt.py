@@ -92,7 +92,7 @@ def load_model() -> WhisperModel:
     return _model
 
 
-def _run_model(m: WhisperModel, source) -> str:
+def _run_model(m: WhisperModel, source, prompt: str | None = None) -> str:
     segments, _ = m.transcribe(
         source,
         language="en",
@@ -105,21 +105,22 @@ def _run_model(m: WhisperModel, source) -> str:
         no_speech_threshold=MAX_NO_SPEECH_PROB,
         log_prob_threshold=MIN_AVG_LOGPROB,
         compression_ratio_threshold=WHISPER_COMPRESSION_RATIO_THRESHOLD,
+        initial_prompt=prompt,
     )
     return _accept_segments(segments)
 
 
-def _run_with_cpu_fallback(source) -> str:
+def _run_with_cpu_fallback(source, prompt: str | None = None) -> str:
     global _model
     model = load_model()
     try:
-        return _run_model(model, source)
+        return _run_model(model, source, prompt)
     except RuntimeError as exc:
         if any(k in str(exc).lower() for k in ("cublas", "cuda", "cufft", "curand")):
             print(f"STT: CUDA runtime error — switching to CPU permanently. ({exc})")
             _model = WhisperModel("medium", device="cpu", compute_type="int8")
             print("STT: Whisper reloaded on CPU (int8)")
-            return _run_model(_model, source)
+            return _run_model(_model, source, prompt)
         raise
 
 
@@ -143,6 +144,16 @@ def transcribe_array(audio: "np.ndarray") -> str:
     if audio is None or len(audio) == 0:
         return ""
     return _run_with_cpu_fallback(audio.astype("float32", copy=False))
+
+
+def transcribe_wake(audio: "np.ndarray") -> str:
+    """Transcribe the ~2 s that triggered the wake-word detector, primed with the
+    name so Whisper spells a real "Hey ARYA" as "Arya" (not "how are you" /
+    "idea"). Only used to *verify* the wake word — never for commands, where
+    the priming would bias what's heard."""
+    if audio is None or len(audio) == 0:
+        return ""
+    return _run_with_cpu_fallback(audio.astype("float32", copy=False), prompt="Hey Arya.")
 
 
 async def transcribe(audio_bytes: bytes) -> str:

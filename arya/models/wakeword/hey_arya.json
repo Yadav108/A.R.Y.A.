@@ -1,0 +1,12 @@
+{
+  "threshold": 0.6,
+  "trigger_frames": 3,
+  "heldout_recall": 0.8506944444444444,
+  "heldout_false_triggers_per_hour": 117.50169746147375,
+  "train_positive_windows": 2439,
+  "train_negative_windows": 16847,
+  "user_positive_recordings": 9,
+  "user_negative_recordings": 2,
+  "voices": 49,
+  "trained": "2026-11-14 16:49"
+}

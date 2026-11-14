@@ -12,3 +12,6 @@ websockets
 faster-whisper
 sounddevice
 sentence-transformers
+onnxruntime
+openwakeword
+scikit-learn  # only for tools/train_wakeword.py
