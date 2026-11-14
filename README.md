@@ -57,9 +57,9 @@ All conversation history and notes are stored locally in a SQLite database.
 
 | Layer | Technology |
 |---|---|
-| LLM | [Groq](https://groq.com) — `llama-3.3-70b-versatile` (tools), `llama-3.1-8b-instant` (intent + responses) |
+| LLM | Local [Ollama](https://ollama.com) `qwen2.5:3b` by default (offline); [Groq](https://groq.com) `gpt-oss` only on request |
 | Backend | FastAPI + Uvicorn, WebSocket |
-| TTS | `edge-tts` — `en-GB-SoniaNeural` |
+| TTS | [Piper](https://github.com/OHF-Voice/piper1-gpl) — `en_GB-jenny_dioco-medium`, local (optional: `edge-tts`) |
 | Database | SQLite (via `sqlite3` stdlib) |
 | Weather | [Open-Meteo](https://open-meteo.com) — free, no key |
 | Frontend | Vanilla HTML/JS — Web Speech API, AudioContext |
@@ -95,7 +95,7 @@ pip install -r requirements.txt
 
 Create a `.env` file in the project root:
 ```env
-GROQ_API_KEY=your_groq_api_key_here
+GROQ_API_KEY=your_groq_api_key_here   # optional — only for "ask the cloud, …"
 
 # Used for the daily briefing weather pull
 DEFAULT_CITY=Berlin
@@ -108,7 +108,10 @@ GROQ_MODEL=openai/gpt-oss-120b     # tool-calling model
 GROQ_FAST_MODEL=openai/gpt-oss-20b # intent, chat, follow-ups
 AUDIO_OUTPUT=local                 # local = PC speakers (hands-free); browser = play in the tab
 WAKE_ACCURATE_COMMANDS=1           # re-transcribe commands with Whisper medium (0 to save RAM)
-OLLAMA_MODEL=llama3.2:3b           # offline fallback when Groq fails
+ARYA_MODE=offline                  # offline (default) = local brain; cloud = Groq first
+OLLAMA_MODEL=qwen2.5:3b            # local brain
+TTS_ENGINE=piper                   # piper (local, default) | edge (online Microsoft voice)
+PIPER_VOICE=en_GB-jenny_dioco-medium
 ```
 
 **Hands-free use:** run `python main.py` and just talk — no browser tab needed.
@@ -131,8 +134,17 @@ Tuning: `WAKE_THRESHOLD=0.6` (higher = fewer false triggers, lower = more sensit
 `WAKE_VERIFY=0` skips the double-check (faster, more false wakes);
 `WAKE_ENGINE=whisper` switches back to the old Whisper-based detection.
 
-**Offline fallback (recommended):** `winget install Ollama.Ollama` then `ollama pull llama3.2:3b`.
-Used automatically when Groq is rate-limited or unreachable.
+**Offline by default (privacy).** ARYA's brain and voice run on this laptop:
+```bash
+winget install Ollama.Ollama
+ollama pull qwen2.5:3b
+.venv\Scripts\python.exe -m piper.download_voices --download-dir arya/models/tts en_GB-jenny_dioco-medium
+```
+Nothing you say leaves the machine — except when you explicitly ask, e.g. *"Ask the cloud,
+explain the Navier–Stokes equations"*: then **only that one question** goes to Groq (no history,
+memories, name or location), and the next request is local again. Weather and Wikipedia
+lookups send only the city / search term. Volume and media commands ("volume up", "skip this
+song") run instantly without any model. `ARYA_MODE=cloud` restores the old Groq-first behaviour.
 
 **4. Run**
 ```bash
@@ -188,7 +200,7 @@ ARYA/
 └── arya/
     ├── core/
     │   ├── llm.py            # LLM logic, tool dispatch, streaming
-    │   └── tts.py            # edge-tts synthesis
+    │   └── tts.py            # Piper (local) / edge-tts synthesis
     ├── memory/
     │   ├── database.py       # Conversation history (SQLite)
     │   └── arya.db           # Auto-created on first run

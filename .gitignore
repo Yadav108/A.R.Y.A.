@@ -7,3 +7,5 @@ __pycache__/
 .wake_cache/
 # Personal voice recordings from tools/record_wakeword.py - never commit
 arya/models/wakeword/user_samples/
+# Piper voice models (~60 MB each) - download with python -m piper.download_voices
+arya/models/tts/

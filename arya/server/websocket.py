@@ -22,7 +22,9 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from arya.core.audit import LOG_FILE, log_event
 from arya.core.embedder import load_embedder
-from arya.core.llm import LLMUnavailableError, stream_with_tools
+from arya.core.llm import ARYA_MODE, LLMUnavailableError, stream_with_tools
+from arya.core.llm_local import OLLAMA_MODEL, warm_up as warm_up_local_llm
+from arya.core.tts import TTS_ENGINE
 from arya.core.speaker import speaker
 from arya.core.stt import load_model, transcribe
 from arya.core.tts import speak_sentence
@@ -146,6 +148,12 @@ async def preload_models() -> None:
             await _synthesize(phrase)
 
     asyncio.create_task(_warm_cache())
+    if ARYA_MODE == "offline":
+        asyncio.create_task(warm_up_local_llm())    # load the local model into VRAM now
+    brain = f"local {OLLAMA_MODEL}" + (" (say 'ask the cloud, …' to use Groq for one question)"
+                                       if ARYA_MODE == "offline" else ", Groq first")
+    voice = "local Piper" if TTS_ENGINE != "edge" else "Microsoft Edge (online)"
+    print(f"Privacy: {ARYA_MODE} mode — brain: {brain}; voice: {voice}")
     output = "PC speakers" if LOCAL_AUDIO else "browser"
     print(f"ARYA ready — voice output: {output}. Say 'ARYA ...' (no browser tab needed).")
     where = "this computer only" if security.is_loopback_bind() else f"NETWORK ({security.HOST}) — token required"

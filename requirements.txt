@@ -1,7 +1,8 @@
 groq
 fastapi
 uvicorn[standard]
-edge-tts>=7.3.1  # older versions get HTTP 403 from Microsoft
+piper-tts>=1.8.0  # local offline voice (default)
+edge-tts>=7.3.1  # optional online voice (TTS_ENGINE=edge); older versions get HTTP 403
 pywin32
 httpx
 python-dotenv

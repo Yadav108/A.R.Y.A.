@@ -73,6 +73,12 @@ def _register_nvidia_dll_dirs() -> None:
                 os.environ["PATH"] = str(dll_dir) + os.pathsep + os.environ.get("PATH", "")
 
 
+# int8 weights on the GPU: ~1 GB of VRAM instead of ~2 GB, with near-identical
+# accuracy — leaves room for the local LLM on a 4 GB card. WHISPER_COMPUTE_TYPE=float16
+# restores full precision if you have VRAM to spare.
+CUDA_COMPUTE_TYPE = os.getenv("WHISPER_COMPUTE_TYPE", "int8_float16")
+
+
 def load_model() -> WhisperModel:
     """Load Whisper medium. Called once at server startup."""
     global _model
@@ -82,8 +88,8 @@ def load_model() -> WhisperModel:
     _register_nvidia_dll_dirs()
 
     try:
-        _model = WhisperModel("medium", device="cuda", compute_type="float16")
-        print("STT: Whisper medium loaded on CUDA (float16)")
+        _model = WhisperModel("medium", device="cuda", compute_type=CUDA_COMPUTE_TYPE)
+        print(f"STT: Whisper medium loaded on CUDA ({CUDA_COMPUTE_TYPE})")
     except Exception as exc:
         print(f"STT: CUDA load failed ({exc}), falling back to CPU int8")
         _model = WhisperModel("medium", device="cpu", compute_type="int8")

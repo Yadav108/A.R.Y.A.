@@ -600,7 +600,10 @@
       socket.onmessage = async (event) => {
         /* ── binary → TTS audio ── */
         if (event.data instanceof ArrayBuffer) {
-          const blob = new Blob([event.data], { type: "audio/mpeg" });
+          // Local Piper voice sends WAV ("RIFF" header); the online voice sends MP3.
+          const head = new Uint8Array(event.data, 0, Math.min(4, event.data.byteLength));
+          const isWav = head[0] === 0x52 && head[1] === 0x49 && head[2] === 0x46 && head[3] === 0x46;
+          const blob = new Blob([event.data], { type: isWav ? "audio/wav" : "audio/mpeg" });
           audioQueue.push(blob);
           await playNext();
           return;

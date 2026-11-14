@@ -16,12 +16,12 @@ import numpy as np
 import sounddevice as sd
 from faster_whisper.audio import decode_audio
 
-PLAYBACK_RATE = 24_000  # edge-tts native rate
+PLAYBACK_RATE = 24_000  # edge-tts native rate (Piper's 22.05 kHz is resampled)
 
 
 def decode_mp3(mp3: bytes) -> np.ndarray:
-    """MP3 bytes → mono float32 PCM at PLAYBACK_RATE (uses PyAV, already a
-    faster-whisper dependency)."""
+    """MP3 or WAV bytes → mono float32 PCM at PLAYBACK_RATE (uses PyAV, already
+    a faster-whisper dependency)."""
     if not mp3:
         return np.zeros(0, dtype=np.float32)
     return decode_audio(BytesIO(mp3), sampling_rate=PLAYBACK_RATE)
