@@ -2087,6 +2087,23 @@ async def stream_with_tools(message: str):
         yield correction_reply
         return
 
+    try:                                                # exercise tutor: walkthroughs and answer checks
+        from arya.study import tutor as _tutor
+        tutoring = await _tutor.handle(message)
+    except Exception as exc:
+        print(f"Tutor skipped: {type(exc).__name__}: {exc}")
+        tutoring = None
+    if tutoring:
+        reply, sources = tutoring
+        print(f"Tutor: {'session ' + _tutor.active().ref if _tutor.active() else 'answer check'}")
+        if sources:
+            emit_artifact("SOURCES", sources)
+        save_message("user", message)
+        save_message("assistant", reply)
+        async for sentence in _clean_stream(_aiter_text(reply)):
+            yield sentence
+        return
+
     from arya.knowledge import visuals as _visuals
 
     system_plot = _visuals.quick_system_request(message)
@@ -2193,6 +2210,11 @@ async def stream_with_tools(message: str):
     inner = (_stream_cloud_question(question) if is_cloud and ARYA_MODE == "offline"
              else _stream_with_tools(message))
     async for sentence in _clean_stream(inner):
+        yield sentence
+
+
+async def _aiter_text(text: str):
+    for sentence in split_sentences(text):
         yield sentence
 
 

@@ -22,8 +22,10 @@ ENABLED = os.getenv("ARYA_CLOUD_OFFER", "1") != "0"
 _DERIVE = re.compile(r"\b(?:derive|derivation|prove|proof|show that|show why|why exactly|from first principles|"
                      r"mathematically why)\b", re.IGNORECASE)
 _SOLVE = re.compile(r"\b(?:solve|calculate|compute|determine|find|work out)\b", re.IGNORECASE)
-_WORKED = re.compile(r"\b(?:step by step|full solution|complete solution|solve (?:the |this )?(?:whole )?"
-                     r"(?:exercise|problem|task|question)|work through|walk me through)\b", re.IGNORECASE)
+# Walkthroughs ("step by step", "walk me through") are the local tutor's job (arya/study/tutor.py);
+# only a request for the complete worked solution goes to the cloud offer.
+_WORKED = re.compile(r"\b(?:full solution|complete solution|whole solution|full worked solution|"
+                     r"solve (?:the |this )?whole (?:exercise|problem|task|question))\b", re.IGNORECASE)
 _GIVEN = re.compile(r"-?\d+(?:\.\d+)?\s*(?:%|°|[a-zA-Zµ²³/·]+)?")
 
 REASONS = {
