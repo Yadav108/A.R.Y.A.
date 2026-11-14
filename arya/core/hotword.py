@@ -172,6 +172,8 @@ class HotwordEngine:
         self._hot_run = 0                                   # consecutive frames at/above threshold
         self._preroll: deque = deque(maxlen=PREROLL_CHUNKS)
         self._history: deque = deque(maxlen=VERIFY_WINDOW_CHUNKS)
+        self._muted = False
+        self._event: Callable[[str], None] | None = None
 
     # ── Public API (matches WakeWordEngine) ──────────────────────────────────
 
@@ -193,6 +195,23 @@ class HotwordEngine:
 
     def followup_active(self) -> bool:
         return self._followup_mode_enabled()
+
+    def set_muted(self, muted: bool) -> None:
+        """Microphone off: nothing is detected, captured or transcribed."""
+        self._muted = muted
+        if muted:
+            self._capture = None
+            self._hot_run = 0
+            self.end_conversation()
+        print(f"WakeWord: microphone {'muted' if muted else 'live'}")
+
+    def is_muted(self) -> bool:
+        return self._muted
+
+    def set_event_callback(self, callback: Callable[[str], None]) -> None:
+        """Called (from the audio thread) with 'ARYA_LISTENING' the moment a
+        wake word is verified, so a status UI can react before transcription."""
+        self._event = callback
 
     def followup_seconds_left(self) -> float:
         return max(0.0, self._followup_deadline - time.monotonic()) if self._followup_mode_enabled() else 0.0
@@ -260,6 +279,8 @@ class HotwordEngine:
         return max(ENERGY_FLOOR, self._noise_floor * 3.0)
 
     def _on_chunk(self, chunk: np.ndarray) -> None:
+        if self._muted:
+            return
         now = time.monotonic()
         rms = float(np.sqrt(np.mean(chunk ** 2)))
         ducked = self._is_ducked()
@@ -308,6 +329,11 @@ class HotwordEngine:
         self._preroll.append(chunk)
 
     def _accept_wake(self, cap: dict) -> None:
+        if self._event is not None:
+            try:
+                self._event("ARYA_LISTENING")
+            except Exception:
+                pass
         self._refresh_followup_mode()
         if cap["ducked"] and self._interrupt is not None:
             self._post(self._interrupt())

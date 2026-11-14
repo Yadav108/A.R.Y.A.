@@ -139,6 +139,8 @@ async def preload_models() -> None:
     if hasattr(wake_engine, "set_interrupt_callback"):
         # Dedicated detector: go quiet the instant "Hey ARYA" is heard mid-reply.
         wake_engine.set_interrupt_callback(interrupt)
+    if hasattr(wake_engine, "set_event_callback"):
+        wake_engine.set_event_callback(emit_status)
     wake_engine.start()
 
     set_notify_callback(announce)
@@ -155,6 +157,7 @@ async def preload_models() -> None:
                                        if ARYA_MODE == "offline" else ", Groq first")
     voice = "local Piper" if TTS_ENGINE != "edge" else "Microsoft Edge (online)"
     print(f"Privacy: {ARYA_MODE} mode — brain: {brain}; voice: {voice}")
+    emit_status("ARYA_READY")
     output = "PC speakers" if LOCAL_AUDIO else "browser"
     print(f"ARYA ready — voice output: {output}. Say 'ARYA ...' (no browser tab needed).")
     where = "this computer only" if security.is_loopback_bind() else f"NETWORK ({security.HOST}) — token required"
@@ -176,7 +179,37 @@ async def index(request: Request) -> HTMLResponse:
 
 # ── Fan-out to browser windows ────────────────────────────────────────────────
 
+# In-process status listeners (the tray icon / overlay). They receive every
+# text event the browser gets, plus local-only ones (ARYA_READY, ARYA_LISTENING)
+# that the browser page doesn't understand. Called from any thread — listeners
+# must be thread-safe (the desktop app just puts them on a queue).
+_status_listeners: list = []
+
+
+def add_status_listener(callback) -> None:
+    _status_listeners.append(callback)
+
+
+def emit_status(event: str) -> None:
+    for callback in list(_status_listeners):
+        try:
+            callback(event)
+        except Exception as exc:
+            print(f"Status listener error: {exc}")
+
+
+def set_microphone_muted(muted: bool) -> bool:
+    """Returns False if the active wake engine can't be muted."""
+    if not hasattr(wake_engine, "set_muted"):
+        return False
+    wake_engine.set_muted(muted)
+    emit_status("ARYA_MUTED" if muted else "ARYA_UNMUTED")
+    return True
+
+
 async def _send_all(payload: str | bytes) -> None:
+    if isinstance(payload, str):
+        emit_status(payload)
     for ws in list(_connections):
         try:
             if isinstance(payload, bytes):

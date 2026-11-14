@@ -154,6 +154,19 @@ python main.py
 
 Then open **http://localhost:8000** in Chrome or Edge.
 
+**Desktop app (recommended for daily use)** — no browser, no console window:
+```bash
+.venv\Scripts\pythonw.exe arya_desktop.py
+```
+ARYA lives in the system tray (Windows 11 may tuck new icons behind the **^** arrow — drag it
+onto the taskbar, or enable it under *Settings → Personalization → Taskbar → Other system tray icons*).
+The icon's colour shows what ARYA is doing: grey = ready, green = listening, amber = thinking,
+blue = speaking, teal = in conversation, red = microphone muted. Right-click for: open the chat
+page, **mute microphone**, privacy mode (offline / cloud), status overlay on/off, **start with
+Windows**, open the action log, quit. A small overlay above the taskbar shows what ARYA heard and
+is saying, then fades away (click to dismiss). Logs go to `%LOCALAPPDATA%\ARYA\logs\arya.log`.
+Only one ARYA runs at a time — a second launch just opens the chat page.
+
 **Security.** ARYA can run commands and read your clipboard, so it only obeys this computer:
 - The server listens on `127.0.0.1` only — nothing else on your network can connect.
 - Every WebSocket needs a secret token, generated once into `%LOCALAPPDATA%\ARYA\token`
