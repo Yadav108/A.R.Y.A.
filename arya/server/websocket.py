@@ -12,6 +12,7 @@ The conversation lives here on the server, not in a browser tab:
 import asyncio
 import os
 import re
+import time
 from collections.abc import AsyncIterator, Iterable
 from pathlib import Path
 
@@ -20,7 +21,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from arya.core import policy
+from arya.core import addressee, policy
 from arya.core.audit import LOG_FILE, log_event
 from arya.core.embedder import load_embedder
 from arya.core.llm import ARYA_MODE, LLMUnavailableError, stream_with_tools
@@ -134,7 +135,11 @@ async def preload_models() -> None:
     print("Embedder: model ready.")
 
     async def on_wake(command: str, wake_triggered: bool) -> None:
-        """Called by WakeWordEngine for wake-word hits and follow-up speech."""
+        """Called by WakeWordEngine for wake-word hits and follow-up speech.
+        Follow-ups (no wake word) must pass the addressee check first."""
+        if not wake_triggered and command and _smart_listening:
+            if not await _meant_for_arya(command):
+                return
         await _dispatch(command, wake_triggered=wake_triggered, announce_transcript=True)
 
     wake_engine.set_callback(on_wake, loop)
@@ -218,6 +223,7 @@ async def api_status(request: Request) -> JSONResponse:
         "conversation_seconds_left": int(getattr(wake_engine, "followup_seconds_left", lambda: 0)()),
         "local_only": security.is_loopback_bind(),
         "pending_confirmation": policy.has_pending(),
+        "smart_listening": _smart_listening,
     })
 
 
@@ -242,6 +248,15 @@ async def api_mode(request: Request) -> JSONResponse:
     return JSONResponse({"ok": True, "mode": mode})
 
 
+@app.post("/api/smart")
+async def api_smart(request: Request) -> JSONResponse:
+    if not _authorised(request):
+        return _deny()
+    body = await request.json()
+    set_smart_listening(bool(body.get("enabled")))
+    return JSONResponse({"ok": True, "enabled": _smart_listening})
+
+
 @app.get("/api/history")
 async def api_history(request: Request, limit: int = 30) -> JSONResponse:
     if not _authorised(request):
@@ -251,7 +266,7 @@ async def api_history(request: Request, limit: int = 30) -> JSONResponse:
     return JSONResponse({"messages": get_history(limit=max(1, min(limit, 100)))})
 
 
-_ACTIVITY_KINDS = {"tool", "confirmation_requested", "confirmation_approved", "confirmation_declined",
+_ACTIVITY_KINDS = {"tool", "confirmation_requested", "confirmation_approved", "confirmation_declined", "ignored_speech",
                    "blocked", "cloud_request", "connection_rejected"}
 
 
@@ -326,6 +341,47 @@ def set_microphone_muted(muted: bool) -> bool:
     wake_engine.set_muted(muted)
     emit_status("ARYA_MUTED" if muted else "ARYA_UNMUTED")
     return True
+
+
+# ── Smart listening (addressee detection) ────────────────────────────────────
+
+_smart_listening = addressee.SMART_LISTENING_DEFAULT
+_ignored_in_a_row = 0
+_last_spoke_at = 0.0          # when ARYA last finished speaking (monotonic)
+
+
+def set_smart_listening(enabled: bool) -> None:
+    global _smart_listening
+    _smart_listening = bool(enabled)
+    log_event("smart_listening", enabled=_smart_listening)
+    print(f"Smart listening: {'on' if _smart_listening else 'off'}")
+    emit_status(f"ARYA_SMART:{'on' if _smart_listening else 'off'}")
+
+
+async def _meant_for_arya(command: str) -> bool:
+    """Decide whether a follow-up was said to ARYA. Ignored speech is never
+    answered, never saved to history, and doesn't keep the conversation open;
+    a few ignored in a row end the conversation."""
+    global _ignored_in_a_row
+    from arya.memory.database import get_history
+
+    recent = get_history(limit=4)
+    last_reply = next((m["content"] for m in reversed(recent) if m["role"] == "assistant"), "")
+    since = time.monotonic() - _last_spoke_at if _last_spoke_at else None
+    ok, why = await addressee.is_addressed(command, last_reply=last_reply, seconds_since_reply=since,
+                                           recent=recent, pending_confirmation=policy.has_pending())
+    if ok:
+        _ignored_in_a_row = 0
+        return True
+    _ignored_in_a_row += 1
+    print(f"Not for ARYA ({why}) — staying quiet: {command!r}")
+    log_event("ignored_speech", chars=len(command), reason=why)      # what was said is not logged
+    await _send_all(f"ARYA_IGNORED:{command}")
+    if _ignored_in_a_row >= addressee.IGNORED_LIMIT:
+        _ignored_in_a_row = 0
+        wake_engine.end_conversation()
+        await _send_all("ARYA_CONVERSATION_ENDED")
+    return False
 
 
 def set_privacy_mode(mode: str) -> None:
@@ -497,6 +553,8 @@ async def _run_turn(message: str, wake_triggered: bool, announce_transcript: boo
                 print(f"Pipeline error: {exc}")
                 await _say(_error_message(exc))
         finally:
+            global _last_spoke_at
+            _last_spoke_at = time.monotonic()
             wake_engine.set_speaking(False)
             try:
                 await _send_all("ARYA_DONE")

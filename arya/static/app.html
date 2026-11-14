@@ -243,6 +243,16 @@
   @keyframes blink { 0%, 80%, 100% { opacity: 0.25; } 40% { opacity: 1; } }
   @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 
+  .ignored {
+    align-self: flex-end; display: flex; align-items: center; gap: 10px; max-width: 86%;
+    color: var(--faint); font-size: 12.5px; padding: 2px 4px; animation: rise 0.25s ease-out;
+  }
+  .ignored q { font-style: italic; color: var(--dim); }
+  .ignored button {
+    flex: none; border: 1px solid var(--line-2); background: transparent; color: var(--dim);
+    border-radius: 99px; padding: 3px 10px; font-size: 12px;
+  }
+  .ignored button:hover { color: var(--text); border-color: var(--c-idle); }
   .notice { align-self: center; background: var(--panel); border: 1px solid var(--line); border-radius: 99px; padding: 6px 14px; color: var(--dim); font-size: 12.5px; animation: rise 0.25s ease-out; }
 
   .confirm { display: flex; gap: 8px; margin-top: 10px; }
@@ -321,6 +331,10 @@
       <div class="row">
         <div><label for="micToggle">Microphone</label><small id="micNote">Listening for “Hey ARYA”</small></div>
         <label class="switch"><input type="checkbox" id="micToggle" checked aria-label="Microphone on"><span></span></label>
+      </div>
+      <div class="row">
+        <div><label for="smartToggle">Smart listening</label><small id="smartNote">Ignores talk that isn't meant for ARYA</small></div>
+        <label class="switch"><input type="checkbox" id="smartToggle" checked aria-label="Smart listening"><span></span></label>
       </div>
       <div style="margin-top:14px">
         <div class="segmented" role="group" aria-label="Privacy mode">
@@ -503,6 +517,23 @@
     scroll(true);
   }
 
+  function ignored(text) {
+    markHasMessages();
+    const row = Object.assign(document.createElement("div"), { className: "ignored" });
+    const label = document.createElement("span");
+    label.append("Heard — not for me: ", Object.assign(document.createElement("q"), { textContent: text }));
+    const btn = Object.assign(document.createElement("button"), { textContent: "It was for you" });
+    btn.title = "Answer this after all";
+    btn.onclick = () => { btn.disabled = true; row.remove(); send(text); };
+    row.append(label, btn);
+    inner.appendChild(row);
+    scroll();
+  }
+  function applySmart(on) {
+    $("smartToggle").checked = on;
+    $("smartNote").textContent = on ? "Ignores talk that isn't meant for ARYA" : "Off — answers everything said in a conversation";
+  }
+
   // ── Sidebar data ───────────────────────────────────────
   const TOOL_LABELS = {
     get_weather: ["☀", "Checked the weather"], get_battery: ["🔋", "Checked the battery"],
@@ -526,6 +557,7 @@
       case "confirmation_declined": return { icon: "✕", text: `You declined: ${label.toLowerCase()}` };
       case "blocked": return { icon: "⛔", text: `Blocked: ${(item.reason || label).slice(0, 80)}`, warn: true };
       case "cloud_request": return { icon: "☁", text: "Sent one question to the cloud" };
+      case "ignored_speech": return { icon: "🤫", text: "Stayed quiet — not meant for ARYA" };
       case "connection_rejected": return { icon: "🛡", text: `Refused a connection (${item.reason})`, warn: true };
       default: return { icon: "•", text: item.kind };
     }
@@ -579,6 +611,7 @@
     cloudConfigured = s.cloud_configured;
     applyMode(s.mode, s.cloud_configured);
     applyMuted(s.muted);
+    applySmart(s.smart_listening !== false);
     $("kvBrain").textContent = s.mode === "offline" ? `${s.brain} · local` : `${s.cloud_brain} · cloud`;
     $("kvBrain").title = `Local: ${s.brain}`;
     $("kvVoice").textContent = s.voice_engine;
@@ -641,6 +674,14 @@
     if (msg === "ARYA_UNMUTED") { applyMuted(false); return; }
     if (msg.startsWith("ARYA_MODE:")) { applyMode(msg.slice(10), cloudConfigured); refreshStatus().catch(() => {}); return; }
     if (msg === "ARYA_READY") { refreshStatus().catch(() => {}); return; }
+    if (msg.startsWith("ARYA_IGNORED:")) { ignored(msg.slice(13)); return; }
+    if (msg.startsWith("ARYA_SMART:")) { applySmart(msg.endsWith(":on")); return; }
+    if (msg === "ARYA_CONVERSATION_ENDED") {
+      clearInterval(conversationTimer); conversationUntil = 0;
+      notice("Conversation ended — say “Hey ARYA” to start again");
+      if (state === "conversation") setState("idle");
+      return;
+    }
     if (msg.startsWith("NOTIFY:")) { notice("⏰ " + msg.slice(7)); return; }
     if (msg.startsWith("ARYA_")) return;
     appendToCurrent(msg);
@@ -709,6 +750,10 @@
   $("micToggle").addEventListener("change", async (e) => {
     try { await api("/api/mute", { method: "POST", body: JSON.stringify({ muted: !e.target.checked }) }); }
     catch { toast("Couldn't change the microphone"); e.target.checked = !e.target.checked; }
+  });
+  $("smartToggle").addEventListener("change", async (e) => {
+    try { await api("/api/smart", { method: "POST", body: JSON.stringify({ enabled: e.target.checked }) }); }
+    catch { toast("Couldn't change smart listening"); e.target.checked = !e.target.checked; }
   });
   for (const [id, mode] of [["modeOffline", "offline"], ["modeCloud", "cloud"]]) {
     $(id).addEventListener("click", async () => {

@@ -400,7 +400,9 @@ class HotwordEngine:
                 if command:
                     print(f"WakeWord: ignored filler {command!r}")
                 return
-            self._refresh_followup_mode()
+            # No refresh here: the server decides whether this was meant for
+            # ARYA. A real exchange keeps the conversation open (set_speaking
+            # refreshes it after the reply); ignored chatter doesn't.
             print(f"WakeWord FOLLOW-UP: {command!r}")
         else:
             print(f"WakeWord command: {command!r}")
