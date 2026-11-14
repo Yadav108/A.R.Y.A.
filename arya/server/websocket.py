@@ -126,7 +126,8 @@ async def preload_models() -> None:
     loop = asyncio.get_event_loop()
     _loop = loop
 
-    print("STT: loading Whisper medium (CUDA)...")
+    from arya.core.stt import WHISPER_MODEL
+    print(f"STT: loading Whisper {WHISPER_MODEL} (CUDA)...")
     await loop.run_in_executor(None, load_model)
     print("STT: model ready.")
 
@@ -135,7 +136,7 @@ async def preload_models() -> None:
     async def on_wake(command: str, wake_triggered: bool) -> None:
         """Called by WakeWordEngine for wake-word hits and follow-up speech.
         Follow-ups (no wake word) must pass the addressee check first."""
-        if not wake_triggered and command and _smart_listening:
+        if not wake_triggered and command and _smart_listening and not _answers_bare_wake():
             if not await _meant_for_arya(command):
                 return
         await _dispatch(command, wake_triggered=wake_triggered, announce_transcript=True)
@@ -444,6 +445,19 @@ def set_microphone_muted(muted: bool) -> bool:
 _smart_listening = addressee.SMART_LISTENING_DEFAULT
 _ignored_in_a_row = 0
 _last_spoke_at = 0.0          # when ARYA last finished speaking (monotonic)
+# After a bare "Hey ARYA" ("Yes?"), the next sentence within this window is the
+# request itself — it skips the "was that for me?" check.
+BARE_WAKE_WINDOW_S = 10.0
+_bare_wake_until = 0.0
+
+
+def _answers_bare_wake() -> bool:
+    """True once for the first follow-up right after a bare wake word."""
+    global _bare_wake_until
+    if _bare_wake_until and time.monotonic() < _bare_wake_until:
+        _bare_wake_until = 0.0
+        return True
+    return False
 
 
 def set_smart_listening(enabled: bool) -> None:
@@ -651,7 +665,9 @@ async def _run_turn(message: str, wake_triggered: bool, announce_transcript: boo
             if not message:
                 # Bare "ARYA" — acknowledge and let the follow-up window catch
                 # the actual request. Never sent to the LLM or saved to history.
+                global _bare_wake_until
                 await _say(WAKE_ACK)
+                _bare_wake_until = time.monotonic() + BARE_WAKE_WINDOW_S   # the next sentence IS the request
                 return
 
             if announce_transcript:

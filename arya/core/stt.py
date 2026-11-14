@@ -78,9 +78,23 @@ def _register_nvidia_dll_dirs() -> None:
 # restores full precision if you have VRAM to spare.
 CUDA_COMPUTE_TYPE = os.getenv("WHISPER_COMPUTE_TYPE", "int8_float16")
 
+# Which Whisper model transcribes speech. "medium" is the most accurate that fits
+# next to the local LLM on a 4 GB GPU; "small" needs about half the memory (GPU and
+# the system RAM Windows reserves alongside it) at somewhat lower accuracy; "base"
+# and "tiny" are lighter still. English-only variants ("small.en", "medium.en") and
+# names like "large-v3" or "distil-small.en" also work. Downloaded once on first use.
+WHISPER_MODELS = {"tiny", "base", "small", "medium", "large-v1", "large-v2", "large-v3", "large-v3-turbo", "turbo",
+                  "tiny.en", "base.en", "small.en", "medium.en",
+                  "distil-small.en", "distil-medium.en", "distil-large-v2", "distil-large-v3"}
+WHISPER_MODEL = os.getenv("WHISPER_MODEL", "medium").strip() or "medium"
+if WHISPER_MODEL not in WHISPER_MODELS:
+    print(f"STT: unknown WHISPER_MODEL={WHISPER_MODEL!r} — using medium "
+          f"(choose from: {', '.join(sorted(WHISPER_MODELS))})")
+    WHISPER_MODEL = "medium"
+
 
 def load_model() -> WhisperModel:
-    """Load Whisper medium. Called once at server startup."""
+    """Load the Whisper model (WHISPER_MODEL, default medium). Called once at server startup."""
     global _model
     if _model is not None:
         return _model
@@ -88,12 +102,12 @@ def load_model() -> WhisperModel:
     _register_nvidia_dll_dirs()
 
     try:
-        _model = WhisperModel("medium", device="cuda", compute_type=CUDA_COMPUTE_TYPE)
-        print(f"STT: Whisper medium loaded on CUDA ({CUDA_COMPUTE_TYPE})")
+        _model = WhisperModel(WHISPER_MODEL, device="cuda", compute_type=CUDA_COMPUTE_TYPE)
+        print(f"STT: Whisper {WHISPER_MODEL} loaded on CUDA ({CUDA_COMPUTE_TYPE})")
     except Exception as exc:
         print(f"STT: CUDA load failed ({exc}), falling back to CPU int8")
-        _model = WhisperModel("medium", device="cpu", compute_type="int8")
-        print("STT: Whisper medium loaded on CPU (int8)")
+        _model = WhisperModel(WHISPER_MODEL, device="cpu", compute_type="int8")
+        print(f"STT: Whisper {WHISPER_MODEL} loaded on CPU (int8)")
 
     return _model
 
@@ -124,8 +138,8 @@ def _run_with_cpu_fallback(source, prompt: str | None = None) -> str:
     except RuntimeError as exc:
         if any(k in str(exc).lower() for k in ("cublas", "cuda", "cufft", "curand")):
             print(f"STT: CUDA runtime error — switching to CPU permanently. ({exc})")
-            _model = WhisperModel("medium", device="cpu", compute_type="int8")
-            print("STT: Whisper reloaded on CPU (int8)")
+            _model = WhisperModel(WHISPER_MODEL, device="cpu", compute_type="int8")
+            print(f"STT: Whisper {WHISPER_MODEL} reloaded on CPU (int8)")
             return _run_model(_model, source, prompt)
         raise
 
