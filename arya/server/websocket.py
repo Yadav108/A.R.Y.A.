@@ -17,7 +17,7 @@ from collections.abc import AsyncIterator, Iterable
 from pathlib import Path
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
@@ -130,9 +130,7 @@ async def preload_models() -> None:
     await loop.run_in_executor(None, load_model)
     print("STT: model ready.")
 
-    print("Embedder: loading all-MiniLM-L6-v2 (CPU)...")
-    await loop.run_in_executor(None, load_embedder)
-    print("Embedder: model ready.")
+    await loop.run_in_executor(None, load_embedder)      # prints its own loading / ready lines
 
     async def on_wake(command: str, wake_triggered: bool) -> None:
         """Called by WakeWordEngine for wake-word hits and follow-up speech.
@@ -146,6 +144,14 @@ async def preload_models() -> None:
     if hasattr(wake_engine, "set_interrupt_callback"):
         # Dedicated detector: go quiet the instant "Hey ARYA" is heard mid-reply.
         wake_engine.set_interrupt_callback(interrupt)
+    security.install_log_redaction()             # no ?token=… in the console log
+    # Sources / visuals produced while answering go to the app window.
+    import json as _json
+    import arya.core.llm as _llm
+
+    _llm.set_artifact_sink(lambda kind, payload: emit_status(f"ARYA_{kind}:{_json.dumps(payload)}"))
+    _start_knowledge_indexing()
+
     if hasattr(wake_engine, "set_event_callback"):
         wake_engine.set_event_callback(emit_status)
     wake_engine.start()
@@ -196,7 +202,8 @@ async def classic(request: Request) -> HTMLResponse:
 # ── App API (token-protected) ─────────────────────────────────────────────────
 
 def _authorised(request: Request) -> bool:
-    return security.token_ok(request.headers.get("x-arya-token")) and security.origin_ok(request.headers.get("origin"))
+    token = request.headers.get("x-arya-token") or request.query_params.get("token")
+    return security.token_ok(token) and security.origin_ok(request.headers.get("origin"))
 
 
 def _deny() -> JSONResponse:
@@ -246,6 +253,95 @@ async def api_mode(request: Request) -> JSONResponse:
         return JSONResponse({"error": "mode must be offline or cloud"}, status_code=400)
     set_privacy_mode(mode)
     return JSONResponse({"ok": True, "mode": mode})
+
+
+# ── Knowledge library ─────────────────────────────────────────────────────────
+
+_kb_last_emit = 0.0
+
+
+def _kb_progress(st) -> None:
+    """Throttled progress events while indexing (and one when finished)."""
+    global _kb_last_emit
+    import json as _json
+    from arya.knowledge import library
+
+    now = time.monotonic()
+    if st.running and now - _kb_last_emit < 1.5:
+        return
+    _kb_last_emit = now
+    emit_status("ARYA_KB:" + _json.dumps(library.stats()))
+
+
+def _start_knowledge_indexing() -> None:
+    try:
+        from arya.knowledge import library
+
+        library.start_background_indexing(progress=_kb_progress)
+    except Exception as exc:
+        print(f"Knowledge indexing not started: {exc}")
+
+
+@app.get("/api/kb/status")
+async def api_kb_status(request: Request) -> JSONResponse:
+    if not _authorised(request):
+        return _deny()
+    from arya.knowledge import library
+
+    return JSONResponse(library.stats())
+
+
+@app.post("/api/kb/reindex")
+async def api_kb_reindex(request: Request) -> JSONResponse:
+    if not _authorised(request):
+        return _deny()
+    _start_knowledge_indexing()
+    log_event("knowledge_reindex")
+    return JSONResponse({"ok": True})
+
+
+@app.get("/api/kb/page")
+async def api_kb_page(request: Request, doc: int, page: int, q: str = "") -> Response:
+    """A page of a course PDF as an image, with the cited passage highlighted."""
+    if not _authorised(request):
+        return _deny()
+    from arya.knowledge import library
+
+    try:
+        png = await asyncio.to_thread(library.render_page, doc, page, q)
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)[:200]}, status_code=404)
+    if png is None:
+        return JSONResponse({"error": "no preview for this page"}, status_code=404)
+    return Response(png, media_type="image/png", headers={"Cache-Control": "private, max-age=600"})
+
+
+@app.get("/api/kb/passage")
+async def api_kb_passage(request: Request, doc: int, page: int) -> JSONResponse:
+    """Text of a page (for Word / PowerPoint / notes sources that have no page image)."""
+    if not _authorised(request):
+        return _deny()
+    from arya.knowledge import library
+
+    with library._connect() as c:
+        rows = c.execute("SELECT text FROM chunks WHERE doc_id = ? AND page = ? ORDER BY id", (doc, page)).fetchall()
+        meta = library.document(doc)
+    if meta is None:
+        return JSONResponse({"error": "unknown document"}, status_code=404)
+    return JSONResponse({"title": meta["title"], "kind": meta["kind"], "pages": meta["pages"],
+                         "text": "\n\n".join(r["text"] for r in rows)})
+
+
+@app.get("/api/visual/{image_id}")
+async def api_visual(request: Request, image_id: str) -> Response:
+    if not _authorised(request):
+        return _deny()
+    from arya.knowledge import visuals
+
+    png = visuals.image(image_id)
+    if png is None:
+        return JSONResponse({"error": "expired"}, status_code=404)
+    return Response(png, media_type="image/png", headers={"Cache-Control": "private, max-age=3600"})
 
 
 @app.post("/api/smart")
@@ -473,9 +569,38 @@ async def _say(text: str) -> None:
     await _speak_stream(_aiter([text]))
 
 
+LOW_MEMORY_GB = 1.5   # below this the local model (~2.5 GB) usually can't load, or its server crashes
+
+
+def _model_down_message(detail: str) -> str:
+    """Say *why* the local model failed: low memory, Ollama not running, or a model missing."""
+    d = detail.lower()
+    free_gb = ollama_running = None
+    try:
+        import psutil
+
+        free_gb = psutil.virtual_memory().available / 2**30
+        ollama_running = any((p.info["name"] or "").lower().startswith("ollama")
+                             for p in psutil.process_iter(["name"]))
+    except Exception:
+        pass
+    print(f"Model unavailable — free RAM: {free_gb if free_gb is None else round(free_gb, 2)} GB, "
+          f"Ollama running: {ollama_running}")
+    if ("more system memory" in d or "out of memory" in d or "cuda error" in d
+            or (free_gb is not None and free_gb < LOW_MEMORY_GB)):
+        free = f", only {free_gb:.1f} gigabytes are free" if free_gb is not None else ""
+        return (f"My local model couldn't run because the computer is low on memory{free}. "
+                "Close a few apps or browser tabs and ask me again.")
+    if "not found" in d and "ollama pull" in d:
+        return "My local model isn't downloaded yet. Run ollama pull, then ask me again."
+    if ollama_running is False:
+        return "My local model isn't running. Start Ollama and ask me again."
+    return "My local model isn't responding right now; it may be restarting. Ask me again in a moment."
+
+
 def _error_message(exc: Exception) -> str:
     if isinstance(exc, LLMUnavailableError):
-        return "I can't reach Groq and my local model isn't running. Start Ollama and try again."
+        return _model_down_message(str(exc))
     err = str(exc).lower()
     if "rate_limit" in err or "rate limit" in err:
         return "I've hit my daily token limit. Please wait a few minutes."

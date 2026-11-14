@@ -91,3 +91,35 @@ def origin_ok(origin: str | None) -> bool:
 
 def is_local_client(client_host: str | None) -> bool:
     return client_host in {"127.0.0.1", "::1", "localhost"}
+
+
+# ── Keep the token out of logs ────────────────────────────────────────────────
+# Browsers can't put headers on <img> or WebSocket requests, so the app passes
+# the token as ?token=… — and uvicorn prints every request path. Blank it out.
+
+import logging as _logging
+import re as _re
+
+_TOKEN_IN_URL = _re.compile(r"((?:^|[?&])token=)[^&\s\"']*", _re.IGNORECASE)
+
+
+def redact(text: str) -> str:
+    return _TOKEN_IN_URL.sub(r"\1***", text)
+
+
+class RedactTokenFilter(_logging.Filter):
+    def filter(self, record: _logging.LogRecord) -> bool:
+        if isinstance(record.args, tuple) and record.args:
+            record.args = tuple(redact(a) if isinstance(a, str) and "token=" in a.lower() else a
+                                for a in record.args)
+        if isinstance(record.msg, str) and "token=" in record.msg.lower():
+            record.msg = redact(record.msg)
+        return True
+
+
+def install_log_redaction() -> None:
+    """Call after uvicorn has configured logging (e.g. at app startup). Idempotent."""
+    for name in ("uvicorn.access", "uvicorn.error"):
+        logger = _logging.getLogger(name)
+        if not any(isinstance(f, RedactTokenFilter) for f in logger.filters):
+            logger.addFilter(RedactTokenFilter())

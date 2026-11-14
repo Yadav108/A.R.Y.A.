@@ -27,7 +27,8 @@ IGNORED_LIMIT = 3                 # this many ignored in a row ends the conversa
 _NAME = re.compile(r"\b(?:arya|aria|ariya|aarya)\b", re.IGNORECASE)
 _ALWAYS_FOR_ARYA = re.compile(
     r"^\W*(?:stop|cancel|never ?mind|be quiet|shut up|thanks?|thank you|cheers|bye|goodbye|"
-    r"that'?s (?:all|it)|yes|yeah|yep|no|nope|repeat that|say (?:that|it) again|what\??)\W*$",
+    r"that'?s (?:all|it)|yes|yeah|yep|no|nope|repeat that|say (?:that|it) again|what\??|"
+    r"go ahead|go on|continue|carry on|do it|tell me more|more please)\W*$",
     re.IGNORECASE,
 )
 
@@ -39,12 +40,34 @@ _OTHER_PERSON = re.compile(
     r"perfect|good|look|listen|please|maybe|anyway|honestly|really|true|exactly|what|why|how|wow)\b)[A-Z][a-z]+)"
     r"\s*,",
 )
-_ASSISTANT_REQUEST = re.compile(
-    r"^\W*(?:(?:can|could|would|will) you|please|what(?:'s| is| are)|how (?:much|many|long|far|do|does|is)|"
-    r"when (?:is|does)|where is|who (?:is|was)|set|start|stop|open|close|play|pause|skip|turn|remind|"
-    r"calculate|convert|search|find|look up|tell me|show me|read|list|delete|move|rename|explain|define)\b",
+# Commands of the kind people give an assistant: answered without asking the model.
+_ASSISTANT_COMMAND = re.compile(
+    r"^\W*(?:please\s+)?(?:set|start|open|close|play|pause|skip|turn|remind|calculate|convert|search|"
+    r"look up|show me|list|delete|move|rename|define|plot|graph|draw|sketch|mute|unmute)\b",
     re.IGNORECASE,
 )
+# Question openers. People ask each other these too ("Where is it?", "Can you explain that?"),
+# so they only skip the model when the question has real content of its own.
+_QUESTION_OPENER = re.compile(
+    r"^\W*(?:(?:can|could|would|will) you|please|what(?:'s| is| are| was| does| do)|how (?:much|many|long|far|"
+    r"do|does|is|to)|when (?:is|does|was)|where (?:is|are)|who (?:is|was)|why (?:is|does|do)|tell me|read|find|"
+    r"explain|describe)\b",
+    re.IGNORECASE,
+)
+_VAGUE = set("""it its that this these those there here then them they him her his she he we us our me my you your
+something anything everything thing stuff one ones what why how where when who which
+do does did done doing is are was were be been have has had get got go going gone come
+tell told say said know knew mean meant think explain describe please again now just really
+can could would will should shall might must not don't didn't doesn't isn't wasn't aren't won't
+the and but for with about from into out off over very also only still even
+okay well yeah yes right sure thanks""".split())
+
+
+def _has_content(text: str) -> bool:
+    """'Can you explain sliding friction' -> True; 'Can you explain that?' / 'Where is it?' -> False."""
+    rest = _QUESTION_OPENER.sub("", text, count=1)
+    words = re.findall(r"[a-zA-Z][a-zA-Z']+|\d+", rest.lower())
+    return any((w.isdigit() or len(w) >= 3) and w not in _VAGUE for w in words)
 
 _PROMPT = (
     "A voice assistant called ARYA is in a hands-free conversation with its user, who does not need "
@@ -77,16 +100,24 @@ def quick_verdict(text: str, pending_confirmation: bool = False) -> bool | None:
             return True
     except Exception:
         pass
+    try:
+        from arya.core.llm import quick_status_command
+        if quick_status_command(text) is not None:
+            return True                   # "battery?", "what time is it"
+    except Exception:
+        pass
     if _OTHER_PERSON.match(text):
         return False                      # opens by addressing someone else
-    if _ASSISTANT_REQUEST.match(text):
-        return True                       # a command/question of the kind people ask an assistant
-    return None
+    if _ASSISTANT_COMMAND.match(text):
+        return True                       # a command of the kind people give an assistant
+    if _QUESTION_OPENER.match(text) and _has_content(text):
+        return True                       # "What is the Coriolis acceleration?"
+    return None                           # the local model decides from context
 
 
 async def is_addressed(text: str, *, last_reply: str = "", seconds_since_reply: float | None = None,
                        recent: list[dict] | None = None, pending_confirmation: bool = False) -> tuple[bool, str]:
-    """(addressed?, reason). Fails open: if the model can't decide, ARYA answers."""
+    """(addressed?, reason). If the model can't decide: answers in cloud mode, stays quiet offline."""
     verdict = quick_verdict(text, pending_confirmation)
     if verdict is not None:
         return verdict, "rule"
@@ -110,6 +141,14 @@ async def is_addressed(text: str, *, last_reply: str = "", seconds_since_reply: 
             temperature=0, max_tokens=3,
         )
     except LocalLLMUnavailable as exc:
+        # Offline, the same model would have to answer, so answering an unclear sentence only
+        # produces an error message. In cloud mode Groq can still answer: fail open there.
+        try:
+            from arya.core.llm import ARYA_MODE
+        except Exception:
+            ARYA_MODE = "offline"
+        if ARYA_MODE == "offline":
+            return False, f"model unavailable, unclear sentence ignored ({str(exc)[:80]})"
         return True, f"model unavailable ({exc})"
     answer = (reply.get("content") or "").strip().upper()
     took = time.monotonic() - started

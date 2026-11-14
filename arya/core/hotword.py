@@ -73,6 +73,16 @@ _VERIFY_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# Bare "stop" while ARYA is talking (no wake word). ARYA's own voice reaches the
+# mic too, so only a short burst clearly louder than its recent playback level
+# counts, and only if the burst transcribes to nothing but a stop phrase.
+STOP_BARGE_IN = os.getenv("ARYA_BARGE_IN_STOP", "1") != "0"
+STOP_LOUDER_THAN_ECHO = float(os.getenv("BARGE_IN_STOP_RATIO", "1.8"))  # x ARYA's loud (90th pct) level
+STOP_MAX_VOICED_CHUNKS = 25        # > 2 s of loud audio isn't a "stop" — it's ARYA (or a conversation)
+STOP_MIN_VOICED_CHUNKS = 2         # ≥ 160 ms
+STOP_END_SILENCE_CHUNKS = 5        # 400 ms below the gate ends the burst
+ECHO_HISTORY_CHUNKS = 75           # ~6 s of ARYA's playback level, kept across replies
+
 # Follow-ups that are just noise/filler — never sent to the LLM.
 _FILLER = {
     "", "uh", "um", "umm", "hmm", "hm", "mm", "mhm", "mm-hmm", "uh-huh", "ah", "oh", "huh", "er", "erm",
@@ -141,6 +151,20 @@ def _strip_wake_words(text: str) -> str:
     return leading.sub("", text).strip()
 
 
+def is_stop_phrase(text: str) -> bool:
+    """'Stop.', 'stop, stop', 'be quiet please', 'ARYA, stop' -> True; 'stop the motor' -> False."""
+    t = re.sub(r"[^\w\s']", " ", _strip_wake_words(text or "")).lower()
+    t = re.sub(r"\b(?:please|now|okay|ok)\b", " ", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    if not t:
+        return False
+    phrases = _ww().BARGE_IN_STOP_PHRASES
+    if t in phrases:
+        return True
+    words = t.split()                                   # "stop stop", "stop, be quiet"
+    return all(w in ("stop", "quiet", "silence", "enough", "cancel") for w in words)
+
+
 def _transcribe(audio: np.ndarray) -> str:
     from arya.core.stt import transcribe_array
     return transcribe_array(audio)
@@ -174,6 +198,7 @@ class HotwordEngine:
         self._history: deque = deque(maxlen=VERIFY_WINDOW_CHUNKS)
         self._muted = False
         self._event: Callable[[str], None] | None = None
+        self._echo_levels: deque = deque(maxlen=ECHO_HISTORY_CHUNKS)   # mic level while ARYA talks
 
     # ── Public API (matches WakeWordEngine) ──────────────────────────────────
 
@@ -287,7 +312,7 @@ class HotwordEngine:
         score = self._detector.score(chunk)
         self._history.append(chunk)
 
-        if self._capture is not None:
+        if self._capture is not None and self._capture["kind"] != "stop":
             self._capture_step(chunk, rms, now)
             self._preroll.append(chunk)
             return
@@ -303,6 +328,7 @@ class HotwordEngine:
             self._hot_run = 0
             self._cooldown_until = now + TRIGGER_COOLDOWN_S
             print(f"WakeWord: detector fired (score {score:.2f}{', while speaking' if ducked else ''})")
+            # (a "Hey ARYA" takes over from a stop burst being captured)
             cap = {"kind": "wake", "audio": [], "start": now, "speech": False, "silence": 0, "voiced": 0,
                    "ducked": ducked, "verified": threading.Event(), "ok": not VERIFY, "aborted": False}
             self._capture = cap
@@ -314,6 +340,19 @@ class HotwordEngine:
                 cap["verified"].set()
                 self._accept_wake(cap)
             return
+
+        if self._capture is not None:                     # a possible "stop" burst
+            self._stop_step(chunk, rms)
+            return
+
+        if ducked and STOP_BARGE_IN and self._interrupt_or_callback():
+            gate = self._stop_gate()
+            if rms > gate:
+                self._capture = {"kind": "stop", "audio": list(self._preroll)[-2:] + [chunk], "voiced": 1,
+                                 "silence": 0, "gate": gate, "levels": [rms]}
+                self._preroll.clear()
+                return
+            self._echo_levels.append(rms)                  # learn how loud ARYA itself is in the mic
 
         speechy = rms > self._speech_threshold()
         if not ducked and not speechy:
@@ -337,6 +376,54 @@ class HotwordEngine:
         self._refresh_followup_mode()
         if cap["ducked"] and self._interrupt is not None:
             self._post(self._interrupt())
+
+    # ── Bare "stop" while ARYA is talking ───────────────────────────────────
+
+    def _interrupt_or_callback(self) -> bool:
+        return self._callback is not None
+
+    def _stop_gate(self) -> float:
+        """How loud a burst must be to be you, not ARYA's own voice in the mic."""
+        floor = self._speech_threshold() * 2.0
+        if len(self._echo_levels) < 10:
+            return max(floor, self._speech_threshold() * _ww().BARGE_IN_DUCK_MULTIPLIER)   # not learned yet
+        loud = float(np.percentile(np.fromiter(self._echo_levels, float), 90))
+        return max(floor, loud * STOP_LOUDER_THAN_ECHO)
+
+    def _stop_step(self, chunk: np.ndarray, rms: float) -> None:
+        cap = self._capture
+        cap["audio"].append(chunk)
+        if rms > cap["gate"] * 0.6:                        # a little hysteresis inside a word
+            cap["voiced"] += 1
+            cap["silence"] = 0
+            cap["levels"].append(rms)
+        else:
+            cap["silence"] += 1
+        if cap["voiced"] > STOP_MAX_VOICED_CHUNKS:
+            # Long and loud: ARYA's own voice (louder than learned) or someone talking.
+            # Learn from it so ARYA's playback doesn't keep opening bursts.
+            self._echo_levels.extend(cap["levels"])
+            self._capture = None
+            return
+        if cap["silence"] >= STOP_END_SILENCE_CHUNKS:
+            self._capture = None
+            if cap["voiced"] >= STOP_MIN_VOICED_CHUNKS:
+                threading.Thread(target=self._finish_stop, args=(cap,), daemon=True).start()
+
+    def _finish_stop(self, cap: dict) -> None:
+        try:
+            heard = _transcribe(np.concatenate(cap["audio"]))
+        except Exception as exc:
+            print(f"WakeWord: stop check failed ({exc})")
+            return
+        if is_stop_phrase(heard):
+            print(f"WakeWord BARGE-IN stop (no wake word): {heard!r}")
+            if self._callback is not None:
+                self._post(self._callback("stop", False))   # the server stops the reply at once
+        else:
+            if heard.strip():
+                print(f"WakeWord: ignored while speaking (not a stop): {heard!r}")
+            self._echo_levels.extend(cap["levels"][:5])      # most likely ARYA's voice — raise the gate a bit
 
     def _verify(self, cap: dict, wake_audio: np.ndarray) -> None:
         heard = ""
