@@ -44,7 +44,8 @@ All conversation history and notes are stored locally in a SQLite database.
 |---|---|
 | **Weather** | Current conditions via Open-Meteo (no API key needed) |
 | **System** | CPU usage, RAM usage, battery level |
-| **OS** | Open apps, open URLs, search for files, run terminal commands |
+| **OS** | Open apps, open URLs, search for files, run read-only terminal commands |
+| **Files & apps** | List folders, read text files, move/rename files, delete to the Recycle Bin, close apps (with spoken confirmation) |
 | **Productivity** | Set timers, start Pomodoro sessions (25 min focus / 5 min break), read/write clipboard |
 | **Knowledge** | Calculator, Wikipedia summaries |
 | **Notes** | Save, retrieve, search, and tag notes (stored in SQLite) |
@@ -163,6 +164,24 @@ Then open **http://localhost:8000** in Chrome or Edge.
   `%LOCALAPPDATA%\ARYA\logs\actions.log` (tool + arguments, free text redacted; no conversation text).
 - LAN access is opt-in: `ARYA_HOST=0.0.0.0 ARYA_ALLOWED_HOSTS=<your-pc-ip>`, then open
   `http://<your-pc-ip>:8000/#token=<token>` on the other device. Delete the token file to rotate it.
+
+**Laptop access — what ARYA may do, and when it asks first** (`arya/core/policy.py`):
+- **Asks for a spoken "yes" first:** deleting a file (always to the Recycle Bin, never permanent),
+  moving/renaming a file (never overwrites), closing an app (asks its windows to close like
+  clicking ✕ — never force-kills; Windows processes and ARYA itself are refused).
+  *"Move report.pdf in Downloads to the Recycle Bin? Say yes or no."* → "yes" / "no". The question
+  expires after 60 s; changing the subject cancels it.
+- **Injection guard:** once a request has read text someone else could have written (clipboard,
+  files, folder listings, command output, Wikipedia, notes), anything with a side effect — opening
+  a URL, running a command, copying to the clipboard, opening an app — needs a "yes" too, and ARYA
+  tells you where the instruction came from. Tool output is marked as data, never instructions.
+- **Folder sandbox:** file tools and `type`/`dir`/`tree` only reach your user folder (add more with
+  `ARYA_ALLOWED_DIRS`). AppData, hidden folders (`.ssh`, `.aws`…) and secret files (`.env`, keys,
+  certificates, password databases) are always off limits.
+- **Honesty guard:** if the model claims it deleted/moved/opened something that didn't actually run,
+  the sentence is replaced — ARYA never says it did something it didn't.
+- In `ARYA_MODE=cloud`, reading private data (clipboard, files, notes) also asks first, because tool
+  results would be sent to Groq. Every confirmation, approval, refusal and block is in the action log.
 
 ---
 

@@ -20,6 +20,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from arya.core import policy
 from arya.core.audit import LOG_FILE, log_event
 from arya.core.embedder import load_embedder
 from arya.core.llm import ARYA_MODE, LLMUnavailableError, stream_with_tools
@@ -276,7 +277,9 @@ async def _dispatch(message: str, wake_triggered: bool = False, announce_transcr
     global _current_turn
     await interrupt()
 
-    if _classify_closing(message) == "stop":
+    # While ARYA waits for "yes"/"no" on an action, "stop"/"cancel"/"no thanks"
+    # are answers to that question — let the turn pipeline handle them.
+    if not policy.has_pending() and _classify_closing(message) == "stop":
         speaker.stop()
         wake_engine.end_conversation()
         if announce_transcript:
@@ -305,7 +308,7 @@ async def _run_turn(message: str, wake_triggered: bool, announce_transcript: boo
             if announce_transcript:
                 await _send_all(f"TRANSCRIPT:{message}")
 
-            closing = _classify_closing(message)
+            closing = None if policy.has_pending() else _classify_closing(message)
             if closing in ("end", "thanks"):
                 wake_engine.end_conversation()
                 if closing == "thanks":
