@@ -112,8 +112,24 @@ OLLAMA_MODEL=llama3.2:3b           # offline fallback when Groq fails
 ```
 
 **Hands-free use:** run `python main.py` and just talk — no browser tab needed.
-Say "Hey ARYA, …" (or just "ARYA" and wait for "Yes?"). After each reply ARYA keeps listening
-for ~12 s, so you can follow up without the wake word. Say "stop" to interrupt, "thanks" to end.
+Say "Hey ARYA, …" (or just "ARYA" and wait for "Yes?"). Once woken, the conversation stays open:
+just keep talking, no wake word needed, until 8 minutes after the last exchange
+(`CONVERSATION_MINUTES=5` to change it). Say "Hey ARYA, stop" to interrupt; "that's all", "thanks" or "bye" to end.
+
+**Wake word ("Hey ARYA").** ARYA uses a dedicated keyword-spotting model (openWakeWord
+features + a small classifier trained for "Hey ARYA") instead of transcribing everything it hears.
+Every detection is double-checked: the audio that triggered it is transcribed and must
+actually contain "ARYA", so sound-alikes ("I am", "Iron the shirt…") are dropped silently.
+A synthetic-voice model ships in `arya/models/wakeword/`. To tune it to *your* voice and mic
+(strongly recommended, ~2 minutes):
+```bash
+.venv\Scripts\python.exe tools\record_wakeword.py   # say "Hey ARYA" 12x, talk normally, stay quiet
+.venv\Scripts\python.exe tools\train_wakeword.py    # retrain (re-uses cached TTS clips)
+```
+Your recordings stay local (`arya/models/wakeword/user_samples/`, git-ignored).
+Tuning: `WAKE_THRESHOLD=0.6` (higher = fewer false triggers, lower = more sensitive);
+`WAKE_VERIFY=0` skips the double-check (faster, more false wakes);
+`WAKE_ENGINE=whisper` switches back to the old Whisper-based detection.
 
 **Offline fallback (recommended):** `winget install Ollama.Ollama` then `ollama pull llama3.2:3b`.
 Used automatically when Groq is rate-limited or unreachable.
