@@ -1,3 +1,4 @@
+import os
 import sqlite3
 import threading
 from pathlib import Path
@@ -5,7 +6,8 @@ from pathlib import Path
 import numpy as np
 
 
-DB_PATH = Path(__file__).resolve().parent / "arya.db"
+# ARYA_DB_PATH points tests (or a second profile) at another database.
+DB_PATH = Path(os.getenv("ARYA_DB_PATH") or Path(__file__).resolve().parent / "arya.db")
 _DB_LOCK = threading.RLock()
 
 _MAX_MEMORY_ROWS = 10_000

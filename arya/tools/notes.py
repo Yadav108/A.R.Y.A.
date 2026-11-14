@@ -1,10 +1,12 @@
 import asyncio
+import os
 import sqlite3
 import threading
 from pathlib import Path
 
 
-DB_PATH = Path(__file__).resolve().parents[1] / "memory" / "arya.db"
+# ARYA_DB_PATH points tests (or a second profile) at another database.
+DB_PATH = Path(os.getenv("ARYA_DB_PATH") or Path(__file__).resolve().parents[1] / "memory" / "arya.db")
 _DB_LOCK = threading.RLock()
 
 

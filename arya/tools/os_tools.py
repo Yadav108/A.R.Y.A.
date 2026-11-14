@@ -3,6 +3,7 @@ import os
 import shutil
 import subprocess
 import webbrowser
+from pathlib import Path
 
 
 # Only these read-only, informational commands may be run via voice — the LLM
@@ -18,7 +19,13 @@ ALLOWED_COMMANDS = {
 
 # Shell metacharacters that could chain an allowed command into something
 # else (e.g. "echo hi & del /f x") are always blocked, even for allowed verbs.
-_SHELL_METACHARACTERS = set("&|;<>`$")
+# % and ! would expand environment variables (%USERPROFILE%\.ssh\...), ^ escapes
+# characters past this check - all blocked too.
+_SHELL_METACHARACTERS = set("&|;<>`$%!^")
+
+# Commands whose arguments are paths: those paths must pass the folder sandbox
+# (so "type" can't read ARYA's token, SSH keys, .env files...).
+_PATH_COMMANDS = {"type", "dir", "tree"}
 
 
 # os.startfile() / ShellExecute only resolves a bare name if it's an exact
@@ -162,10 +169,14 @@ async def open_url(url: str) -> str:
         return f"Failed to open {normalized_url}: {exc}"
 
 
-async def file_search(filename: str, search_path: str = "C:\\Users") -> str:
+async def file_search(filename: str, search_path: str = "") -> str:
+    from arya.core.policy import HOME, check_path
+
     target = filename.strip().lower()
     if not target:
         return "No files found"
+    root = check_path(search_path) if search_path.strip() else HOME
+    search_path = str(root)
 
     matches: list[str] = []
     permission_error_count = 0
@@ -177,7 +188,9 @@ async def file_search(filename: str, search_path: str = "C:\\Users") -> str:
 
     try:
         for root, dirs, files in os.walk(search_path, onerror=_on_walk_error):
-            dirs[:] = [d for d in dirs if not d.startswith(".")]
+            # Same sandbox as the file tools: skip hidden, AppData and system folders.
+            dirs[:] = [d for d in dirs if not d.startswith(".") and d.lower() not in
+                       ("appdata", "application data", "local settings", "node_modules", "__pycache__")]
 
             for name in files:
                 if target in name.lower():
@@ -207,17 +220,27 @@ async def run_command(command: str) -> str:
     if any(ch in normalized_command for ch in _SHELL_METACHARACTERS):
         return "Command not allowed: shell operators like &, |, ;, <, >, `, $ are blocked."
 
-    first_token = normalized_command.split()[0].lower()
+    tokens = normalized_command.split()
+    first_token = tokens[0].lower()
     if first_token not in ALLOWED_COMMANDS:
         return (
             f"Command not allowed: '{first_token}' isn't in ARYA's allowed command "
             f"list ({', '.join(sorted(ALLOWED_COMMANDS))})."
         )
+    if first_token in _PATH_COMMANDS:
+        from arya.core.policy import check_path
+
+        path_args = [t.strip('"') for t in tokens[1:] if not t.startswith("/")]
+        if first_token == "type" and not path_args:
+            return "Command not allowed: type needs a file path."
+        for arg in path_args:
+            check_path(arg)            # raises PolicyError with a spoken reason
 
     try:
         result = subprocess.run(
             normalized_command,
             shell=True,
+            cwd=str(Path.home()),
             capture_output=True,
             text=True,
             timeout=10,
