@@ -141,6 +141,17 @@ python main.py
 
 Then open **http://localhost:8000** in Chrome or Edge.
 
+**Security.** ARYA can run commands and read your clipboard, so it only obeys this computer:
+- The server listens on `127.0.0.1` only — nothing else on your network can connect.
+- Every WebSocket needs a secret token, generated once into `%LOCALAPPDATA%\ARYA\token`
+  (outside the repo). The page gets it automatically when opened on this machine; other
+  scripts read the file and connect to `ws://127.0.0.1:8000/ws?token=...` (see `test_ws.py`).
+- Requests with a foreign `Host` header (DNS rebinding) or from other websites (`Origin`) are refused.
+- Every action ARYA takes and every connection attempt is logged locally to
+  `%LOCALAPPDATA%\ARYA\logs\actions.log` (tool + arguments, free text redacted; no conversation text).
+- LAN access is opt-in: `ARYA_HOST=0.0.0.0 ARYA_ALLOWED_HOSTS=<your-pc-ip>`, then open
+  `http://<your-pc-ip>:8000/#token=<token>` on the other device. Delete the token file to rotate it.
+
 ---
 
 ## Usage

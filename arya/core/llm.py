@@ -1144,11 +1144,16 @@ async def _execute_tool(tool_name: str, args: dict) -> str:
     """Run one tool. Failures come back as text so the model can recover
     (retry with fixed arguments, or explain the problem) instead of the whole
     turn crashing with 'ARYA encountered an error'."""
+    from arya.core.audit import log_tool
+
+    started = time.monotonic()
     try:
         result = await _dispatch_tool(tool_name, args)
     except Exception as exc:
         print(f"Tool error ({tool_name}): {exc}")
+        log_tool(tool_name, args, ok=False, ms=(time.monotonic() - started) * 1000, error=str(exc))
         return f"Tool '{tool_name}' failed: {exc}"
+    log_tool(tool_name, args, ok=True, ms=(time.monotonic() - started) * 1000)
     return str(result)
 
 

@@ -585,7 +585,9 @@
       if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) return;
 
       const wsProto = location.protocol === "https:" ? "wss" : "ws";
-      socket = new WebSocket(`${wsProto}://${location.host || "localhost:8000"}/ws`);
+      // Token: injected by the server for this machine, or passed as #token=... in the URL.
+      const token = window.ARYA_TOKEN || new URLSearchParams(location.hash.slice(1)).get("token") || "";
+      socket = new WebSocket(`${wsProto}://${location.host || "localhost:8000"}/ws?token=${encodeURIComponent(token)}`);
       socket.binaryType = "arraybuffer";
 
       socket.onopen = () => {
@@ -683,7 +685,8 @@
 
       socket.onerror = () => setStatus("Connection error");
       socket.onclose = () => {
-        setStatus("Disconnected — reconnecting...");
+        setStatus(token ? "Disconnected — reconnecting..."
+                        : "Not authorised — open http://localhost:8000 on the ARYA computer");
         orbStage.classList.add("offline");
         talkButton.disabled = true;
         if (!reconnectTimer) reconnectTimer = setInterval(connectWebSocket, 3000);
