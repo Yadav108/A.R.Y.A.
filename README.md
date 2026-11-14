@@ -238,6 +238,21 @@ Morning briefing
 
 ---
 
+## Tests & quality benchmark
+
+```bash
+pip install -r requirements-dev.txt
+pytest                        # ~130 tests, no microphone/GPU needed; uses throwaway data
+python -m arya.eval           # 59 golden questions through ARYA's real answer pipeline
+python -m arya.eval --tag control -v     # one topic, printing every answer
+```
+
+The benchmark (`arya/eval/golden.yaml`) checks each answer for required facts, known wrong
+claims, raw LaTeX and length, uses your real course library but never your conversation history,
+and compares every run with the previous one. See `PLAN.md` for the roadmap.
+
+---
+
 ## Project Structure
 
 ```
