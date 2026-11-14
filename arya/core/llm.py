@@ -15,7 +15,14 @@ from dotenv import load_dotenv
 from groq import AsyncGroq
 
 from arya.core.llm_local import OLLAMA_MODEL, LocalLLMUnavailable, chat_local, stream_local
-from arya.memory.database import get_history, save_message, save_memory_vector, semantic_search
+from arya.core.speech_math import latex_to_text
+from arya.memory.database import get_history, save_memory_vector, semantic_search
+from arya.memory.database import save_message as _db_save_message
+
+
+def save_message(role: str, content: str) -> int:
+    """History keeps ARYA's maths readable (ζ, ωₙ²), so the model isn't shown its own LaTeX to copy."""
+    return _db_save_message(role, latex_to_text(content) if role == "assistant" else content)
 
 
 load_dotenv()
@@ -97,7 +104,11 @@ def _system_prompt(with_tools: bool = False) -> str:
         + f"Current local date and time: {now}. Home city: {city}.\n"
         "Your replies are spoken aloud by a text-to-speech voice, so:\n"
         "- Answer in one to three short sentences unless the user asks for detail.\n"
-        "- Never use markdown, bullet points, headings, tables, emojis or code blocks.\n"
+        "- Never use markdown, bullet points, numbered lists, headings, tables, emojis or code blocks; "
+        "explain in connected sentences, like a tutor talking.\n"
+        "- Say maths in words, the way you'd read it aloud: 'zeta', 'omega n squared', 'k over m', "
+        "'the square root of', 'plus or minus'. Never write LaTeX, backslashes, \\frac or dollar signs.\n"
+        "- Even when explaining, stay under about five sentences unless the user asks for more detail.\n"
         "- Say numbers, units and times the way a person would say them.\n"
         "- Lead with the answer; skip filler like 'Sure!' or 'Great question'.\n"
         "- Don't add worked numeric examples on your own. When you do give a number, it must come from "
@@ -350,17 +361,41 @@ def _keyword_needs_tool(message: str) -> bool:
 _SENTENCE_END = re.compile(r"[.!?](?=\s|$|[A-Z][a-z])|\n+")
 
 
+_LIST_NUMBER = re.compile(r"(?:^|\n|[:;])\s*\d{1,2}$")       # "1." / "stability: 1." start a list item
+
+
+def _sentence_cut(text: str, final: bool = False) -> int | None:
+    """Where the first complete sentence of `text` ends, or None to wait for more.
+
+    While streaming, a '.' at the very end of what has arrived may be a decimal
+    point ('0.' + '5'), so it is only a sentence end once the next character is
+    known. List numbers ('1. Damping…') and formulas still open ('\\[ … ') are
+    never cut."""
+    for m in _SENTENCE_END.finditer(text):
+        end = m.end()
+        if not final and end >= len(text) and m.group(0)[0] in ".!?":
+            return None                                     # wait for the next token
+        if m.group(0) == "." and _LIST_NUMBER.search(text[:m.start()]):
+            continue                                        # "1." starts a list item
+        head = text[:end]
+        if head.count("\\(") > head.count("\\)") or head.count("\\[") > head.count("\\]") or head.count("$$") % 2:
+            continue                                        # inside a formula
+        return end
+    return None
+
+
 def split_sentences(text: str) -> list[str]:
     """Split text into speakable sentences (keeps decimals like 3.14 intact)."""
     parts: list[str] = []
-    start = 0
-    for match in _SENTENCE_END.finditer(text):
-        chunk = text[start:match.end()]
-        if chunk.strip():
-            parts.append(chunk)
-        start = match.end()
-    if text[start:].strip():
-        parts.append(text[start:])
+    while text:
+        cut = _sentence_cut(text, final=True)
+        if cut is None:
+            break
+        if text[:cut].strip():
+            parts.append(text[:cut])
+        text = text[cut:]
+    if text.strip():
+        parts.append(text)
     return parts
 
 
@@ -2018,7 +2053,7 @@ async def stream_with_tools(message: str):
     try:
         last = None
         async for sentence in inner:
-            sentence = _guard_claim(sentence)
+            sentence = latex_to_text(_guard_claim(sentence))     # ζ, ωₙ², k/m on screen — never raw LaTeX
             if sentence == _NOT_DONE and last == _NOT_DONE:
                 continue            # say it once, not once per sentence
             last = sentence
@@ -2046,8 +2081,8 @@ async def _stream_cloud_question(question: str):
             yield "The cloud isn't set up, so I'll answer locally."
         async for tok in _stream_tokens(INTENT_MODEL_NAME, messages):
             buffer += tok
-            while (match := _SENTENCE_END.search(buffer)):
-                sentence, buffer = buffer[: match.end()], buffer[match.end():]
+            while (cut := _sentence_cut(buffer)) is not None:
+                sentence, buffer = buffer[:cut], buffer[cut:]
                 if sentence.strip():
                     parts.append(sentence)
                     yield sentence
@@ -2096,12 +2131,12 @@ async def _stream_with_tools(message: str):
                 buffer += token
 
                 while True:
-                    match = _SENTENCE_END.search(buffer)
-                    if not match:
+                    cut = _sentence_cut(buffer)
+                    if cut is None:
                         break
 
-                    sentence = buffer[: match.end()]
-                    buffer = buffer[match.end():]
+                    sentence = buffer[:cut]
+                    buffer = buffer[cut:]
                     if sentence.strip():
                         full_response_parts.append(sentence)
                         yield sentence
