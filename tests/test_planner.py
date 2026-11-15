@@ -107,3 +107,43 @@ def test_planner_runs_inside_aryas_answer_flow(clean):
         return "".join([s async for s in llm.stream_with_tools(m)])
     assert asyncio.run(turn("What should I study today?")).startswith("You have no exams saved")
     assert asyncio.run(turn("I have an exam in control systems in 3 weeks")).startswith("Saved: Control exam on")
+
+
+# ── Progress (the app's Study card) ──────────────────────────────────────────
+
+def test_progress_summary(clean):
+    import time as _time
+    from datetime import datetime
+
+    P.add_exam("Dynamics", date.today() + timedelta(days=12))
+    today = date.today().isoformat()
+    with practice._db() as c:
+        c.execute("INSERT INTO cards (kind, course, key, question, answer, due, reps) VALUES "
+                  "('exercise','Dynamics','exercise:1-1:t','q1','x',?,1)", (today,))
+        c.execute("INSERT INTO cards (kind, course, key, question, answer) VALUES ('exercise','Dynamics','e2','q2','x')")
+        c.execute("INSERT INTO cards (kind, course, key, question, answer) VALUES ('formula','Control','f1','q3','x')")
+        cid = c.execute("SELECT id FROM cards WHERE key = 'exercise:1-1:t'").fetchone()[0]
+        now = _time.time()
+        for days_ago, quality in [(0, 5), (0, 1), (1, 5), (2, 4)]:          # practised 3 days in a row
+            c.execute("INSERT INTO reviews (card_id, ts, quality) VALUES (?, ?, ?)", (cid, now - days_ago * 86400, quality))
+    p = P.progress()
+    assert p["exams"][0]["course"] == "Dynamics" and p["exams"][0]["days"] == 12
+    dyn = p["courses"][0]
+    assert dyn["course"] == "Dynamics" and dyn["due"] == 1 and dyn["exercises"] == 2 and dyn["exercises_done"] == 1
+    assert dyn["accuracy"] == 0.75 and dyn["answers"] == 4 and dyn["exam_days"] == 12
+    assert p["courses"][1]["course"] == "Control" and p["courses"][1]["accuracy"] is None
+    assert p["streak"] == 3 and p["due_today"] == 1
+    assert len(p["week"]) == 7 and p["week"][-1] == {"day": datetime.now().strftime("%a"), "date": today,
+                                                     "answers": 2, "right": 1}
+
+
+def test_progress_api_needs_the_token(clean):
+    from fastapi.testclient import TestClient
+
+    import arya.server.websocket as ws
+    from arya.server import security
+
+    client = TestClient(ws.app, base_url="http://127.0.0.1:8000")
+    assert client.get("/api/progress").status_code == 401
+    r = client.get("/api/progress", headers={"X-ARYA-Token": security.TOKEN})
+    assert r.status_code == 200 and set(r.json()) == {"exams", "courses", "due_today", "streak", "week"}

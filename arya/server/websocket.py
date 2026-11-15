@@ -290,6 +290,16 @@ def _start_knowledge_indexing() -> None:
         print(f"Knowledge indexing not started: {exc}")
 
 
+@app.get("/api/progress")
+async def api_progress(request: Request) -> JSONResponse:
+    """The Study card: exams, per-course practice, streak, last 7 days."""
+    if not _authorised(request):
+        return _deny()
+    from arya.study import planner
+
+    return JSONResponse(await asyncio.to_thread(planner.progress))
+
+
 @app.get("/api/kb/status")
 async def api_kb_status(request: Request) -> JSONResponse:
     if not _authorised(request):
