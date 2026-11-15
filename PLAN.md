@@ -50,7 +50,7 @@ qwen2.5:3b (~2.3 GB) and the app window fit only just. Levers: BIOS "UMA Frame B
 ### M2 — Exercise tutor
 - [x] Walkthrough mode (given / wanted / idea, Socratic next steps, hints) — `arya/study/tutor.py`
 - [x] "Check my answer" against the answers page (tolerance + units), and "what is α2 in exercise 1-13?" read off it
-- [ ] Handwritten worked solutions explained via cloud vision (ask first)
+- [x] Handwritten worked solutions explained via cloud vision (ask first), transcriptions kept and searchable — `arya/study/handwriting.py`
 
 ### M3 — Practice & planning
 - [ ] Quizzes generated from your own material; spaced repetition (SM-2), weak-topic tracking

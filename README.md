@@ -110,6 +110,8 @@ GROQ_FAST_MODEL=openai/gpt-oss-20b # intent, chat, follow-ups
 AUDIO_OUTPUT=local                 # local = PC speakers (hands-free); browser = play in the tab
 WAKE_ACCURATE_COMMANDS=1           # re-transcribe commands with Whisper (0 to save RAM)
 WHISPER_MODEL=medium               # speech model: medium (default) | small (about half the memory) | base | tiny
+GROQ_VISION_MODEL=qwen/qwen3.8-27b  # reads handwritten solution pages (only after you say yes)
+ARYA_CLOUD_OFFER=1                 # offer the cloud for derivations / hard problems (asks first); 0 = never
 ARYA_MODE=offline                  # offline (default) = local brain; cloud = Groq first
 OLLAMA_MODEL=qwen2.5:3b            # local brain
 TTS_ENGINE=piper                   # piper (local, default) | edge (online Microsoft voice)
