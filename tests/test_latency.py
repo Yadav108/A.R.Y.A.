@@ -30,3 +30,15 @@ def test_thinking_is_switched_off_for_reasoning_models(monkeypatch, model, think
     payload = local._payload([{"role": "user", "content": "hi"}], True, None, None, None)
     assert payload["model"] == model
     assert (payload.get("think") is False) is thinks and ("think" in payload) is thinks
+
+
+def test_history_the_model_rereads(monkeypatch):
+    import arya.core.llm as llm
+    monkeypatch.setattr(llm, "HISTORY_MESSAGES", 6)
+    monkeypatch.setattr(llm, "HISTORY_OLD_CHARS", 20)
+    history = [{"role": "user" if i % 2 == 0 else "assistant", "content": f"message {i} " + "word " * 10}
+               for i in range(10)]
+    out = llm.chat_history_for_model(history)
+    assert [m["content"].split()[1] for m in out] == ["4", "5", "6", "7", "8", "9"]     # the last six
+    assert all(m["content"].endswith(" …") and len(m["content"]) <= 22 for m in out[:4])   # older ones shortened
+    assert out[-2]["content"] == history[-2]["content"] and out[-1]["content"] == history[-1]["content"]

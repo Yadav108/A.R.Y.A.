@@ -368,3 +368,8 @@ questions:
     q: When is a PT2 element stable?
     include: [["D > 0", "D greater than", "D is positive", "positive damping", "ζ > 0", "zeta > 0", "greater than zero", "greater than 0", "positive"]]
     exclude: ['re:(equal to|equals|exactly|is) (zero|0)[^.]{0,40}critically damped']
+  - id: natural-frequency-mass-doubles
+    tags: [dynamics, hard, from-log]
+    q: What happens to the natural frequency of a mass-spring system if the mass doubles?
+    include: [["decreas", "lower", "smaller", "drops", "reduc", "falls"], ["√2", "square root of 2", "root 2", "0.71", "0.707", "1.41", "sqrt(2)", "square root of two"]]
+    exclude: ["does not change", "doesn't change", "independent of the mass", "stays the same", "remains the same"]
