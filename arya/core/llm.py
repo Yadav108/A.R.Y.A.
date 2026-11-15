@@ -45,7 +45,7 @@ CAPABILITIES = (
     "Say \"start studying\" and a course, and I open its folder, start pomodoros and tell you what to cover; "
     "I also speak up for a low battery, a long stretch without a break or cards due, unless you say \"no nudges\". "
     "I keep your calendar, check your email, set timers and reminders, take notes, find and tidy your files, check the weather "
-    "and battery, open apps, and control music. "
+    "and battery, open apps, control Chrome tabs, search Google or YouTube, and play music. "
     "Everything runs on this laptop unless you say \"ask the cloud\"."
 )
 
@@ -2225,6 +2225,20 @@ async def stream_with_tools(message: str):
         save_message("user", message)
         save_message("assistant", reply)
         async for sentence in _clean_stream(_aiter_text(reply)):
+            yield sentence
+        return
+
+    try:                                                # Chrome tabs, "search Google for …", "play X on YouTube"
+        from arya.tools import browser as _browser
+        browsing = await _browser.handle(message)
+    except Exception as exc:
+        print(f"Browser skipped: {type(exc).__name__}: {exc}")
+        browsing = None
+    if browsing:
+        print("Instant answer: browser")
+        save_message("user", message)
+        save_message("assistant", browsing)
+        async for sentence in _clean_stream(_aiter_text(browsing)):
             yield sentence
         return
 
