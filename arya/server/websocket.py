@@ -159,6 +159,13 @@ async def preload_models() -> None:
 
     set_notify_callback(announce)
 
+    async def _restore_scheduled() -> None:
+        await asyncio.sleep(5)                       # let the voice finish loading before announcing
+        from arya.tools.productivity import restore_scheduled
+        await restore_scheduled()
+
+    asyncio.create_task(_restore_scheduled())        # timers/reminders that survived a restart
+
     # Pre-synthesize the phrases ARYA says instantly (cached in tts.py).
     async def _warm_cache() -> None:
         for phrase in (WAKE_ACK, THANKS_ACK):
