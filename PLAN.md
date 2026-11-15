@@ -72,9 +72,15 @@ qwen2.5:3b (~2.3 GB) and the app window fit only just. Levers: BIOS "UMA Frame B
       pause detection 0.72 s + recognition ~0.55 s + first sentence 0.6–1.6 s + voice 0.25–0.4 s
 - [ ] Live check: 10 spoken "stop"s during replies → ≥ 9 stop; no self-interruptions in 10 minutes
 
-### Then — PC & life assistant
-Study-mode routine, calendar, proactive reminders (battery, breaks, due cards), email summaries
-(ask first), file agent, music.
+### Then — PC & life assistant (Phase B)
+- [x] Study mode (`arya/study/session.py`): "start studying Dynamics for an hour" opens the course
+      folder, starts pomodoros and says what to cover (cards due, new cards, next exercise, exam
+      countdown); "how long have I been studying?"; "stop studying" sums up time and cards answered
+- [ ] Calendar (local ICS or connector)
+- [ ] Proactive reminders: battery, breaks, due cards
+- [ ] Email summaries (ask first)
+- [ ] File agent
+- [ ] Music
 
 ---
 
