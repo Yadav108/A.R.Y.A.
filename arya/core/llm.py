@@ -68,7 +68,9 @@ def plain_text(text: str) -> str:
     """Markdown the small model writes anyway -> plain text for screen, speech and history:
     '### Problem:' -> 'Problem:', '- **P**: …' -> 'P: …', '1. Damping' -> 'Damping'."""
     text = re.sub(r"(?m)^(\s*)#{1,6}\s*", r"\1", text)
+    text = re.sub(r"(?<=[.!?:])\s*#{1,6}\s+", " ", text)                  # "robot.### Visual …" glued on
     text = re.sub(r"(?m)^(\s*)(?:[-*•]|\d{1,2}[.)])\s+(?=\S)", r"\1", text)
+    text = re.sub(r"(?<=[a-z)\]][.!?])\s*\d{1,2}\.\s+(?=[A-Z])", " ", text)  # "… rad/s.2.  Angular" glued on
     text = re.sub(r"\*\*(.+?)\*\*|__(.+?)__", lambda m: m.group(1) or m.group(2), text)
     return re.sub(r"(?<![\w*])\*(?!\s)([^*\n]+?)(?<!\s)\*(?![\w*])", r"\1", text)
 
@@ -157,6 +159,8 @@ def _system_prompt(with_tools: bool = False) -> str:
         "- Say maths in words, the way you'd read it aloud: 'zeta', 'omega n squared', 'k over m', "
         "'the square root of', 'plus or minus'. Never write LaTeX, backslashes, \\frac or dollar signs.\n"
         "- Even when explaining, stay under about five sentences unless the user asks for more detail.\n"
+        "- Never say you are showing a diagram, figure, plot or picture unless a tool actually put one on "
+        "screen in this turn; otherwise say what you can show instead.\n"
         "- Say numbers, units and times the way a person would say them.\n"
         "- Lead with the answer; skip filler like 'Sure!' or 'Great question'.\n"
         "- Don't add worked numeric examples on your own. When you do give a number, it must come from "
@@ -413,6 +417,8 @@ _SENTENCE_END = re.compile(r"[.!?](?=\s|$|[A-Z][a-z])|\n+")
 
 
 _LIST_NUMBER = re.compile(r"(?:^|\n|[:;])\s*\d{1,2}$")       # "1." / "stability: 1." start a list item
+_ABBREVIATION = re.compile(r"(?:^|[\s(,])(?:p|pp|fig|figs|eq|eqs|no|nr|vs|ca|approx|resp|e\.g|i\.e|cf|etc|"
+                           r"prof|dr|sec|ch|vol)$", re.IGNORECASE)
 
 
 def _sentence_cut(text: str, final: bool = False) -> int | None:
@@ -428,6 +434,8 @@ def _sentence_cut(text: str, final: bool = False) -> int | None:
             return None                                     # wait for the next token
         if m.group(0) == "." and _LIST_NUMBER.search(text[:m.start()]):
             continue                                        # "1." starts a list item
+        if m.group(0) == "." and _ABBREVIATION.search(text[:m.start()]):
+            continue                                        # "p. 3", "Fig. 2", "e.g. the …"
         head = text[:end]
         if head.count("\\(") > head.count("\\)") or head.count("\\[") > head.count("\\]") or head.count("$$") % 2:
             continue                                        # inside a formula
@@ -2146,6 +2154,24 @@ async def stream_with_tools(message: str):
     if vision_offer:
         print("Offering cloud vision for a handwritten page; waiting for yes/no")
         yield vision_offer
+        return
+
+    try:                                                # "use visuals" / "where is the diagram?" for an exercise
+        from arya.study import figures as _figures
+        figure = await asyncio.wait_for(asyncio.to_thread(_figures.figure_for, message), timeout=15.0)
+    except Exception as exc:
+        print(f"Figure lookup skipped: {type(exc).__name__}: {exc}")
+        figure = None
+    if figure:
+        ref, page, artifact = figure
+        print(f"Instant visual: exercise {ref} figure ({page.label()})")
+        emit_artifact("VISUAL", artifact)
+        emit_artifact("SOURCES", [page.as_dict()])
+        reply = await _figures.describe(ref, page)
+        save_message("user", message)
+        save_message("assistant", reply)
+        async for sentence in _clean_stream(_aiter_text(reply)):
+            yield sentence
         return
 
     try:                                                # exercise tutor: walkthroughs and answer checks
