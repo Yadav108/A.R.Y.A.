@@ -29,17 +29,95 @@ class _Scheduled:
     label: str
     ends_at: float     # time.time() when it finishes
     task: asyncio.Task
+    row_id: int | None = None   # its row in the "scheduled" table (timers and reminders only)
 
 
 _SCHEDULED: list[_Scheduled] = []
 
+# Timers and reminders also live in SQLite (arya.db), so a restart or crash doesn't lose them:
+# restore_scheduled() re-arms what's still ahead and mentions what came due while ARYA was off.
+MISSED_WINDOW_S = 12 * 3600
+_PERSISTED = {"timer", "reminder"}
 
-def _register(kind: str, label: str, seconds: float, coro) -> _Scheduled:
+
+def _db():
+    import sqlite3
+
+    from arya.memory.database import DB_PATH
+
+    conn = sqlite3.connect(DB_PATH, timeout=10)
+    conn.row_factory = sqlite3.Row
+    conn.execute("CREATE TABLE IF NOT EXISTS scheduled (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, "
+                 "label TEXT NOT NULL, ends_at REAL NOT NULL, created_at REAL NOT NULL)")
+    return conn
+
+
+def _persist(kind: str, label: str, ends_at: float) -> int | None:
+    if kind not in _PERSISTED:
+        return None
+    try:
+        with _db() as c:
+            return c.execute("INSERT INTO scheduled (kind, label, ends_at, created_at) VALUES (?, ?, ?, ?)",
+                             (kind, label, ends_at, time.time())).lastrowid
+    except Exception as exc:
+        print(f"Scheduler: couldn't save {kind} ({exc})")
+        return None
+
+
+def _forget(row_id: int | None) -> None:
+    if row_id is None:
+        return
+    try:
+        with _db() as c:
+            c.execute("DELETE FROM scheduled WHERE id = ?", (row_id,))
+    except Exception as exc:
+        print(f"Scheduler: couldn't remove row {row_id} ({exc})")
+
+
+def _register(kind: str, label: str, seconds: float, coro, row_id: int | None = None) -> _Scheduled:
+    ends_at = time.time() + seconds
+    if row_id is None:
+        row_id = _persist(kind, label, ends_at)
     task = asyncio.create_task(coro)
-    item = _Scheduled(kind=kind, label=label, ends_at=time.time() + seconds, task=task)
+    item = _Scheduled(kind=kind, label=label, ends_at=ends_at, task=task, row_id=row_id)
     _SCHEDULED.append(item)
-    task.add_done_callback(lambda _t: _SCHEDULED.remove(item) if item in _SCHEDULED else None)
+
+    def done(_t) -> None:
+        if item in _SCHEDULED:
+            _SCHEDULED.remove(item)
+        _forget(row_id)                      # finished or cancelled: no longer pending
+
+    task.add_done_callback(done)
     return item
+
+
+async def restore_scheduled() -> str:
+    """At startup: re-arm pending timers/reminders; announce ones that came due while ARYA was off."""
+    try:
+        with _db() as c:
+            rows = c.execute("SELECT * FROM scheduled ORDER BY ends_at").fetchall()
+    except Exception as exc:
+        print(f"Scheduler: restore skipped ({exc})")
+        return ""
+    now, restored, missed = time.time(), 0, []
+    for r in rows:
+        left = r["ends_at"] - now
+        if left > 0:
+            worker = (_timer_worker(left, r["label"]) if r["kind"] == "timer" else _reminder_worker(left, r["label"]))
+            _register(r["kind"], r["label"], left, worker, row_id=r["id"])
+            restored += 1
+            continue
+        _forget(r["id"])
+        if -left <= MISSED_WINDOW_S:
+            missed.append(r)
+    summary = f"Scheduler: restored {restored}, missed {len(missed)}"
+    print(summary)
+    for r in missed:
+        due = datetime.fromtimestamp(r["ends_at"]).strftime("%H:%M")
+        what = f"your reminder was due at {due}: {r['label']}" if r["kind"] == "reminder" \
+            else f"your timer '{r['label']}' finished at {due}"
+        await _notify(f"While I was off, {what}.")
+    return summary
 
 
 def _speak_duration(seconds: float) -> str:
@@ -58,7 +136,7 @@ def _speak_duration(seconds: float) -> str:
 
 # ── Timers ────────────────────────────────────────────────────────────────────
 
-async def _timer_worker(duration_seconds: int, label: str) -> None:
+async def _timer_worker(duration_seconds: float, label: str) -> None:
     await asyncio.sleep(duration_seconds)
     print(f"TIMER DONE: {label}")
     await _notify(f"Timer done! {label} has finished.")
@@ -150,6 +228,7 @@ async def cancel_timer(label: str | None = None) -> str:
         return f"No timer matches '{label}'. Active: {names}."
     for item in list(targets):
         item.task.cancel()
+        _forget(item.row_id)                 # now, not when the cancelled task gets round to finishing
         if item in _SCHEDULED:
             _SCHEDULED.remove(item)
     names = ", ".join(f"{i.kind} '{i.label}'" for i in targets)
