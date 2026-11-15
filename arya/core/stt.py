@@ -2,6 +2,7 @@ import asyncio
 import os
 import site
 import tempfile
+import threading
 from pathlib import Path
 from typing import Iterable
 
@@ -112,7 +113,15 @@ def load_model() -> WhisperModel:
     return _model
 
 
+model_lock = threading.Lock()      # live commands and lecture transcription take turns on the one model
+
+
 def _run_model(m: WhisperModel, source, prompt: str | None = None) -> str:
+    with model_lock:
+        return _run_model_locked(m, source, prompt)
+
+
+def _run_model_locked(m: WhisperModel, source, prompt: str | None = None) -> str:
     segments, _ = m.transcribe(
         source,
         language="en",

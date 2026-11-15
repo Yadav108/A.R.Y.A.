@@ -129,7 +129,10 @@ qwen2.5:3b (~2.3 GB) and the app window fit only just. Levers: BIOS "UMA Frame B
       mass-doubling answers wrong → core notes + benchmark questions
 
 ### C3 — Exam season
-- [ ] Lecture recordings → Whisper overnight → library, answers with timestamps
+- [x] Lecture recordings → transcripts → library (`arya/knowledge/lectures.py`): 225 unique recordings
+      (86.8 GB, 46 copies skipped) transcribed with ARYA's own Whisper while you're away 10 min (or
+      "transcribe my lectures now"), 30 s at a time, resumable; sources read "lecture, at 24:00";
+      exam courses first; "how far are the lecture transcriptions?", "pause transcribing"
 - [ ] Timed mock exams from old exams, graded against the answer pages, weak topics into the planner
 - [ ] Photo of your handwritten solution checked step by step (cloud vision, asking first)
 
