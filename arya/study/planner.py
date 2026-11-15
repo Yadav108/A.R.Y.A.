@@ -242,6 +242,49 @@ def briefing_line(today: date | None = None) -> str:
     return "; ".join(bits) + "."
 
 
+# ── Progress (the app's Study card) ───────────────────────────────────────────
+
+def progress(today: date | None = None) -> dict:
+    """Everything the Study card shows: exams, per-course cards/accuracy/exercises, streak, last 7 days."""
+    from datetime import datetime
+
+    from arya.study import practice
+
+    today = today or date.today()
+    exams = [{"course": c, "date": d.isoformat(), "spoken": spoken_date(d), "days": _days(d, today)}
+             for c, d in upcoming(today)]
+    acc = {crs: (share, n) for crs, share, n in practice.weakest(limit=99)}
+    with practice._db() as c:
+        rows = c.execute(
+            "SELECT course, COUNT(*) total, SUM(due IS NOT NULL AND due <= ?) due, SUM(due IS NULL) new, "
+            "SUM(kind = 'exercise') ex_total, SUM(kind = 'exercise' AND reps > 0) ex_done "
+            "FROM cards GROUP BY course", (today.isoformat(),)).fetchall()
+        reviews = c.execute("SELECT ts, quality FROM reviews WHERE ts >= ?",
+                            (datetime.combine(today - timedelta(days=60), datetime.min.time()).timestamp(),)).fetchall()
+    exam_order = {e["course"]: i for i, e in enumerate(exams)}
+    courses = [{
+        "course": r["course"], "cards": r["total"], "due": r["due"] or 0, "new": r["new"] or 0,
+        "exercises": r["ex_total"] or 0, "exercises_done": r["ex_done"] or 0,
+        "accuracy": round(acc[r["course"]][0], 2) if r["course"] in acc else None,
+        "answers": acc[r["course"]][1] if r["course"] in acc else 0,
+        "exam_days": exams[exam_order[r["course"]]]["days"] if r["course"] in exam_order else None,
+    } for r in rows]
+    courses.sort(key=lambda x: (exam_order.get(x["course"], 99), -x["due"], x["course"]))
+
+    by_day: dict[date, list[int]] = {}
+    for r in reviews:
+        by_day.setdefault(datetime.fromtimestamp(r["ts"]).date(), []).append(r["quality"])
+    week = [{"day": (today - timedelta(days=i)).strftime("%a"), "date": (today - timedelta(days=i)).isoformat(),
+             "answers": len(by_day.get(today - timedelta(days=i), [])),
+             "right": sum(q >= 3 for q in by_day.get(today - timedelta(days=i), []))} for i in range(6, -1, -1)]
+    streak, d = 0, today if today in by_day else today - timedelta(days=1)     # today not done yet keeps it
+    while d in by_day:
+        streak += 1
+        d -= timedelta(days=1)
+    return {"exams": exams, "courses": courses, "due_today": sum(x["due"] for x in courses), "streak": streak,
+            "week": week}
+
+
 # ── Voice ─────────────────────────────────────────────────────────────────────
 
 _LIST = re.compile(rf"\b(?:when are|list|what are|show|tell me)\b.{{0,20}}\b{_EXAM}s\b|\bmy {_EXAM}s\b|"

@@ -56,7 +56,7 @@ qwen2.5:3b (~2.3 GB) and the app window fit only just. Levers: BIOS "UMA Frame B
 - [x] Quizzes from your own material (exercise results from the answers pages, checked formula cards); spaced repetition (SM-2), weak-topic tracking — `arya/study/practice.py`
 - [x] Timers and reminders that survive restarts — `arya/tools/productivity.py`
 - [x] Exam planner: exam dates by voice, "what should I study today?", a study line in the daily briefing — `arya/study/planner.py`
-- [ ] Progress view in the app
+- [x] Progress view in the app: the Study card (exams, cards due, accuracy and exercises per course, 7-day chart, streak, "Quiz me") — `/api/progress`
 
 ### M4 — See what you see
 - [ ] "Explain this" on the screen (screenshot + OCR); photos of paper notes
