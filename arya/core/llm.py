@@ -1973,7 +1973,9 @@ _STATUS_ASK = re.compile(
     r"(?:check|show|tell me|what(?:'s| is)|how(?:'s| is| much)|give me|get)?\b", re.IGNORECASE)
 _STATUS_NOT = re.compile(r"\b(?:explain|why|how does|how do|work|works|charger|chemistry|lithium|design|"
                          r"circuit|formula|lecture|exam|buy|replace|define|meaning)\b"
+                         # "what is a CPU" is a definition; "what's the CPU usage" is a status check
                          r"|\bwhat(?:'s| is| are) (?:an?|the) (?:cpu|battery|ram|processor)\b"
+                         r"(?!\s+(?:usage|load|level|percentage|status|use|temperature))"
                          r"|\b(?:and|then|also|plus)\b|,", re.IGNORECASE)   # multi-part -> handled per part
 _STATUS = [
     (re.compile(r"\b(?:battery|charge level|how much charge|charging status|power level)\b", re.IGNORECASE), "get_battery"),
@@ -2227,6 +2229,7 @@ async def stream_with_tools(message: str):
         print(f"Screen reading skipped: {type(exc).__name__}: {exc}")
         on_screen = None
     if on_screen:
+        print("Instant answer: screen")
         reply, artifacts = on_screen
         for kind, payload in artifacts:
             emit_artifact(kind, payload)

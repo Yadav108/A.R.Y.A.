@@ -105,6 +105,8 @@ def main() -> int:
     ap.add_argument("-v", "--verbose", action="store_true", help="print every answer")
     ap.add_argument("--regrade", action="store_true",
                     help="re-score the answers of the latest run with the current golden.yaml (no model calls)")
+    ap.add_argument("--routes", action="store_true",
+                    help="only the routing benchmark (routes.yaml): which part of ARYA answers each command")
     args = ap.parse_args()
     if args.regrade:
         return _regrade()
@@ -120,6 +122,8 @@ def main() -> int:
 
     import arya.core.llm as llm
 
+    if args.routes:
+        return _routes(args.verbose)
     llm.set_artifact_sink(lambda kind, payload: None)          # no app window during the run
     from arya.core.embedder import load_embedder
     from arya.knowledge import library
@@ -178,7 +182,18 @@ def main() -> int:
     out.write_text(json.dumps({"mode": mode, "score": score, "passed": passed, "total": len(results),
                                "results": results}, ensure_ascii=False, indent=1), encoding="utf-8")
     print(f"Saved {out.relative_to(HERE.parents[1])}")
-    return 0 if passed == len(results) else 2
+    loop.close()
+    routes_ok = 0 if partial else _routes(args.verbose)       # after the golden run: it stubs out the model
+    return 0 if passed == len(results) and routes_ok == 0 else 2
+
+
+def _routes(verbose: bool = False) -> int:
+    from arya.eval import routing
+
+    print("\nRouting — which part of ARYA answers each command (side effects recorded, not performed)")
+    passed, total, _ = routing.run(verbose)
+    print(f"Routing: {passed}/{total} = {100.0 * passed / total:.0f} %")
+    return 0 if passed == total else 2
 
 
 if __name__ == "__main__":

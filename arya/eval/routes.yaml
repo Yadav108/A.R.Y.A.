@@ -1,0 +1,61 @@
+# Routing benchmark: what you say -> the part of ARYA that must answer (see arya/eval/routing.py).
+# route "model" = must NOT be caught by a handler (questions for the language model).
+# Real failures from `python -m arya.report --candidates` belong here (marked "from-log").
+routes:
+  # Browser and windows
+  - {say: "open a new tab", route: browser, action: keys, addressed: true}
+  - {say: "close this tab", route: browser, action: keys, addressed: true}
+  - {say: "reopen the tab I closed", route: browser, action: keys, addressed: true}
+  - {say: "go to tab 3", route: browser, action: keys}
+  - {say: "search Google for Bode plot examples", route: browser, action: open_url, addressed: true}
+  - {say: "play lofi beats on YouTube Music", route: browser, action: open_url, addressed: true}
+  - {say: "minimize the Chrome window.", route: window control, action: window, addressed: true}   # from-log
+  - {say: "show me the desktop", route: window control, action: desktop}
+
+  # Study
+  - {say: "start studying Dynamics for an hour", route: study mode, action: pomodoro, addressed: true}
+  - {say: "We are studying dynamics, so set a dynamic study session for one hour.", route: study mode, action: pomodoro}   # from-log
+  - {say: "how long have I been studying?", route: study mode}
+  - {say: "stop studying", route: study mode, addressed: true}
+  - {say: "my Dynamics exam is on 12 February", route: exam planner, reply: "Saved"}
+  - {say: "what should I study today?", route: exam planner}
+  - {say: "quiz me on control", route: practice, addressed: true}
+  - {say: "where is the Coriolis acceleration in my notes?", route: where in your material}
+  - {say: "what's in my library?", route: library overview}
+  - {say: "what can you do?", route: capabilities}
+
+  # Life
+  - {say: "do not disturb for two hours", route: nudge settings, reply: "won't disturb you"}
+  - {say: "nudges back on", route: nudge settings}
+  - {say: "what's on my calendar tomorrow?", route: calendar}
+  - {say: "add Control lab every Thursday at 2 pm", route: calendar, reply: "Added Control lab every Thursday"}
+  - {say: "what's next on my calendar", route: calendar}
+  - {say: "am I free tomorrow at 3 pm?", route: calendar}
+  - {say: "check my email", route: email, reply: "isn't set up", addressed: true}
+  - {say: "summarise my emails", route: email, addressed: true}
+  - {say: "what's playing?", route: music, reply: "Nothing is playing"}
+  - {say: "play some focus music", route: music, reply: "focus music yet", addressed: true}
+  - {say: "what did I download today?", route: file agent}
+  - {say: "what's taking up space in my downloads?", route: file agent, reply: "free of"}
+  - {say: "tidy up my downloads", route: file agent, addressed: true}
+  - {say: "open the last PDF I downloaded", route: file agent}
+
+  # Media and status
+  - {say: "pause the music", route: media keys, action: media_key, addressed: true}
+  - {say: "next song", route: media keys, action: media_key}
+  - {say: "volume up", route: media keys, action: media_key}
+  - {say: "what's my battery level?", route: system status}
+  - {say: "what's the CPU usage", route: system status}
+  - {say: "what does this error on my screen mean?", route: screen}
+
+  # Must reach the model, not a handler
+  - {say: "explain the Coriolis acceleration", route: model}
+  - {say: "tell me a fun fact about space", route: model}
+  - {say: "I want to study the Coriolis effect", route: model}
+  - {say: "what did Newton write about motion?", route: model}
+  - {say: "what is a mail merge", route: model}
+  - {say: "how do I maximize the profit of a small company", route: model}
+  - {say: "explain how to minimize the cost function", route: model}
+  - {say: "what is free space permittivity", route: model}
+  - {say: "what is a playing field in economics", route: model}
+  - {say: "why does a closed loop system reduce the steady state error", route: model}
