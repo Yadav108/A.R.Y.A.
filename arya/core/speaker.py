@@ -52,21 +52,56 @@ class LocalSpeaker:
             return True
         with self._lock:
             self._stop.clear()
-            sd.play(pcm, PLAYBACK_RATE)
-            deadline = time.monotonic() + pcm.size / PLAYBACK_RATE + 1.0
             try:
-                while time.monotonic() < deadline:
-                    if self._stop.is_set():
-                        sd.stop()
-                        return False
-                    stream = sd.get_stream()
-                    if not stream.active:
-                        break
-                    time.sleep(0.02)
-            except RuntimeError:
-                # No active stream (already finished) — nothing to wait for.
+                return self._play_stream(pcm)
+            except Exception as exc:                          # odd device: fall back to the simple player
+                print(f"Speaker: stream playback failed ({exc}), using simple playback")
+            return self._play_simple(pcm)
+
+    def _play_stream(self, pcm: np.ndarray) -> bool:
+        """Plays through a callback so every chunk is also handed to the echo canceller as it goes out."""
+        from arya.core.echo import canceller
+
+        pos = 0
+        done = threading.Event()
+
+        def callback(outdata, frames, time_info, status) -> None:
+            nonlocal pos
+            if self._stop.is_set():
+                outdata.fill(0)
+                raise sd.CallbackStop
+            chunk = pcm[pos:pos + frames]
+            outdata[:chunk.size, 0] = chunk
+            outdata[chunk.size:, 0] = 0
+            canceller.feed_reference(outdata[:, 0].copy(), PLAYBACK_RATE)
+            pos += frames
+            if pos >= pcm.size:
+                raise sd.CallbackStop
+
+        with sd.OutputStream(samplerate=PLAYBACK_RATE, channels=1, dtype="float32", callback=callback,
+                             finished_callback=done.set):
+            limit = time.monotonic() + pcm.size / PLAYBACK_RATE + 2.0
+            while not done.wait(0.02) and time.monotonic() < limit:
                 pass
-            return True
+        return not self._stop.is_set()
+
+    def _play_simple(self, pcm: np.ndarray) -> bool:
+        """The previous player (no echo reference). Caller holds the lock."""
+        sd.play(pcm, PLAYBACK_RATE)
+        deadline = time.monotonic() + pcm.size / PLAYBACK_RATE + 1.0
+        try:
+            while time.monotonic() < deadline:
+                if self._stop.is_set():
+                    sd.stop()
+                    return False
+                stream = sd.get_stream()
+                if not stream.active:
+                    break
+                time.sleep(0.02)
+        except RuntimeError:
+            # No active stream (already finished) — nothing to wait for.
+            pass
+        return True
 
 
 speaker = LocalSpeaker()

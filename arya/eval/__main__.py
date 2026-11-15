@@ -95,6 +95,9 @@ async def _answer(question: str) -> str:
 
 
 def main() -> int:
+    for stream in (sys.stdout, sys.stderr):        # output redirected to a file: α or Σ must not crash a question
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
     ap = argparse.ArgumentParser(description="Run ARYA's golden questions and score the answers.")
     ap.add_argument("--tag", help="only questions with this tag (e.g. control, dynamics, library)")
     ap.add_argument("--id", help="only this question id")

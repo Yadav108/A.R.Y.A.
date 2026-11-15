@@ -602,24 +602,46 @@ def spoken_limit(message: str) -> int:
     return max(MAX_SPOKEN_SENTENCES, DETAIL_SPOKEN_SENTENCES) if wants_detail(message) else MAX_SPOKEN_SENTENCES
 
 
-async def _speak_stream(sentences: AsyncIterator[str], max_spoken: int = 0) -> None:
+FIRST_CHUNK_MIN_WORDS = 12   # a first sentence longer than this is voiced in two parts
+
+
+def split_first_for_voice(sentence: str) -> list[str]:
+    """Split a long first sentence at its first clause break (comma, semicolon, dash) so its first
+    half is synthesised — and heard — while the second half is still being voiced. Shown text is
+    unchanged; Piper pauses at the comma anyway, so it sounds the same."""
+    words = sentence.split()
+    if len(words) <= FIRST_CHUNK_MIN_WORDS:
+        return [sentence]
+    for m in re.finditer(r"(?<=[,;:])\s+|\s+(?=[—–-]\s)", sentence):
+        head, tail = sentence[:m.start()].strip(), sentence[m.end():].strip()
+        if len(head.split()) >= 4 and len(tail.split()) >= 4:
+            return [head, tail]
+    return [sentence]
+
+
+async def _speak_stream(sentences: AsyncIterator[str], max_spoken: int = 0, started: float | None = None) -> None:
     """Text goes to the UI the moment each sentence exists, its TTS starts
     immediately, and audio plays in order as soon as it is ready — so ARYA
     starts talking after the *first* sentence, not after the whole reply.
-    After `max_spoken` sentences (0 = no limit) the rest is only shown."""
+    After `max_spoken` sentences (0 = no limit) the rest is only shown.
+    With `started`, logs how long the first sentence and the first sound took."""
     queue: asyncio.Queue[asyncio.Task | None] = asyncio.Queue()
+    marks: dict[str, float] = {}
 
     async def produce() -> None:
         spoken, cut = 0, False
         try:
             async for sentence in sentences:
+                marks.setdefault("text", time.monotonic())
                 await _send_all(sentence)
                 if max_spoken and spoken >= max_spoken:
                     if not cut and re.search(r"\w", sentence):
                         cut = True
                         await queue.put((REST_ON_SCREEN, asyncio.create_task(_synthesize(REST_ON_SCREEN))))
                     continue
-                await queue.put((sentence, asyncio.create_task(_synthesize(sentence))))
+                parts = split_first_for_voice(sentence) if spoken == 0 else [sentence]
+                for part in parts:                     # a long opener is voiced clause-first: sound sooner
+                    await queue.put((part, asyncio.create_task(_synthesize(part))))
                 if re.search(r"[A-Za-z]{2,}", sentence):     # a formula line or "1." isn't a sentence
                     spoken += 1
         finally:
@@ -638,6 +660,11 @@ async def _speak_stream(sentences: AsyncIterator[str], max_spoken: int = 0) -> N
                 continue
             if hasattr(wake_engine, "note_spoken"):
                 wake_engine.note_spoken(sentence)       # so ARYA's own "stop" isn't taken as yours
+            if "audio" not in marks:
+                marks["audio"] = time.monotonic()
+                if started is not None and "text" in marks:
+                    print(f"Latency: first words after {marks['audio'] - started:.2f}s "
+                          f"(answer {marks['text'] - started:.2f}s + voice {marks['audio'] - marks['text']:.2f}s)")
             if LOCAL_AUDIO:
                 if not announced:
                     await _send_all("ARYA_SPEAKING")
@@ -760,7 +787,8 @@ async def _run_turn(message: str, wake_triggered: bool, announce_transcript: boo
 
             print(f"Processing: {message[:60]}")
             try:
-                await _speak_stream(stream_with_tools(message), max_spoken=spoken_limit(message))
+                await _speak_stream(stream_with_tools(message), max_spoken=spoken_limit(message),
+                                    started=time.monotonic())
                 print("Response complete")
                 if policy.has_pending():
                     await _send_all("ARYA_CONFIRM")     # app shows Yes / No buttons

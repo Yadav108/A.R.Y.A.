@@ -12,6 +12,7 @@ wikipedia-api
 websockets
 faster-whisper
 sounddevice
+livekit>=1.0      # echo cancellation (WebRTC AEC3) so ARYA does not hear itself
 sentence-transformers
 onnxruntime
 openwakeword
