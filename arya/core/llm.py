@@ -2339,6 +2339,23 @@ async def stream_with_tools(message: str):
             yield sentence
         return
 
+    try:                                                # "give me a 60-minute Dynamics mock exam", "task 2: 2.8 m/s"
+        from arya.study import mock_exam as _mock
+        examining = await _mock.handle(message)
+    except Exception as exc:
+        print(f"Mock exam skipped: {type(exc).__name__}: {exc}")
+        examining = None
+    if examining:
+        reply, sources = examining
+        print("Instant answer: mock exam")
+        if sources:
+            emit_artifact("SOURCES", sources)
+        save_message("user", message)
+        save_message("assistant", reply)
+        async for sentence in _clean_stream(_aiter_text(reply)):
+            yield sentence
+        return
+
     try:                                                # "start studying Dynamics" / "stop studying"
         from arya.study import session as _session
         studying = await _session.handle(message)

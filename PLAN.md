@@ -133,7 +133,10 @@ qwen2.5:3b (~2.3 GB) and the app window fit only just. Levers: BIOS "UMA Frame B
       (86.8 GB, 46 copies skipped) transcribed with ARYA's own Whisper while you're away 10 min (or
       "transcribe my lectures now"), 30 s at a time, resumable; sources read "lecture, at 24:00";
       exam courses first; "how far are the lecture transcriptions?", "pause transcribing"
-- [ ] Timed mock exams from old exams, graded against the answer pages, weak topics into the planner
+- [x] Timed mock exams (`arya/study/mock_exam.py`): "give me a 60-minute Dynamics mock exam" — one task
+      per exercise (~12 min each, old-exam exercises first), task pages from the exercise sheets (never a
+      solution sheet: 41 Dynamics exercises usable), clock with a 5-minute warning, answers by voice,
+      graded against the answer sheets, every task recorded for spaced repetition / weak topics
 - [ ] Photo of your handwritten solution checked step by step (cloud vision, asking first)
 
 ### C4 — Routines and memory

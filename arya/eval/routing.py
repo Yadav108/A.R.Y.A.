@@ -87,6 +87,13 @@ def _sandbox(rec: Recorder) -> None:
         rec.add("cancel_timer")
         return "Cancelled"
     productivity.pomodoro, productivity.cancel_timer = pomodoro, cancel_timer
+
+    def register(kind, label, seconds, coro, row_id=None):          # the mock-exam clock: recorded, not run
+        coro.close()
+        rec.add("set_timer")
+        import types
+        return types.SimpleNamespace(task=types.SimpleNamespace(cancel=lambda: None))
+    productivity._register = register
     screen.capture = lambda: None
 
     # The model is not under test here: a stub that answers instantly, so a mis-route shows up as "model".
@@ -115,8 +122,11 @@ def _reset() -> None:
 
     from arya.tools import browser
 
+    from arya.study import mock_exam
+
     policy.cancel_pending()
     browser._awaiting_song_until = 0.0
+    mock_exam._exam = None
     practice._quiz = None
     tutor._session = None
     llm._last_exercise["until"] = 0.0
