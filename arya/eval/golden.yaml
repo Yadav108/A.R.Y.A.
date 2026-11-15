@@ -282,3 +282,77 @@ questions:
     q: What is the formula for percent overshoot? Give an example with zeta 0.2.
     include: [["52"]]
     exclude: ["16.3"]
+
+  # ── Hard: reasoning a small model gets wrong without course notes (C2 model comparison) ──
+  - id: hard-unstable-pole
+    tags: [hard, control]
+    q: A system has poles at minus 2 and plus 1. Is it stable?
+    include: [["unstable", "not stable"]]
+    exclude: ['re:^\W*yes\b']
+  - id: hard-marginal
+    tags: [hard, control]
+    q: A system has one pair of poles exactly on the imaginary axis and all other poles in the left half plane. Is it asymptotically stable?
+    include: [["marginal", "critically stable", "not asymptotically", "sustained oscillation", "oscillat"]]
+    exclude: ['re:^\W*yes\b']
+  - id: hard-final-value
+    tags: [hard, control, numbers]
+    q: What is the steady-state output of G(s) = 5/(s+2) for a unit step input?
+    include: [["2.5", "2,5", "two point five", "5/2", "5 over 2", "five halves"]]
+  - id: hard-overshoot-damping
+    tags: [hard, control]
+    q: If I increase the damping ratio of an underdamped second-order system, what happens to the overshoot?
+    include: [["decreas", "less", "reduc", "smaller", "lower"]]
+    exclude: ["re:overshoot (increases|gets larger|grows)"]
+  - id: hard-gear-speed
+    tags: [hard, dynamics, numbers]
+    q: A motor turns at 3000 rpm and drives a gearbox with a ratio of 10 to 1. How fast does the output shaft turn?
+    include: [["300"]]
+  - id: hard-gear-torque
+    tags: [hard, dynamics]
+    q: A gearbox reduces the speed by a factor of 10. Ignoring losses, what happens to the torque?
+    include: [["10 times", "ten times", "factor of 10", "factor of ten", "increases", "multipl", "tenfold"]]
+    exclude: ["re:torque (decreases|is reduced|drops)"]
+  - id: hard-ring-vs-disc
+    tags: [hard, dynamics]
+    q: A solid disc and a thin ring have the same mass and radius. Which one is harder to spin up?
+    include: [["ring"]]
+    exclude: ["re:(solid )?disc is harder"]
+  - id: hard-kinematics
+    tags: [hard, dynamics, numbers]
+    q: A car accelerates uniformly from rest to 20 metres per second in 5 seconds. How far does it travel in that time?
+    include: [["50 m", "50 metres", "50 meters", "fifty metres", "fifty meters", "50m"]]
+  - id: hard-parallel
+    tags: [hard, electrical, numbers]
+    q: What is the total resistance of a 6 ohm and a 3 ohm resistor in parallel?
+    include: [["2 ohm", "2 Ω", "two ohm", "2Ω", "2.0 ohm", "2 Ohm"]]
+    exclude: ["9 ohm", "nine ohm", "4.5 ohm"]
+  - id: hard-power
+    tags: [hard, electrical, numbers]
+    q: A 12 volt motor draws 2 amps. How much electrical power does it use?
+    include: [["24 W", "24 watt", "24W", "twenty-four watt", "twenty four watt"]]
+  - id: hard-rc
+    tags: [hard, electrical, numbers]
+    q: An RC circuit has R = 10 kilohm and C = 100 microfarad. What is its time constant?
+    include: [["1 s", "1 second", "one second", "1.0 s", "1s", "1.0 second"]]
+  - id: hard-word-problem
+    tags: [hard, behaviour]
+    q: I have 3 apples, eat one, buy two more, and then give half of them away. How many apples do I have now?
+    include: [['re:(have|left with|with|keep|remain\w*|now) (only )?(2|two)\b', 're:\b(2|two) apples']]
+  - id: hard-one-sentence
+    tags: [hard, behaviour]
+    q: In exactly one sentence, what does a PID controller do?
+    include: [["proportional", "error"]]
+    max_sentences: 1
+  - id: hard-feedback-sensitivity
+    tags: [hard, control]
+    q: Does negative feedback make a closed loop less sensitive to changes in the plant? Answer briefly.
+    include: [["yes", "less sensitive", "reduces", "reduce"]]
+    max_sentences: 3
+  - id: hard-units
+    tags: [hard, numbers]
+    q: Convert 72 kilometres per hour to metres per second.
+    include: [["20 m", "20 metres", "20 meters", "twenty metres", "twenty meters"]]
+  - id: hard-bandwidth
+    tags: [hard, control]
+    q: Does a faster rise time usually go with a higher or a lower bandwidth?
+    include: [["higher", "larger", "wider", "greater", "increase"]]
