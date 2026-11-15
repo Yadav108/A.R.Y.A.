@@ -134,8 +134,8 @@ _WHAT = re.compile(r"\bwhat(?:'s| is)\s+(?:this\s+)?(?:playing|song|track)\b|\bw
                    re.IGNORECASE)
 _FOCUS = re.compile(r"\bplay\s+(?:some\s+|my\s+)?(?:focus|study|studying|concentration|lo-?fi|background)\s+"
                     r"(?:music|playlist|beats|sounds)\b|\bplay\s+(?:some\s+|my\s+)?lo-?fi\b", re.IGNORECASE)
-FOCUS_HELP = ("Tell me what to play: put the link of your favourite focus playlist or stream in ARYA's .env as "
-              "ARYA_FOCUS_MUSIC_URL, and I'll open it whenever you ask.")
+FOCUS_HELP = ("I don't know your focus music yet. Put the link of your favourite playlist or stream in ARYA's .env "
+              "file as ARYA_FOCUS_MUSIC_URL, and I can play it whenever you ask.")
 
 
 async def handle(message: str) -> str | None:

@@ -766,6 +766,7 @@ async def _dispatch(message: str, wake_triggered: bool = False, announce_transcr
     # While ARYA waits for "yes"/"no" on an action, "stop"/"cancel"/"no thanks"
     # are answers to that question — let the turn pipeline handle them.
     if not policy.has_pending() and _classify_closing(message) == "stop":
+        print(f"Stopped by request: {message[:40]!r}")
         speaker.stop()
         wake_engine.end_conversation()
         _resume_music()

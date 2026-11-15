@@ -25,7 +25,10 @@ MAX_SESSION_H = 12                          # an older open session is treated a
 
 _START = re.compile(
     r"\b(?:start|begin)\s+(?:a\s+)?(?:studying|study(?:ing)?\s+(?:session|mode)|revising|revision)\b|"
-    r"\b(?:start|begin)\s+(?:to\s+)?study\b|\bstudy mode\b", re.IGNORECASE)
+    r"\b(?:start|begin)\s+(?:to\s+)?study\b|\bstudy mode\b|"
+    # "set a dynamic study session for one hour" (from the field log)
+    r"\b(?:set|start|begin|create|book|plan)\s+(?:up\s+)?(?:a|an|my|the)?\s*(?:[a-z]+\s+)?study(?:ing)?\s+session\b",
+    re.IGNORECASE)
 # "let's study", "time to revise": study mode only when nothing but a course / length / "now" follows —
 # "I want to study the Coriolis effect" is a question, not a session.
 _START_SOFT = re.compile(r"\b(?:let'?s|let us|time to|i(?:'m| am) going to|i want to|i'?d like to)\s+"

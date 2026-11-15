@@ -99,12 +99,49 @@ qwen2.5:3b (~2.3 GB) and the app window fit only just. Levers: BIOS "UMA Frame B
 - [x] Browser (`arya/tools/browser.py`): Chrome tabs by voice (new, close, reopen, next/previous,
       "go to tab 3"; keys only sent when Chrome is in front), "search Google/YouTube for …",
       "play X on YouTube Music" (opens the first result)
+- [x] Window control (`arya/tools/windows.py`): minimize / maximize / restore an app, "show the desktop"
+
+## Phase C — after Phase B (order agreed 2026-11-15: C1 → C2 → C3 → C4 → C5)
+
+### C1 — Prove it in daily use
+- [x] Timestamped log; `python -m arya.report`: turns by route, real latency, wake/stop stats, ignored
+      speech you overrode, blocked false claims, errors; `--candidates` lists real failures for the benchmark
+- [x] Routing benchmark (`arya/eval/routes.yaml`, `python -m arya.eval --routes`): every handler, plus
+      questions that must reach the model; side effects recorded, never performed. Found and fixed:
+      "set a study session" missed study mode, focus-music help blocked by the claim guard, CPU usage
+      went through the slow tool path
+- [x] Guided live voice check: `python -m arya.voicecheck` (10 "stop" trials, 10 min self-interruption)
+- [ ] Run the voice check and act on it; first field-report numbers (2026-11-15, 2 days): first words
+      median 1.6 s but end of speech → first word ≈ 3.4 s; recognition median 1.07 s live; 68 wake
+      rejections vs 36 accepted
+
+### C2 — A smarter brain within 8 GB
+- [ ] Model bake-off on golden + routes: qwen3 4B, gemma3 4B, phi-4-mini, llama3.2 3B vs qwen2.5 3B
+      (correctness, first-word latency, memory); switch only on a clear win
+- [ ] Trim the history the model re-reads (≈0.4 s per answer) without losing benchmark points
+
+### C3 — Exam season
+- [ ] Lecture recordings → Whisper overnight → library, answers with timestamps
+- [ ] Timed mock exams from old exams, graded against the answer pages, weak topics into the planner
+- [ ] Photo of your handwritten solution checked step by step (cloud vision, asking first)
+
+### C4 — Routines and memory
+- [ ] Your own voice routines ("start my day" → briefing, calendar, focus music)
+- [ ] Morning briefing on first activity after 7:00
+- [ ] Long-term preferences ("remember I prefer short answers")
+
+### C5 — ARYA everywhere
+- [ ] Phone access over home Wi-Fi (token-protected app), nudges on the phone
+- [ ] Start at login, restart after a crash, daily backup of arya.db
 
 ---
 
 ## How to check a change
 ```
 pytest                      # fast, no models needed except the small embedder
-python -m arya.eval         # golden questions through the real pipeline; compares with the last run
+python -m arya.eval         # golden questions through the real pipeline, then the routing benchmark
+python -m arya.eval --routes          # only routing: which part of ARYA answers each command
 python -m arya.eval --tag control -v
+python -m arya.report       # how ARYA did in real use (from its log); --candidates for new benchmark items
+python -m arya.voicecheck   # guided live test of "stop" and self-interruption (ARYA must be running)
 ```

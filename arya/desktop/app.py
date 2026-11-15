@@ -122,7 +122,45 @@ def redirect_output_to_log() -> None:
         LOG_FILE.replace(LOG_FILE.with_suffix(".log.1"))
     stream = open(LOG_FILE, "a", buffering=1, encoding="utf-8", errors="replace")
     stream.write(f"\n===== ARYA desktop started {time.strftime('%Y-%m-%d %H:%M:%S')} =====\n")
-    sys.stdout = sys.stderr = stream
+    sys.stdout = sys.stderr = StampedStream(stream)
+
+
+class StampedStream:
+    """Prefixes every log line with '[YYYY-MM-DD HH:MM:SS] ' so `python -m arya.report` can tell days apart."""
+
+    def __init__(self, stream) -> None:
+        self._stream = stream
+        self._at_line_start = True
+        self._lock = threading.Lock()
+
+    def write(self, text: str) -> int:
+        if not text:
+            return 0
+        with self._lock:
+            out = []
+            for piece in text.splitlines(keepends=True):
+                if self._at_line_start:
+                    out.append(time.strftime("[%Y-%m-%d %H:%M:%S] "))
+                out.append(piece)
+                self._at_line_start = piece.endswith("\n")
+            self._stream.write("".join(out))
+        return len(text)
+
+    def flush(self) -> None:
+        self._stream.flush()
+
+    def fileno(self) -> int:
+        return self._stream.fileno()
+
+    def isatty(self) -> bool:
+        return False
+
+    @property
+    def encoding(self) -> str:
+        return self._stream.encoding
+
+    def __getattr__(self, name):
+        return getattr(self._stream, name)
 
 
 # ── Tray icon images ──────────────────────────────────────────────────────────
