@@ -111,6 +111,9 @@ def _pages(path: Path) -> list[tuple[int, str]]:
     """[(page number starting at 1, text)] — "page" is a slide for PowerPoint,
     a section for Markdown, and a ~3000-character block for Word/text."""
     ext = path.suffix.lower()
+    if ext in _media_extensions():
+        from arya.knowledge.lectures import pages
+        return pages(path)                          # a lecture recording: two-minute blocks of its transcript
     if ext == ".pdf":
         import pymupdf
 
@@ -262,6 +265,10 @@ def _copy_score(path: Path | str) -> int:
 
 def _title_and_collection(path: Path, roots: list[Path]) -> tuple[str, str]:
     title = re.sub(r"[_]+", " ", path.stem).strip()
+    if path.suffix.lower() in _media_extensions() and not re.search(r"[A-Za-z]{3}", title):
+        # Recordings named "_ (11).mp4": call them after their folder ("CS1 Lecture Videos, recording 11").
+        n = re.findall(r"\d+", title)
+        title = f"{path.parent.name.strip()}, recording {n[-1] if n else 1}"
     if path == CORE_NOTES:
         return "ARYA core notes", "ARYA core notes"
     if path == CORRECTIONS:
@@ -296,6 +303,16 @@ status = IndexStatus()
 _matrix_cache: dict = {}
 
 
+def _media_extensions() -> set[str]:
+    from arya.knowledge.lectures import MEDIA_EXTENSIONS
+    return MEDIA_EXTENSIONS
+
+
+def _lecture_ready(path: Path) -> bool:
+    from arya.knowledge.lectures import transcript_ready
+    return transcript_ready(path)
+
+
 def _files(roots: list[Path]) -> list[Path]:
     from arya.core.policy import PolicyError, check_path
 
@@ -312,6 +329,8 @@ def _files(roots: list[Path]) -> list[Path]:
                 p = Path(dirpath) / name
                 if p.suffix.lower() in EXTENSIONS and not name.startswith("~$"):
                     files.append(p)
+                elif p.suffix.lower() in _media_extensions() and _lecture_ready(p):
+                    files.append(p)                 # a lecture recording, once its transcript is complete
     if CORE_NOTES.exists():
         files.append(CORE_NOTES)
     if CORRECTIONS.exists():
@@ -468,6 +487,9 @@ class Passage:
     note: str = ""          # e.g. "exercise 1-13" when found by its number
 
     def label(self) -> str:
+        if "." + self.kind in _media_extensions():
+            from arya.knowledge.lectures import BLOCK_S, clock
+            return f"{self.title}, at {clock((self.page - 1) * BLOCK_S)}"     # "Dynamics lecture 5, at 24:00"
         unit = {"pptx": "slide", "md": "section"}.get(self.kind, "p.")
         return f"{self.title}, {unit} {self.page}" if unit != "p." else f"{self.title}, p. {self.page}"
 
@@ -605,7 +627,8 @@ def index_file(path: Path) -> None:
                 _delete_doc(c, row["id"])
         _matrix_cache.clear()
         return
-    title, collection = _title_and_collection(path, [])
+    # Lecture recordings take their course from the folder they sit in under your course roots.
+    title, collection = _title_and_collection(path, default_roots() if path.suffix.lower() in _media_extensions() else [])
     pages = _pages(path)
     items = [(page, piece) for page, text in pages for piece in _chunk(text)]
     vectors = (model.encode([f"{title}: {p}" for _, p in items], normalize_embeddings=True,

@@ -31,6 +31,9 @@ routes:
   - {say: "where is the Coriolis acceleration in my notes?", route: where in your material}
   - {say: "what's in my library?", route: library overview}
   - {say: "what can you do?", route: capabilities}
+  - {say: "how far are the lecture transcriptions?", route: lectures}
+  - {say: "pause transcribing", route: lectures}
+  - {say: "what did the professor say about the Coriolis acceleration in the lecture?", route: model}
 
   # Life
   - {say: "do not disturb for two hours", route: nudge settings, reply: "won't disturb you"}

@@ -2311,6 +2311,20 @@ async def stream_with_tools(message: str):
             yield sentence
         return
 
+    try:                                                # "transcribe my lectures", "how far are the transcripts?"
+        from arya.knowledge import lectures as _lectures
+        transcribing = await asyncio.to_thread(_lectures.handle, message)
+    except Exception as exc:
+        print(f"Lecture transcription skipped: {type(exc).__name__}: {exc}")
+        transcribing = None
+    if transcribing:
+        print("Instant answer: lectures")
+        save_message("user", message)
+        save_message("assistant", transcribing)
+        async for sentence in _clean_stream(_aiter_text(transcribing)):
+            yield sentence
+        return
+
     try:                                                # "do not disturb for an hour" / "nudges back on"
         from arya.core import proactive as _proactive
         muting = await asyncio.to_thread(_proactive.handle, message)

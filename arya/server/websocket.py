@@ -183,6 +183,9 @@ async def preload_models() -> None:
     from arya.core import proactive                  # battery, breaks, due cards — spoken only when it helps
     asyncio.create_task(proactive.run(announce, busy=_voice_lock.locked))
 
+    from arya.knowledge import lectures              # lecture recordings -> library, while you're away
+    asyncio.create_task(lectures.run(busy=_voice_lock.locked))
+
     # Pre-synthesize the phrases ARYA says instantly (cached in tts.py).
     async def _warm_cache() -> None:
         for phrase in (WAKE_ACK, THANKS_ACK):
