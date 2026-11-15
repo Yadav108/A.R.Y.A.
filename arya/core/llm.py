@@ -44,7 +44,8 @@ CAPABILITIES = (
     "explain exercises by number, plot responses, draw block diagrams, and do exact maths and unit conversions. "
     "Say \"start studying\" and a course, and I open its folder, start pomodoros and tell you what to cover; "
     "I also speak up for a low battery, a long stretch without a break or cards due, unless you say \"no nudges\". "
-    "I can set timers and reminders, take notes, check the weather and battery, open apps and files, and control music. "
+    "I keep your calendar, set timers and reminders, take notes, check the weather and battery, open apps and "
+    "files, and control music. "
     "Everything runs on this laptop unless you say \"ask the cloud\"."
 )
 
@@ -585,6 +586,12 @@ async def get_daily_briefing() -> str:
     except Exception as exc:
         study = ""
         print(f"Briefing: study line skipped ({exc})")
+    try:                                                # today's events (from ARYA and your .ics calendars)
+        from arya.tools.agenda import briefing_line as calendar_line
+        calendar = await asyncio.to_thread(calendar_line)
+    except Exception as exc:
+        calendar = ""
+        print(f"Briefing: calendar line skipped ({exc})")
 
     prompt = (
         "Time and date:\n"
@@ -598,6 +605,7 @@ async def get_daily_briefing() -> str:
         "System status:\n"
         f"{system_status}\n"
         + (f"\nStudy (say these numbers exactly):\n{study}\n" if study else "")
+        + (f"\nCalendar (say these times exactly):\n{calendar}\n" if calendar else "")
     )
 
     response = await _complete(
@@ -608,7 +616,7 @@ async def get_daily_briefing() -> str:
                 "content": (
                     "You are ARYA. Generate a concise spoken morning briefing "
                     "in a friendly professional tone. Cover: time, weather, "
-                    "the study line (next exam, cards due) if given, "
+                    "the study line (next exam, cards due) if given, today's calendar if given, "
                     "recent notes, pending reminders, and system status. "
                     "Keep it under 5 sentences. No markdown or lists."
                 ),
@@ -2248,6 +2256,23 @@ async def stream_with_tools(message: str):
         save_message("user", message)
         save_message("assistant", reply)
         async for sentence in _clean_stream(_aiter_text(reply)):
+            yield sentence
+        return
+
+    try:                                                # "what's on tomorrow?", "add lab every Thursday at 2"
+        from arya.tools import agenda as _agenda
+        scheduling = await asyncio.to_thread(_agenda.handle, message)
+    except Exception as exc:
+        print(f"Calendar skipped: {type(exc).__name__}: {exc}")
+        scheduling = None
+    if scheduling:
+        print("Instant answer: calendar")
+        if scheduling.startswith(("Added ", "Removed ")):
+            from arya.core import policy
+            policy.note_result("calendar")
+        save_message("user", message)
+        save_message("assistant", scheduling)
+        async for sentence in _clean_stream(_aiter_text(scheduling)):
             yield sentence
         return
 

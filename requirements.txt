@@ -27,6 +27,8 @@ python-pptx       # PowerPoint files
 scipy             # step / impulse / Bode plots
 matplotlib        # plots
 sympy             # exact maths tool (arya/tools/mathsolve.py)
+icalendar         # calendar: .ics files (arya/tools/agenda.py)
+recurring-ical-events  # weekly lectures in .ics calendars
 # OCR for scanned PDFs: the OCR engine built into Windows (offline)
 winrt-runtime; sys_platform == "win32"
 winrt-Windows.Media.Ocr; sys_platform == "win32"

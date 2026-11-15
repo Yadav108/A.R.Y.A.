@@ -5,6 +5,7 @@ Proactive nudges (Phase B): ARYA speaks up on its own — rarely, and only when 
   - Breaks: after 90 minutes of continuous keyboard/mouse use (not during a study session,
     whose pomodoros already have breaks).
   - Practice: once a day, if cards are due and you haven't practised yet.
+  - Calendar: a heads-up ten minutes before a timed event (arya/tools/agenda.py).
 
 ARYA stays quiet when it would be rude: during quiet hours (22:00-08:00, ARYA_QUIET_HOURS="22-8"),
 when you're away from the laptop, while ARYA is already talking, and whenever Windows says not to
@@ -40,6 +41,7 @@ class Sensors:
     studying: bool = False
     due_cards: int = 0
     practised_today: bool = False
+    upcoming: tuple[str, str, datetime] | None = None   # (key, spoken description, start) of an event soon
 
 
 @dataclass
@@ -52,6 +54,7 @@ class Nudger:
     muted_until: float = 0.0
     last_spoken: float = 0.0
     last_check: float = 0.0
+    events_told: set = field(default_factory=set)       # calendar events already announced
 
     def _quiet(self, hour: int) -> bool:
         start, end = self.quiet_hours
@@ -81,6 +84,13 @@ class Nudger:
                 if s.battery[0] <= min(BATTERY_LEVELS):
                     return f"Battery is down to {s.battery[0]} percent. Please plug in soon, or I'll go quiet."
                 return f"Battery is at {s.battery[0]} percent. Time to plug in the charger."
+
+        if s.upcoming and s.upcoming[0] not in self.events_told:          # a heads-up can't wait either
+            key, what, start = s.upcoming
+            self.events_told.add(key)
+            self.last_spoken = t
+            mins = max(1, round((start - s.now).total_seconds() / 60))
+            return f"Heads-up: {what} starts in {mins} minute{'s' if mins != 1 else ''}."
 
         if t - self.last_spoken < MIN_GAP_S:
             return None
@@ -173,9 +183,18 @@ def read_sensors() -> Sensors:
         due, practised = _practice_today()
     except Exception:
         due, practised = 0, True
-    return Sensors(now=datetime.now(), battery=battery, idle_s=_idle_seconds(),
+    now = datetime.now()
+    upcoming = None
+    try:
+        from arya.tools import agenda
+        ev = agenda.heads_up(now, minutes=10)
+        if ev:
+            upcoming = (ev.key, ev.title + (f" in {ev.location}" if ev.location else ""), ev.start)
+    except Exception as exc:
+        print(f"Nudges: calendar check failed ({type(exc).__name__}: {exc})")
+    return Sensors(now=now, battery=battery, idle_s=_idle_seconds(),
                    windows_ok=_windows_accepts_notifications(), studying=studying,
-                   due_cards=due, practised_today=practised)
+                   due_cards=due, practised_today=practised, upcoming=upcoming)
 
 
 # ── State that survives a restart (mute, today's practice nudge) ─────────────
@@ -266,9 +285,19 @@ async def run(say, busy) -> None:
         await asyncio.to_thread(_load, nudger)
     except Exception as exc:
         print(f"Nudges: couldn't load state ({exc})")
-    print("Nudges: on (battery, breaks, practice) — say \"no nudges\" to mute")
+    print("Nudges: on (battery, breaks, practice, calendar) — say \"no nudges\" to mute")
+    from arya.tools import agenda
+    agenda.ICS_DIR.mkdir(parents=True, exist_ok=True)              # where exported .ics files go
+    next_fetch = 0.0
     while True:
         await asyncio.sleep(CHECK_EVERY_S)
+        if time.time() >= next_fetch:                               # calendar subscriptions, if any
+            next_fetch = time.time() + agenda.FETCH_EVERY_S
+            try:
+                if await agenda.refresh_subscriptions():
+                    print("Calendar: subscriptions updated")
+            except Exception as exc:
+                print(f"Calendar: refresh failed ({type(exc).__name__})")
         try:
             sensors = await asyncio.to_thread(read_sensors)
             if busy():
