@@ -42,7 +42,8 @@ _CAPABILITIES = re.compile(r"^\W*(?:hey\W+)?(?:arya\W+)?(?:so\W+)?(?:what (?:can
 CAPABILITIES = (
     "I'm your study companion. I answer questions from your own course material and show you the page, "
     "explain exercises by number, plot step responses, Bode plots and functions, draw block diagrams, and do "
-    "exact maths and unit conversions. I can also set timers, reminders and pomodoros, take and find notes, "
+    "exact maths and unit conversions. Say \"start studying\" and a course, and I open its folder, start "
+    "pomodoros and tell you what to cover. I can also set timers, reminders and pomodoros, take and find notes, "
     "check the weather, battery and system, open apps and files, and control music and volume. "
     "Everything runs on this laptop unless you say \"ask the cloud\"."
 )
@@ -2188,6 +2189,20 @@ async def stream_with_tools(message: str):
         save_message("user", message)
         save_message("assistant", reply)
         async for sentence in _clean_stream(_aiter_text(reply)):
+            yield sentence
+        return
+
+    try:                                                # "start studying Dynamics" / "stop studying"
+        from arya.study import session as _session
+        studying = await _session.handle(message)
+    except Exception as exc:
+        print(f"Study mode skipped: {type(exc).__name__}: {exc}")
+        studying = None
+    if studying:
+        print("Instant answer: study mode")
+        save_message("user", message)
+        save_message("assistant", studying)
+        async for sentence in _clean_stream(_aiter_text(studying)):
             yield sentence
         return
 
