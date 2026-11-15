@@ -154,3 +154,38 @@ def test_real_playing_replies_pass():
     assert llm._guard_claim("Playing: Weightless by Marconi Union, in Spotify.").startswith("Playing:")
     policy.note_result("open_url")
     assert llm._guard_claim("Playing classic music on YouTube.") == "Playing classic music on YouTube."
+
+
+# ── "increase the volume by 30 percent." then "Increase it to more 30 percent." (went to the model, 2.6 s)
+
+@pytest.fixture
+def after_volume_up(monkeypatch):
+    import arya.core.llm as llm
+    monkeypatch.setattr(llm, "_last_volume", {"action": "", "until": 0.0})
+    llm.note_media({"action": "volume_up", "steps": 15})
+    return llm
+
+
+@pytest.mark.parametrize("said, expected", [
+    ("Increase it to more 30 percent.", {"action": "volume_up", "steps": 15}),
+    ("louder again", {"action": "volume_up", "steps": 5}),
+    ("more", {"action": "volume_up", "steps": 5}),
+    ("a bit more", {"action": "volume_up", "steps": 3}),
+    ("again", {"action": "volume_up", "steps": 5}),
+    ("a bit less", {"action": "volume_down", "steps": 3}),
+    ("lower it by 10 percent", {"action": "volume_down", "steps": 5}),
+    ("tell me more", None), ("more about the Coriolis force", None), ("what is it", None),
+])
+def test_volume_follow_ups(after_volume_up, said, expected):
+    assert after_volume_up.contextual_media_command(said) == expected
+
+
+def test_volume_follow_ups_only_right_after_a_volume_change(after_volume_up, monkeypatch):
+    llm = after_volume_up
+    monkeypatch.setattr(llm, "_last_volume", {"action": "volume_up", "until": 0.0})      # 90 s passed
+    assert llm.contextual_media_command("more") is None
+    assert llm.contextual_media_command("louder again") is None
+
+
+def test_volume_follow_up_counts_as_for_arya(after_volume_up):
+    assert addressee.quick_verdict("Increase it to more 30 percent.") is True
