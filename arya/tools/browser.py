@@ -167,6 +167,32 @@ _OPEN_SITE = re.compile(
     r"(?:\s+and\s+search(?:\s+for)?(?:\s+(?P<q>.+?))?)?\W*$", re.IGNORECASE)
 MUSIC_SITE = os.getenv("ARYA_MUSIC_SITE", "youtube").strip().lower()          # where "play X by Y" goes
 
+# After "Tell me a song or an artist", the next sentence ("classic music.", "Kishore Kumar") is the answer.
+SONG_ANSWER_S = 120.0
+_awaiting_song_until = 0.0
+# Sentences that are clearly a new request, not a song name.
+_NEW_REQUEST = re.compile(r"^\W*(?:arya\W+)?(?:what|why|how|when|where|who|which|is|are|can|could|would|do|does|"
+                          r"explain|tell|set|start|stop|open|close|search|google|show|minimi|maximi|cancel|no\b|"
+                          r"never ?mind|pause|next|previous|volume|turn|increase|decrease|mute|quiz|remind)",
+                          re.IGNORECASE)
+
+
+def awaiting_song() -> bool:
+    return time.monotonic() < _awaiting_song_until
+
+
+def _song_answer(message: str) -> str | None:
+    """'classic music.' after ARYA asked for a song -> 'classic music'; None if it's a new request."""
+    global _awaiting_song_until
+    if not awaiting_song():
+        return None
+    _awaiting_song_until = 0.0                       # one answer only
+    if _NEW_REQUEST.match(message) or _ANY_MUSIC.match(message):
+        return None
+    query = re.sub(r"^\W*(?:arya\W+)?(?:please\s+)?(?:play\s+|put on\s+)?(?:some\s+|the\s+|me\s+)?", "", message,
+                   flags=re.IGNORECASE).strip(" ,.!?")
+    return query if re.search(r"[A-Za-z]{2,}", query) else None
+
 
 def _engine(word: str | None) -> str:
     w = (word or "google").lower()
@@ -180,6 +206,11 @@ def _site(eng: str) -> str:
 async def handle(message: str) -> str | None:
     """ARYA's reply for browser requests, else None."""
     from arya.core import policy
+    global _awaiting_song_until
+
+    answer = _song_answer(message)
+    if answer:                                        # the song ARYA just asked for
+        message = f"play {answer} on {'YouTube Music' if MUSIC_SITE == 'youtube music' else 'YouTube'}"
 
     from arya.tools.music import _FOCUS
     if _FOCUS.search(message) and not _PLAY.search(message) and (
@@ -215,6 +246,7 @@ async def handle(message: str) -> str | None:
         if not await _open(SITES["youtube music"]):
             return "I couldn't open YouTube Music."
         policy.note_result("open_url")
+        _awaiting_song_until = time.monotonic() + SONG_ANSWER_S
         return "Opening YouTube Music. Tell me a song or an artist and I'll put it on."
 
     m = _OPEN_SITE.match(message)
