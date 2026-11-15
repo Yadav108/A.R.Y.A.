@@ -215,6 +215,9 @@ async def preload_models() -> None:
     from arya.knowledge import lectures              # lecture recordings -> library, while you're away
     asyncio.create_task(lectures.run(busy=_voice_lock.locked))
 
+    from arya.core import upkeep                     # daily backup of arya.db and your notes (last 7 days)
+    asyncio.create_task(upkeep.run())
+
     # Pre-synthesize the phrases ARYA says instantly (cached in tts.py).
     async def _warm_cache() -> None:
         for phrase in (*WAKE_ACKS, *THANKS_ACKS, NIGHT_ACK):
@@ -380,6 +383,12 @@ async def api_progress(request: Request) -> JSONResponse:
     from arya.study import planner
 
     return JSONResponse(await asyncio.to_thread(planner.progress))
+
+
+@app.get("/healthz")
+async def healthz() -> JSONResponse:
+    """For the watchdog (arya/desktop/supervisor.py): the server answers, the event loop is alive. No data."""
+    return JSONResponse({"ok": True})
 
 
 @app.get("/api/kb/status")
