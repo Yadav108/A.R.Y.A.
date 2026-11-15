@@ -76,7 +76,10 @@ qwen2.5:3b (~2.3 GB) and the app window fit only just. Levers: BIOS "UMA Frame B
 - [x] Study mode (`arya/study/session.py`): "start studying Dynamics for an hour" opens the course
       folder, starts pomodoros and says what to cover (cards due, new cards, next exercise, exam
       countdown); "how long have I been studying?"; "stop studying" sums up time and cards answered
-- [ ] Calendar (local ICS or connector)
+- [x] Calendar (`arya/tools/agenda.py`): ARYA's own events ("add Control lab every Thursday at 2 pm
+      in room B12"), `.ics` files in `%LOCALAPPDATA%\ARYA\calendar\` (weekly lectures expanded,
+      time zones converted), optional `ARYA_CALENDAR_URLS` subscriptions. "What's on tomorrow?",
+      "what's next?", "am I free at 3?"; in the briefing; heads-up 10 min before an event
 - [x] Proactive nudges (`arya/core/proactive.py`): battery at 20 % / 10 % unplugged, a break after
       90 min of continuous use, practice cards due once a day. Quiet during quiet hours (22-8), when
       you're away, while ARYA talks, and when Windows is in full screen / presentation / Do Not
