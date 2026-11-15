@@ -19,7 +19,7 @@ questions:
   - id: stability-2nd-order
     tags: [control, fundamentals, from-log]
     q: Tell me what are the parameters that will predict the stability of second-order system?
-    include: [["ζ > 0", "zeta > 0", "ζ is greater than 0", "zeta is greater than 0", "greater than zero", "ζ and ω_n are positive", "both ζ and ω_n are positive", "positive"]]
+    include: [["ζ > 0", "zeta > 0", "ζ is greater than 0", "zeta is greater than 0", "greater than zero", "greater than 0", "ζ and ω_n are positive", "both ζ and ω_n are positive", "positive"]]
     exclude:
       - "re:ζ\\s*=\\s*0[^.]{0,40}critically"
       - "re:stab[^.]{0,60}between 0 and 1"

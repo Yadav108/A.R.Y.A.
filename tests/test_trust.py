@@ -11,8 +11,9 @@ from arya.core import policy, router
     ("Derive the step response of a second-order system", "derivation"),
     ("Prove that the poles of a stable system lie in the left half plane", "derivation"),
     ("A cyclist of 90 kg rides with 150 W up a 5 % slope with efficiency 0.95, find the speed", "problem"),
-    ("Solve exercise 1-13 step by step", "worked"),
-    ("Walk me through exercise 3-14", "worked"),
+    ("Give me the full solution of exercise 1-13", "worked"),
+    ("Solve exercise 1-13 step by step", None),            # the local tutor walks you through it
+    ("Walk me through exercise 3-14", None),
     ("What is the Coriolis acceleration?", None),
     ("What is 17 times 23?", None),
     ("Why does a system overshoot?", None),
