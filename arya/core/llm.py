@@ -2318,6 +2318,20 @@ async def stream_with_tools(message: str):
             yield sentence
         return
 
+    try:                                                # "what's playing?", "play focus music"
+        from arya.tools import music as _music
+        playing = await _music.handle(message)
+    except Exception as exc:
+        print(f"Music skipped: {type(exc).__name__}: {exc}")
+        playing = None
+    if playing:
+        print("Instant answer: music")
+        save_message("user", message)
+        save_message("assistant", playing)
+        async for sentence in _clean_stream(_aiter_text(playing)):
+            yield sentence
+        return
+
     try:                                                # "what did I download today?", "tidy my Downloads"
         from arya.tools import file_agent as _file_agent
         filing = await asyncio.to_thread(_file_agent.handle, message)

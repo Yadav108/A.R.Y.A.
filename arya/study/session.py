@@ -250,8 +250,13 @@ async def handle(message: str) -> str | None:
             did.append(f"opened your {course} folder")
         except OSError as exc:
             print(f"Study mode: couldn't open {folder}: {exc}")
+    if os.getenv("ARYA_FOCUS_MUSIC_URL", "").strip():           # your focus playlist, if you set one
+        from arya.tools import music
+        if (await music.handle("play focus music")) == "Opening your focus music.":
+            did.append("put on your focus music")
     did.append(f"started {'a pomodoro' if sessions == 1 else f'{sessions} pomodoros'}, "
                f"25 minutes of focus{' each' if sessions > 1 else ''} with a 5 minute break")
     plan = await asyncio.to_thread(_session_plan, course)
-    return f"Study mode for {course}: I {' and '.join(did)}. {plan}"
+    actions = did[0] if len(did) == 1 else ", ".join(did[:-1]) + " and " + did[-1]
+    return f"Study mode for {course}: I {actions}. {plan}"
 

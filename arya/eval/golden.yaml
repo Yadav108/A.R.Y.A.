@@ -176,7 +176,7 @@ questions:
   - id: exercise-missing
     tags: [library, exercises, from-log]
     q: in case you have a solution in chapter one, question 30.
-    include: [["not", "couldn't", "can't find", "don't have", "isn't", "no exercise"]]
+    include: [["not", "couldn't", "can't find", "don't have", "isn't", "no exercise", "doesn't", "no information"]]
   - id: exercise-3-14
     tags: [library, exercises]
     q: What is exercise 3-14 about?

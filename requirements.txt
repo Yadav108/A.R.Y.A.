@@ -37,3 +37,4 @@ winrt-Windows.Storage.Streams; sys_platform == "win32"
 winrt-Windows.Globalization; sys_platform == "win32"
 winrt-Windows.Foundation; sys_platform == "win32"
 winrt-Windows.Foundation.Collections; sys_platform == "win32"
+winrt-Windows.Media.Control; sys_platform == "win32"   # music: what is playing, pause while you talk
