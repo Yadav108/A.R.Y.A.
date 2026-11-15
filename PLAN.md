@@ -59,8 +59,9 @@ qwen2.5:3b (~2.3 GB) and the app window fit only just. Levers: BIOS "UMA Frame B
 - [x] Progress view in the app: the Study card (exams, cards due, accuracy and exercises per course, 7-day chart, streak, "Quiz me") — `/api/progress`
 
 ### M4 — See what you see
-- [ ] "Explain this" on the screen (screenshot + OCR); photos of paper notes
-- [ ] Formulas rendered properly in the app (KaTeX)
+- [x] "Explain what's on my screen": the window you're looking at (never ARYA's own, even when covered) read with Windows OCR, answered locally; pictures offered to the cloud, asking first — `arya/tools/screen.py`
+- [x] Photos of paper notes: drop or paste into the app, read with OCR, explained, "add it to my library" (Photo notes)
+- [x] Formulas readable in the app: done differently — LaTeX is turned into Unicode maths (ζ, ωₙ², √(k/m)) since M1, so KaTeX isn't needed
 
 ### M5 — Voice excellence
 - [ ] Echo cancellation with the playback as reference → reliable barge-in, full duplex

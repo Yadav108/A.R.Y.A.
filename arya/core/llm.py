@@ -2071,6 +2071,26 @@ async def stream_with_tools(message: str):
 
     pending = policy.take_pending()
     policy.begin_turn(message)
+    if pending is not None and pending.tool == "screen_vision":
+        answer = policy.parse_yes_no(message)
+        if answer is not None:
+            log_event("cloud_vision_accepted" if answer else "cloud_vision_declined", source="screen")
+            save_message("user", message)
+            if answer:
+                from arya.tools import screen
+                try:
+                    reply = await screen.read_with_cloud(pending.args)
+                except Exception as exc:
+                    print(f"Cloud vision failed: {exc}")
+                    reply = "I couldn't reach the cloud to read that screenshot."
+            else:
+                reply = "Okay, the screenshot stays on the laptop."
+            save_message("assistant", reply)
+            async for sentence in _clean_stream(_aiter_text(reply)):
+                yield sentence
+            return
+        log_event("cloud_vision_dropped", source="screen")
+        pending = None
     if pending is not None and pending.tool == "cloud_vision":
         answer = policy.parse_yes_no(message)
         if answer is not None:
@@ -2151,6 +2171,22 @@ async def stream_with_tools(message: str):
         save_message("user", message)
         save_message("assistant", correction_reply)
         yield correction_reply
+        return
+
+    try:                                                # "explain what's on my screen" (OCR, stays local)
+        from arya.tools import screen as _screen
+        on_screen = await _screen.handle(message)
+    except Exception as exc:
+        print(f"Screen reading skipped: {type(exc).__name__}: {exc}")
+        on_screen = None
+    if on_screen:
+        reply, artifacts = on_screen
+        for kind, payload in artifacts:
+            emit_artifact(kind, payload)
+        save_message("user", message)
+        save_message("assistant", reply)
+        async for sentence in _clean_stream(_aiter_text(reply)):
+            yield sentence
         return
 
     try:                                                # exams and "what should I study today?"
