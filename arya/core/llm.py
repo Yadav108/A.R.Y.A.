@@ -30,6 +30,7 @@ def save_message(role: str, content: str) -> int:
 ANSWER_MAX_TOKENS = int(os.getenv("ARYA_ANSWER_MAX_TOKENS", "230")) or None
 # An exercise answer is an overview (given, asked, idea, result); "step by step" gets the full walkthrough.
 EXERCISE_MAX_TOKENS = int(os.getenv("ARYA_EXERCISE_MAX_TOKENS", "160")) or None
+DETAIL_EXERCISE_MAX_TOKENS = 520
 _WANTS_DETAIL = re.compile(r"\b(?:in detail|detailed|step by step|explain (?:it )?fully|full explanation|"
                            r"tell me more|more detail|go on|continue|everything|walk me through)\b", re.IGNORECASE)
 
@@ -622,18 +623,35 @@ _SMALL_TALK = re.compile(r"^\W*(?:hi|hii+|hello|hey|thanks?|thank you|good (?:mo
                          r"what'?s up|ok(?:ay)?|cool|nice|great|bye)\b", re.IGNORECASE)
 
 
+# The exercise the conversation is about, so a follow-up without a number stays on it.
+FOLLOW_UP_WINDOW_S = 10 * 60
+_last_exercise: dict = {"question": "", "until": 0.0}
+_FOLLOW_UP = re.compile(r"\b(?:continue|go on|explain|explanation|beginner|simpler|simply|understand|detail|details|"
+                        r"steps?|again|more|elaborate|clarify|slower|easier)\b", re.IGNORECASE)
+
+
 async def knowledge_for(question: str, k: int = 4) -> list:
     """Course-material passages good enough to ground an answer on (may be empty).
     Shows them as sources in the app."""
     from arya.knowledge.library import exercise_refs
-    if (len(question.split()) < 3 or _SMALL_TALK.match(question)) and not exercise_refs(question):
-        return []                  # "exercise 113" is short but is a real lookup
+    follow_up = time.monotonic() < _last_exercise["until"] and bool(_FOLLOW_UP.search(question))
+    if (len(question.split()) < 3 or _SMALL_TALK.match(question)) and not exercise_refs(question) and not follow_up:
+        return []                  # "exercise 113" (and "continue" right after one) is short but a real lookup
     started = time.monotonic()
     try:
         from arya.knowledge import library
         refs = library.exercise_refs(question)
-        passages = (await asyncio.wait_for(asyncio.to_thread(library.find_exercise, refs, question, k), timeout=12.0)
-                    if refs else [])
+        lookup_question = question
+        if (not refs and time.monotonic() < _last_exercise["until"] and len(question.split()) <= 12
+                and _FOLLOW_UP.search(question)):
+            # "continue, explain it for a beginner" right after an exercise: stay on that exercise
+            lookup_question = _last_exercise["question"]
+            refs = library.exercise_refs(lookup_question)
+            print(f"Follow-up on the same exercise: {lookup_question[:50]!r}")
+        passages = (await asyncio.wait_for(asyncio.to_thread(library.find_exercise, refs, lookup_question, k),
+                                           timeout=12.0) if refs else [])
+        if passages:
+            _last_exercise.update(question=lookup_question, until=time.monotonic() + FOLLOW_UP_WINDOW_S)
         if not passages:           # no exercise number asked (or none found): search by meaning + keywords
             passages = await asyncio.wait_for(asyncio.to_thread(library.relevant, question, k), timeout=12.0)
     except asyncio.TimeoutError:
@@ -674,7 +692,12 @@ def grounding_prompt(passages: list, question: str = "") -> str:
                "Cite the excerpts like [1]. If the statement refers to a figure, use what the text says. "
                "If they ask for one specific quantity, give its value exactly as written in the answers "
                "excerpt first, then one sentence on how it follows. "
-               "Since this is spoken, keep it to about five sentences unless they ask for more.")
+               "Since this is spoken, keep it to about five sentences unless they ask for more. "
+               "If they ask for more detail or a beginner explanation and a 'Handwritten solutions' excerpt is "
+               "included, that is their own worked solution: go through exactly those steps in order, in simple "
+               "words, and do not introduce other equations. Every value you state must match the answers or "
+               "handwritten excerpts; never derive a different result yourself. If something isn't in the "
+               "excerpts, say so instead of guessing.")
     else:
         how = ("\n\nIf these excerpts answer the question, base your answer on them, keep the course's notation "
                "and cite them like [1] or [2]. When an excerpt states the answer directly (a rule, condition or "
@@ -2236,11 +2259,23 @@ async def stream_with_tools(message: str):
     # Hard question while offline: offer the cloud, and ask first (arya/core/router.py).
     from arya.core import router
     reason = None if is_cloud or ARYA_MODE != "offline" or not router.cloud_available() else router.hard_reason(message)
+    if not reason and router.ENABLED and not is_cloud and ARYA_MODE == "offline" and router.cloud_available() \
+            and wants_detail(message):
+        from arya.knowledge.library import exercise_refs
+        on_exercise = exercise_refs(message) or (time.monotonic() < _last_exercise["until"]
+                                                 and _FOLLOW_UP.search(message))
+        if on_exercise:
+            # A detailed / beginner walkthrough of an exercise is a long derivation: the local model
+            # gets the steps mostly right but mixes up quantities (v_R for v). Offer the cloud.
+            reason = "worked"
     if reason:
         passages = await knowledge_for(message)          # shown as sources; their text goes out only on "yes"
         from arya.knowledge.library import context_block
         context = context_block(passages)[:4000] if passages else ""
-        offer = policy.offer("ask_cloud", {"question": message, "context": context}, router.offer_question(reason))
+        about = next((p.note for p in passages if getattr(p, "note", "")), "")
+        question_out = f"{message} ({about})" if about and about.split()[-1] not in message else message
+        offer = policy.offer("ask_cloud", {"question": question_out, "context": context},
+                             router.offer_question(reason))
         print(f"Offering the cloud ({reason}); waiting for yes/no")
         yield offer
         return
@@ -2347,8 +2382,11 @@ async def _stream_with_tools(message: str):
     buffer = ""
     full_response_parts: list[str] = []
 
-    cap = None if wants_detail(message) else (
-        EXERCISE_MAX_TOKENS if any(getattr(p, "note", "") for p in passages) else ANSWER_MAX_TOKENS)
+    on_exercise = any(getattr(p, "note", "") for p in passages)
+    if wants_detail(message):
+        cap = DETAIL_EXERCISE_MAX_TOKENS if on_exercise else None   # a walkthrough, not an open-ended essay
+    else:
+        cap = EXERCISE_MAX_TOKENS if on_exercise else ANSWER_MAX_TOKENS
     try:
         try:
             async for token in _stream_tokens(INTENT_MODEL_NAME, messages, max_tokens=cap):

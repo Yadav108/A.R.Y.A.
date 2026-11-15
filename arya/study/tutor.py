@@ -240,6 +240,7 @@ class Session:
     answers: str
     results: list
     sources: list
+    worked: str = ""                                     # the student's handwritten solution, if read before
     transcript: list = field(default_factory=list)       # [(role, text)]
     last: float = field(default_factory=time.monotonic)
 
@@ -275,13 +276,16 @@ def load_exercise(ref_question: str) -> Session | None:
     passages = library.find_exercise(refs, ref_question, k=6)
     if not passages:
         return None
-    answers = [p for p in passages if _is_answers(p.text)]
-    statements = [p for p in passages if not _is_answers(p.text)]
+    worked = [p for p in passages if p.title == "Handwritten solutions"]       # the student's own solution
+    passages_ = [p for p in passages if p.title != "Handwritten solutions"]
+    answers = [p for p in passages_ if _is_answers(p.text)]
+    statements = [p for p in passages_ if not _is_answers(p.text)]
     statement = max(statements, key=lambda p: len(p.text)) if statements else None
     ref = passages[0].note.replace("exercise ", "")
     answers_text = "\n".join(p.text for p in answers)
     return Session(ref=ref, statement=statement.text if statement else "", answers=answers_text,
-                   results=parse_results(answers_text), sources=[p.as_dict() for p in passages])
+                   results=parse_results(answers_text), sources=[p.as_dict() for p in passages],
+                   worked=worked[0].text if worked else "")
 
 
 def _asked_first(s: Session) -> list:
@@ -311,6 +315,8 @@ def _tutor_prompt(s: Session, mode: str) -> str:
         f"Task (from their exercise sheet):\n{s.statement[:1500]}\n\n"
         f"Official results (HIDDEN — never state these numbers or the final formulas unless the student "
         f"already said them):\n{s.answers[:900] or 'not available'}\n\n"
+        + (f"The student's own handwritten worked solution (HIDDEN, use it to see which method they know):\n"
+           f"{s.worked[:1500]}\n\n" if s.worked else "") +
         "Rules: at most three short spoken sentences; no lists, headings, markdown or LaTeX; use the task's "
         "notation; never do the whole solution for them; never invent given values. Let the student write the "
         "formulas and do the calculations: point at the idea or law, don't state the formula unless they are "

@@ -96,3 +96,43 @@ def test_reading_the_same_page_again_replaces_the_old_transcription(scanned_exer
     H._save("2-7", "Solutions scan, p. 1", "second reading")
     saved = scanned_exercise["library"].TRANSCRIPTIONS.read_text(encoding="utf-8")
     assert saved.count("## Exercise 2-7") == 1 and "second reading" in saved and "first reading" not in saved
+
+
+# ── Follow-ups and reuse of a transcription ──────────────────────────────────
+
+def test_saved_transcription_is_used_and_not_sent_again(scanned_exercise):
+    H._save("2-7", "Solutions scan, p. 1", "Explanation. Transcription:\nv_top = 2 v_C")
+    lib = scanned_exercise["library"]
+    found = lib.find_exercise(["2-7"], "exercise 2-7")
+    assert any(p.title == "Handwritten solutions" and "v_top = 2 v_C" in p.text for p in found)
+    assert H.offer("Explain my handwritten solution of exercise 2-7") is None      # answered locally now
+    assert scanned_exercise["sent"] == []
+
+
+def test_follow_up_stays_on_the_exercise(kb, monkeypatch):
+    import arya.core.llm as llm
+    llm.set_artifact_sink(lambda kind, payload: None)
+    monkeypatch.setitem(llm._last_exercise, "until", 0.0)
+    first = asyncio.run(llm.knowledge_for("explain exercise 1-13"))
+    assert first and first[0].note == "exercise 1-13"
+    again = asyncio.run(llm.knowledge_for("continue, explain it for a beginner"))
+    assert again and all(p.note == "exercise 1-13" for p in again)
+    assert asyncio.run(llm.knowledge_for("what is the weather like")) == []         # not a follow-up
+
+
+def test_detailed_exercise_walkthrough_offers_the_cloud(kb, monkeypatch):
+    import arya.core.llm as llm
+    monkeypatch.setattr(llm, "ARYA_MODE", "offline")
+    monkeypatch.setattr(router, "cloud_available", lambda: True)
+    monkeypatch.setattr(router, "ENABLED", True)
+    monkeypatch.setattr(llm, "save_message", lambda role, content: 0)
+    monkeypatch.setattr(llm, "get_history", lambda limit=10: [])
+    llm.set_artifact_sink(lambda kind, payload: None)
+    policy.cancel_pending()
+    monkeypatch.setitem(llm._last_exercise, "question", "explain exercise 1-13")
+    monkeypatch.setitem(llm._last_exercise, "until", __import__("time").monotonic() + 60)
+    said = _say("continue explaining, in detail for a beginner")
+    assert "ask the cloud" in said[0] and policy.has_pending()
+    assert policy._state.pending.args["question"].endswith("(exercise 1-13)")
+    assert "industrial robot" in policy._state.pending.args["context"]
+    policy.cancel_pending()
