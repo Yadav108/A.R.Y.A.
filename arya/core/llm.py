@@ -2032,6 +2032,33 @@ async def stream_with_tools(message: str):
 
     pending = policy.take_pending()
     policy.begin_turn(message)
+    if pending is not None and pending.tool == "cloud_vision":
+        answer = policy.parse_yes_no(message)
+        if answer is not None:
+            log_event("cloud_vision_accepted" if answer else "cloud_vision_declined")
+            save_message("user", message)
+            if answer:
+                from arya.study import handwriting
+                try:
+                    reply = await handwriting.read(pending.args)
+                except Exception as exc:
+                    print(f"Cloud vision failed: {exc}")
+                    reply = "I couldn't reach the cloud to read that page. I'll explain it from the printed task instead."
+                    save_message("assistant", reply)
+                    yield reply
+                    async for sentence in _clean_stream(_stream_with_tools(f"explain exercise {pending.args['ref']}")):
+                        yield sentence
+                    return
+                save_message("assistant", reply)
+                async for sentence in _clean_stream(_aiter_text(reply)):
+                    yield sentence
+                return
+            yield "Okay, nothing leaves the laptop. Here's the exercise from its printed task."
+            async for sentence in _clean_stream(_stream_with_tools(f"explain exercise {pending.args['ref']}")):
+                yield sentence
+            return
+        log_event("cloud_vision_dropped")
+        pending = None
     if pending is not None and pending.tool == "ask_cloud":
         answer = policy.parse_yes_no(message)
         if answer is not None:
@@ -2085,6 +2112,17 @@ async def stream_with_tools(message: str):
         save_message("user", message)
         save_message("assistant", correction_reply)
         yield correction_reply
+        return
+
+    try:                                                # "explain my handwritten solution of exercise 1-13"
+        from arya.study import handwriting as _handwriting
+        vision_offer = await asyncio.to_thread(_handwriting.offer, message)
+    except Exception as exc:
+        print(f"Handwriting offer skipped: {type(exc).__name__}: {exc}")
+        vision_offer = None
+    if vision_offer:
+        print("Offering cloud vision for a handwritten page; waiting for yes/no")
+        yield vision_offer
         return
 
     try:                                                # exercise tutor: walkthroughs and answer checks

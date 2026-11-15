@@ -34,6 +34,9 @@ CORE_NOTES = Path(__file__).resolve().parent / "core_notes.md"
 # What the user told ARYA was wrong ("that's wrong — ζ = 0 is undamped"); outranks everything.
 CORRECTIONS = DATA_DIR / "corrections.md"
 CORRECTIONS_TITLE = "Your corrections"
+# Handwritten solution pages read by the cloud vision model (after asking): kept and searchable.
+TRANSCRIPTIONS = DATA_DIR / "transcriptions.md"
+TRANSCRIPTIONS_TITLE = "Handwritten solutions"
 EXTENSIONS = {".pdf", ".docx", ".pptx", ".txt", ".md"}
 SKIP_DIRS = {".git", ".venv", "venv", "node_modules", "__pycache__", "site-packages"}
 
@@ -252,6 +255,8 @@ def _title_and_collection(path: Path, roots: list[Path]) -> tuple[str, str]:
         return "ARYA core notes", "ARYA core notes"
     if path == CORRECTIONS:
         return CORRECTIONS_TITLE, CORRECTIONS_TITLE
+    if path == TRANSCRIPTIONS:
+        return TRANSCRIPTIONS_TITLE, TRANSCRIPTIONS_TITLE
     for root in roots:
         try:
             rel = path.relative_to(root)
@@ -298,6 +303,8 @@ def _files(roots: list[Path]) -> list[Path]:
         files.append(CORE_NOTES)
     if CORRECTIONS.exists():
         files.append(CORRECTIONS)
+    if TRANSCRIPTIONS.exists():
+        files.append(TRANSCRIPTIONS)
     return files
 
 
@@ -747,8 +754,8 @@ def overview(question: str) -> str | None:
     q = question.lower()
     with _lock, _connect() as c:
         docs = c.execute("SELECT title, collection, pages, status, kind FROM documents "
-                         "WHERE status NOT LIKE 'duplicate%' AND path NOT IN (?, ?) ORDER BY collection, title",
-                         (str(CORE_NOTES), str(CORRECTIONS))).fetchall()
+                         "WHERE status NOT LIKE 'duplicate%' AND path NOT IN (?, ?, ?) ORDER BY collection, title",
+                         (str(CORE_NOTES), str(CORRECTIONS), str(TRANSCRIPTIONS))).fetchall()
     if not docs:
         return "Your course library is empty so far — I haven't indexed any documents yet."
     by_col: dict[str, list] = {}
