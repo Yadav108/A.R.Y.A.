@@ -576,6 +576,12 @@ async def get_daily_briefing() -> str:
         get_system_info(),
         list_timers(),
     )
+    try:                                                # exams and practice cards due (computed, not guessed)
+        from arya.study.planner import briefing_line
+        study = await asyncio.to_thread(briefing_line)
+    except Exception as exc:
+        study = ""
+        print(f"Briefing: study line skipped ({exc})")
 
     prompt = (
         "Time and date:\n"
@@ -588,6 +594,7 @@ async def get_daily_briefing() -> str:
         f"{timers}\n\n"
         "System status:\n"
         f"{system_status}\n"
+        + (f"\nStudy (say these numbers exactly):\n{study}\n" if study else "")
     )
 
     response = await _complete(
@@ -598,6 +605,7 @@ async def get_daily_briefing() -> str:
                 "content": (
                     "You are ARYA. Generate a concise spoken morning briefing "
                     "in a friendly professional tone. Cover: time, weather, "
+                    "the study line (next exam, cards due) if given, "
                     "recent notes, pending reminders, and system status. "
                     "Keep it under 5 sentences. No markdown or lists."
                 ),
@@ -2143,6 +2151,20 @@ async def stream_with_tools(message: str):
         save_message("user", message)
         save_message("assistant", correction_reply)
         yield correction_reply
+        return
+
+    try:                                                # exams and "what should I study today?"
+        from arya.study import planner as _planner
+        planning = await asyncio.to_thread(_planner.handle, message)
+    except Exception as exc:
+        print(f"Planner skipped: {type(exc).__name__}: {exc}")
+        planning = None
+    if planning:
+        print("Instant answer: exam planner")
+        save_message("user", message)
+        save_message("assistant", planning)
+        async for sentence in _clean_stream(_aiter_text(planning)):
+            yield sentence
         return
 
     try:                                                # quizzes with spaced repetition ("quiz me on dynamics")
