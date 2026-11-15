@@ -124,8 +124,11 @@ def _reset() -> None:
 
     from arya.study import mock_exam
 
+    from arya.tools import alarms
+
     policy.cancel_pending()
     browser._awaiting_song_until = 0.0
+    alarms._slot = None
     mock_exam._exam = None
     practice._quiz = None
     tutor._session = None
