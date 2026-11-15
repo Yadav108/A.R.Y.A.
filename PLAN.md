@@ -137,7 +137,9 @@ qwen2.5:3b (~2.3 GB) and the app window fit only just. Levers: BIOS "UMA Frame B
       per exercise (~12 min each, old-exam exercises first), task pages from the exercise sheets (never a
       solution sheet: 41 Dynamics exercises usable), clock with a 5-minute warning, answers by voice,
       graded against the answer sheets, every task recorded for spaced repetition / weak topics
-- [ ] Photo of your handwritten solution checked step by step (cloud vision, asking first)
+- [x] Photo of your handwritten solution checked (`arya/study/solution_check.py`): "check my solution for
+      exercise 2-2" asks first (only the photo + task text + official result go out); the cloud names the first
+      wrong step, ARYA itself checks the final value against the answer sheet; recorded for spaced repetition
 
 ### C4 — Routines and memory
 - [ ] Your own voice routines ("start my day" → briefing, calendar, focus music)

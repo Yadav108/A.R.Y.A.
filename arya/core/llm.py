@@ -2144,6 +2144,25 @@ async def stream_with_tools(message: str):
 
     pending = policy.take_pending()
     policy.begin_turn(message)
+    if pending is not None and pending.tool == "check_solution":
+        answer = policy.parse_yes_no(message)
+        if answer is not None:
+            log_event("cloud_vision_accepted" if answer else "cloud_vision_declined", source="solution_check")
+            save_message("user", message)
+            if answer:
+                from arya.study import solution_check
+                try:
+                    reply = await solution_check.check_with_cloud(pending.args)
+                except Exception as exc:
+                    print(f"Solution check failed: {type(exc).__name__}: {exc}")
+                    reply = "I couldn't reach the cloud to read your solution. Tell me your final result instead."
+            else:
+                reply = "Okay, your photo stays on the laptop. Tell me your final result and I'll check that."
+            save_message("assistant", reply)
+            async for sentence in _clean_stream(_aiter_text(reply)):
+                yield sentence
+            return
+        pending = None
     if pending is not None and pending.tool == "tidy_folder":
         answer = policy.parse_yes_no(message)
         if answer is not None:
@@ -2264,6 +2283,20 @@ async def stream_with_tools(message: str):
         save_message("user", message)
         save_message("assistant", correction_reply)
         yield correction_reply
+        return
+
+    try:                                                # "check my solution for exercise 2-2" (photo; asks first)
+        from arya.study import solution_check as _solution_check
+        checking = await asyncio.to_thread(_solution_check.handle, message)
+    except Exception as exc:
+        print(f"Solution check skipped: {type(exc).__name__}: {exc}")
+        checking = None
+    if checking:
+        print("Instant answer: solution check")
+        save_message("user", message)
+        save_message("assistant", checking)
+        async for sentence in _clean_stream(_aiter_text(checking)):
+            yield sentence
         return
 
     try:                                                # "explain what's on my screen" (OCR, stays local)
