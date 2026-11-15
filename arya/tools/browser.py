@@ -15,6 +15,7 @@ if that lookup fails it opens the search results instead.
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 import time
 from urllib.parse import quote_plus
@@ -148,6 +149,23 @@ _SEARCH = re.compile(rf"^\W*(?:arya\W+)?(?:(?:can you|could you|please)\s+)?(?:s
                      rf"(?P<q2>.+?)\s+(?:on|in)\s+(?P<eng2>google|youtube music|youtube|the web|the internet)\W*$|"
                      rf"^\W*(?:arya\W+)?(?:please\s+)?google\s+(?P<q3>.+?)\W*$", re.IGNORECASE)
 _PLAY = re.compile(r"\bplay\s+(?P<q>.+?)\s+(?:on|in|from)\s+(?P<eng>youtube music|youtube)\b", re.IGNORECASE)
+# "Play Kon Tujhe by Kishore Kumar", "play the song Kesariya", "play lofi study beats" — no site named
+_PLAY_SONG = re.compile(r"^\W*(?:arya\W+)?(?:please\s+)?play\s+(?:me\s+)?(?:the\s+|a\s+)?(?:"
+                        r"(?:song|track|music video)\s+(?P<q1>.+?)|(?P<q2>.+?\s+by\s+.+?)|"
+                        r"(?P<q3>.+?\s+(?:songs|beats|playlist|mix|music))"
+                        r")\W*$", re.IGNORECASE)
+_ANY_MUSIC = re.compile(r"^\W*(?:arya\W+)?(?:please\s+)?(?:(?:play|put on)\s+(?:some|any|me some|a little)\s+music|"
+                        r"(?:some|any)\s+music)(?:\s+please)?\W*$", re.IGNORECASE)
+SITES = {"youtube music": "https://music.youtube.com", "youtube": "https://www.youtube.com",
+         "google maps": "https://maps.google.com", "google": "https://www.google.com",
+         "gmail": "https://mail.google.com", "github": "https://github.com", "chatgpt": "https://chatgpt.com",
+         "wikipedia": "https://en.wikipedia.org", "whatsapp": "https://web.whatsapp.com"}
+_OPEN_SITE = re.compile(
+    r"^\W*(?:arya\W+)?(?:(?:can you|could you|please)\s+)?(?:open|go to|launch|take me to)\s+(?:the\s+)?"
+    r"(?P<site>youtube music|youtube|google maps|google|gmail|github|chatgpt|wikipedia|whatsapp)"
+    r"(?:\s+(?:in chrome|website|site|page|for me))?"
+    r"(?:\s+and\s+search(?:\s+for)?(?:\s+(?P<q>.+?))?)?\W*$", re.IGNORECASE)
+MUSIC_SITE = os.getenv("ARYA_MUSIC_SITE", "youtube").strip().lower()          # where "play X by Y" goes
 
 
 def _engine(word: str | None) -> str:
@@ -163,9 +181,19 @@ async def handle(message: str) -> str | None:
     """ARYA's reply for browser requests, else None."""
     from arya.core import policy
 
+    from arya.tools.music import _FOCUS
+    if _FOCUS.search(message) and not _PLAY.search(message) and (
+            os.getenv("ARYA_FOCUS_MUSIC_URL", "").strip()
+            or re.search(r"\b(?:focus|study|concentration|background)\s+music\b", message, re.IGNORECASE)):
+        return None          # your focus playlist (or how to set it up) — the music handler's; "lofi beats" → YouTube
     m = _PLAY.search(message)
-    if m:
-        eng, query = m.group("eng").lower(), m.group("q").strip(" ,.")
+    s = None if m or _ANY_MUSIC.match(message) else _PLAY_SONG.match(message)
+    if m or s:
+        if m:
+            eng, query = m.group("eng").lower(), m.group("q").strip(" ,.")
+        else:
+            eng = MUSIC_SITE if MUSIC_SITE in WATCH_URLS else "youtube"
+            query = (s.group("q1") or s.group("q2") or s.group("q3")).strip(" ,.")
         vid = await first_video(query)
         url = WATCH_URLS[eng].format(id=vid) if vid else SEARCH_URLS[eng].format(q=quote_plus(query))
         if not await _open(url):
@@ -175,6 +203,33 @@ async def handle(message: str) -> str | None:
         music.forget()
         return (f"Playing {query} on {_site(eng)}." if vid
                 else f"Here are the {_site(eng)} results for {query}; pick one to play.")
+
+    if _ANY_MUSIC.match(message):
+        from arya.tools import music
+        now = await music.now_playing()
+        if now and not now["playing"] and (now["title"] or now["artist"]):
+            from arya.tools.media import media_control
+            await media_control("play_pause")
+            policy.note_result("media_control")
+            return f"Resuming {now['title'] or 'your music'}{' by ' + now['artist'] if now['artist'] else ''}."
+        if not await _open(SITES["youtube music"]):
+            return "I couldn't open YouTube Music."
+        policy.note_result("open_url")
+        return "Opening YouTube Music. Tell me a song or an artist and I'll put it on."
+
+    m = _OPEN_SITE.match(message)
+    if m:
+        site, query = m.group("site").lower(), (m.group("q") or "").strip(" ,.")
+        url = SEARCH_URLS[site].format(q=quote_plus(query)) if query and site in SEARCH_URLS else SITES[site]
+        if not await _open(url):
+            return f"I couldn't open {site.title()}."
+        policy.note_result("open_url")
+        name = _site(site) if site in SEARCH_URLS else site.title().replace("Github", "GitHub").replace("Chatgpt", "ChatGPT")
+        if query:
+            return f"Searching {name} for {query}."
+        if re.search(r"\band\s+search\b", message, re.IGNORECASE):
+            return f"{name} is open. What should I search for?"
+        return f"Opening {name}."
 
     m = _SEARCH.search(message)
     if m:

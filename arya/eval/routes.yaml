@@ -11,6 +11,12 @@ routes:
   - {say: "play lofi beats on YouTube Music", route: browser, action: open_url, addressed: true}
   - {say: "minimize the Chrome window.", route: window control, action: window, addressed: true}   # from-log
   - {say: "show me the desktop", route: window control, action: desktop}
+  # From the live conversation of 2026-11-15 (commands ARYA ignored or sent to the model)
+  - {say: "minimized chrome window.", route: window control, action: window, addressed: true}   # from-log
+  - {say: "Play Kon Tujhe by Kishore Kumar.", route: browser, action: open_url, addressed: true}   # from-log
+  - {say: "Open YouTube.", route: browser, action: open_url, addressed: true}   # from-log
+  - {say: "Go to YouTube and search", route: browser, action: open_url, addressed: true}   # from-log
+  - {say: "any music.", route: browser, action: open_url, addressed: true}   # from-log
 
   # Study
   - {say: "start studying Dynamics for an hour", route: study mode, action: pomodoro, addressed: true}

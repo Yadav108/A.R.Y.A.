@@ -339,7 +339,7 @@ class HotwordEngine:
                         chunk = canceller.process(chunk, ref)      # ARYA's own voice removed
                     self._on_chunk(chunk)
                 except Exception as exc:
-                    print(f"WakeWord error: {exc}")
+                    print(f"WakeWord error: {type(exc).__name__}: {exc}")
 
     def _speech_threshold(self) -> float:
         return max(ENERGY_FLOOR, self._noise_floor * 3.0)

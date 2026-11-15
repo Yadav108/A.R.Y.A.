@@ -240,7 +240,9 @@ _START = re.compile(r"\b(?:quiz me|test me|practi[cs]e (?:with me|session|now|so
                     r"ask me (?:some )?questions|let'?s (?:practi[cs]e|revise|review))\b", re.IGNORECASE)
 _STOP = re.compile(r"^\W*(?:ok(?:ay)?\W+)?(?:stop|quit|end|exit|done|finish|enough)(?:\s+(?:the\s+)?(?:quiz|practi[cs]e|"
                    r"session|this|it|now))?\W*$", re.IGNORECASE)
-_SKIP = re.compile(r"^\W*(?:skip|pass|next|i don'?t know|no idea|don'?t know)\W*$", re.IGNORECASE)
+# "I don't know, I think that's what we're trying to do." (from the log) is a skip too, not a new question.
+_SKIP = re.compile(r"^\W*(?:skip|pass|next|i don'?t know|no idea|don'?t know|i'?m not sure|no clue)\b"
+                   r"(?:\W*$|[,.!]\s*(?!.*\b(?:it'?s|is|equals?|maybe)\b))", re.IGNORECASE)
 _HOW = re.compile(r"\bhow am i doing\b|\bmy (?:score|progress)\b", re.IGNORECASE)
 _WHAT = re.compile(r"\bwhat should i (?:practi[cs]e|study|revise|review)\b|\bwhat'?s due\b|\bcards? due\b",
                    re.IGNORECASE)

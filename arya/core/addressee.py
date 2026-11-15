@@ -45,7 +45,8 @@ _ASSISTANT_COMMAND = re.compile(
     r"^\W*(?:please\s+)?(?:set|start|open|close|play|pause|skip|turn|remind|calculate|convert|search|"
     r"look up|show me|list|delete|move|rename|define|plot|graph|draw|sketch|mute|unmute|"
     r"minimi[sz]e|maximi[sz]e|restore|reopen|switch to|go to tab|new tab|next tab|previous tab|google|"
-    r"tidy|summari[sz]e|undo|quiz me|check my|stop studying)\b",
+    r"tidy|summari[sz]e|undo|quiz me|check my|stop studying|go to|minimi[sz]ed|maximi[sz]ed|"
+    r"(?:some|any) music|put on)\b",
     re.IGNORECASE,
 )
 # Question openers. People ask each other these too ("Where is it?", "Can you explain that?"),
@@ -86,6 +87,27 @@ _PROMPT = (
     "something unrelated, said long after ARYA last spoke, is usually not.\n\n"
     "Reply with exactly one word: ARYA or OTHER."
 )
+
+
+# How Whisper writes "ARYA" in follow-ups ("Area.", "Uh, Aria?", "Hey, Ario.") — only trusted when the name
+# is the whole utterance or opens it, followed by a pause ("Area, play …").
+_LOOSE_NAME = r"(?:a+r+i?y+a+h?|aria+h?|ariya|aarya|ario|aryo|area|harya|arja|ayra)"
+_NAME_ALONE = re.compile(rf"^\W*(?:(?:hey|hi|ok|okay|uh|um|so|yo)\W+)?{_LOOSE_NAME}\W*$", re.IGNORECASE)
+_NAME_FIRST = re.compile(rf"^\W*(?:(?:hey|hi|ok|okay|uh|um|so|yo)\W+)?{_LOOSE_NAME}\s*[,.!?:;]\s*(?=\S)",
+                         re.IGNORECASE)
+# "ARYA, play …" often comes out as "I'll play …".
+_MISHEARD_PLAY = re.compile(r"^\W*(?:i'll|i will|ill)\s+(?=play\b)", re.IGNORECASE)
+
+
+def split_name(text: str) -> tuple[str, bool]:
+    """('Area, play Kon Tujhe', …) -> ('play Kon Tujhe', True); ('Area.') -> ('', True); else (text, False).
+    Used on follow-ups: a sentence that starts with ARYA's name is for ARYA, and the name isn't the request."""
+    if _NAME_ALONE.match(text):
+        return "", True
+    m = _NAME_FIRST.match(text) or _MISHEARD_PLAY.match(text)
+    if m:
+        return text[m.end():].strip(), True
+    return text, False
 
 
 def quick_verdict(text: str, pending_confirmation: bool = False) -> bool | None:

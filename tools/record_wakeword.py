@@ -8,6 +8,9 @@ Records (about 2 minutes total):
 
 Then retrain:  .venv\\Scripts\\python.exe tools\\train_wakeword.py
 
+    --plain   only record plain "ARYA" (about 1 minute), the way you call it across the room —
+              use this when ARYA reacts to "Hey ARYA" but misses a plain "ARYA"
+
 Recordings stay on this PC (arya/models/wakeword/user_samples/, git-ignored).
 """
 from __future__ import annotations
@@ -25,6 +28,9 @@ OUT = ROOT / "arya" / "models" / "wakeword" / "user_samples"
 SR = 16_000
 
 POSITIVE_PROMPTS = ["Hey ARYA"] * 8 + ["ARYA"] * 2 + ["Okay ARYA"] * 2
+# --plain: your plain "ARYA", the way you'd call it across the room — short, a bit louder, sometimes a question.
+PLAIN_PROMPTS = (["ARYA"] * 4 + ["ARYA?  (as a question)"] * 2 + ["ARYA  (from a step further away)"] * 2
+                 + ["ARYA  (quickly, as if busy)"] * 2 + ["ARYA, open Chrome"] * 2 + ["ARYA, what time is it"] * 2)
 READ_ALOUD = (
     "Read this aloud at a normal pace, then keep chatting about your day until the timer ends:\n\n"
     "  \"I'm going to head back to the lab after lunch. The area under the curve is the integral.\n"
@@ -73,23 +79,29 @@ def countdown(msg: str) -> None:
 
 
 def main() -> None:
+    plain = "--plain" in sys.argv[1:]
+    prompts = PLAIN_PROMPTS if plain else POSITIVE_PROMPTS
     print(f"Microphone: {sd.query_devices(kind='input')['name']}")
     print("Speak at your normal distance from the mic, in your normal voice.\n")
     stamp = time.strftime("%Y%m%d-%H%M%S")
 
     saved = 0
-    for i, phrase in enumerate(POSITIVE_PROMPTS, 1):
-        countdown(f"[{i}/{len(POSITIVE_PROMPTS)}] Say \"{phrase}\" after the countdown:")
-        clip = trim_to_speech(record(2.5))
+    for i, phrase in enumerate(prompts, 1):
+        countdown(f"[{i}/{len(prompts)}] Say \"{phrase}\" after the countdown:")
+        clip = trim_to_speech(record(3.0 if "," in phrase else 2.5))
         if clip is None:
             print("    didn't catch that — skipping (no speech detected)")
             continue
-        save(OUT / "positive" / f"{stamp}_{i:02d}.wav", clip)
+        save(OUT / "positive" / f"{stamp}{'_plain' if plain else ''}_{i:02d}.wav", clip)
         saved += 1
         print(f"    saved ({clip.size / SR:.2f}s)")
     if saved < 6:
         print("\nToo few usable recordings — check the mic and run again.")
         sys.exit(1)
+    if plain:                                  # the negatives from the first session are still there
+        print(f"\nDone — {saved} plain \"ARYA\" samples saved to {OUT.relative_to(ROOT)}")
+        print("Now retrain:  .venv\\Scripts\\python.exe tools\\train_wakeword.py")
+        return
 
     print("\n" + READ_ALOUD)
     countdown("Start reading after the countdown (40 s):")

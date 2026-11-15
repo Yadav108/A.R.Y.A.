@@ -356,3 +356,15 @@ questions:
     tags: [hard, control]
     q: Does a faster rise time usually go with a higher or a lower bandwidth?
     include: [["higher", "larger", "wider", "greater", "increase"]]
+
+  # ── From the live conversation of 2026-11-15 ─────────────────────────────
+  - id: pt2-stabilize
+    tags: [control, from-log]
+    q: How do you stabilize this PT2 system?
+    include: [["feedback", "controller", "PD", "PID", "derivative"]]
+    exclude: ['re:(less than|below|smaller than) (zero|0)[^.]{0,40}over-?damped', 're:(equal to|equals|exactly|is) (zero|0)[^.]{0,40}critically damped', 're:ζ\s*=\s*0[^.]{0,30}critically']
+  - id: pt2-stable-when
+    tags: [control, from-log]
+    q: When is a PT2 element stable?
+    include: [["D > 0", "D greater than", "D is positive", "positive damping", "ζ > 0", "zeta > 0", "greater than zero", "greater than 0", "positive"]]
+    exclude: ['re:(equal to|equals|exactly|is) (zero|0)[^.]{0,40}critically damped']

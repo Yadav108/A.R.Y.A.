@@ -136,7 +136,13 @@ async def preload_models() -> None:
     async def on_wake(command: str, wake_triggered: bool) -> None:
         """Called by WakeWordEngine for wake-word hits and follow-up speech.
         Follow-ups (no wake word) must pass the addressee check first."""
-        if not wake_triggered and command and _smart_listening and not _answers_bare_wake():
+        named = False
+        if not wake_triggered and command:
+            # "Area." / "Uh, Aria?" = you called ARYA; "Area, play …" / "I'll play …" = a request to ARYA.
+            command, named = addressee.split_name(command)
+            if named and not command:
+                wake_triggered = True                    # just the name: answer like a wake word ("Yes?")
+        if not wake_triggered and command and not named and _smart_listening and not _answers_bare_wake():
             if not await _meant_for_arya(command):
                 return
         await _dispatch(command, wake_triggered=wake_triggered, announce_transcript=True)
