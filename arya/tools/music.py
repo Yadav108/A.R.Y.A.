@@ -129,7 +129,8 @@ def resume_later(delay: float = RESUME_AFTER_S) -> None:
 
 # ── Voice ─────────────────────────────────────────────────────────────────────
 
-_WHAT = re.compile(r"\bwhat(?:'s| is)\s+(?:this\s+)?(?:playing|song|track)\b|\bwhat song is (?:this|playing)\b|"
+_WHAT = re.compile(r"\bwhat(?:'s| is| was)\s+(?:this\s+|that\s+|the\s+)?(?:playing|song|track|music)\b|"
+                   r"\bwhat song (?:is|was) (?:this|that|playing)\b|"
                    r"\bwho (?:sings|is singing|is this)\b|\bname of (?:this|the) song\b|\bwhat am i listening to\b",
                    re.IGNORECASE)
 _FOCUS = re.compile(r"\bplay\s+(?:some\s+|my\s+)?(?:focus|study|studying|concentration|lo-?fi|background)\s+"

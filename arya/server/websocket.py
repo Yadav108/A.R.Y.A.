@@ -14,6 +14,7 @@ import os
 import re
 import time
 from collections.abc import AsyncIterator, Iterable
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
@@ -84,6 +85,26 @@ _NEUTRAL_WORDS = {"arya", "aria", "so", "then", "well", "and", "very", "much", "
 
 WAKE_ACK = "Yes?"
 THANKS_ACK = "Anytime."
+# A little variety (all pre-synthesized, so still instant); late at night ARYA notices once.
+WAKE_ACKS = ["Yes?", "I'm here.", "Listening.", "What's up?", "Mm-hm?"]
+THANKS_ACKS = ["Anytime.", "Happy to help.", "You're welcome!", "Anytime, that's what I'm here for."]
+NIGHT_ACK = "Still up? I'm listening."
+_last_ack = {"wake": "", "thanks": "", "night_day": ""}
+
+
+def _pick(kind: str, options: list[str]) -> str:
+    import random
+    choice = random.choice([o for o in options if o != _last_ack[kind]] or options)
+    _last_ack[kind] = choice
+    return choice
+
+
+def wake_ack() -> str:
+    now = datetime.now()
+    if now.hour < 4 and _last_ack["night_day"] != now.date().isoformat():
+        _last_ack["night_day"] = now.date().isoformat()
+        return NIGHT_ACK
+    return _pick("wake", WAKE_ACKS)
 
 
 def _normalise(text: str) -> str:
@@ -143,8 +164,16 @@ async def preload_models() -> None:
             if named and not command:
                 wake_triggered = True                    # just the name: answer like a wake word ("Yes?")
         if not wake_triggered and command and not named and _smart_listening and not _answers_bare_wake():
-            if not await _meant_for_arya(command):
+            # A request split by a pause ("… by Kishore Kumar." + "on YouTube music."): judge the pieces together.
+            now = time.monotonic()
+            joined = (_fragment["text"] + " " + command) if _fragment["text"] and \
+                now - _fragment["at"] < FRAGMENT_JOIN_S else None
+            if joined and await _meant_for_arya(joined, quiet=True):
+                command = joined
+            elif not await _meant_for_arya(command):
+                _fragment.update(text=(joined or command)[-300:], at=now)
                 return
+            _fragment.update(text="", at=0.0)
         await _dispatch(command, wake_triggered=wake_triggered, announce_transcript=True)
 
     wake_engine.set_callback(on_wake, loop)
@@ -188,7 +217,7 @@ async def preload_models() -> None:
 
     # Pre-synthesize the phrases ARYA says instantly (cached in tts.py).
     async def _warm_cache() -> None:
-        for phrase in (WAKE_ACK, THANKS_ACK):
+        for phrase in (*WAKE_ACKS, *THANKS_ACKS, NIGHT_ACK):
             await _synthesize(phrase)
 
     asyncio.create_task(_warm_cache())
@@ -515,6 +544,8 @@ def set_microphone_muted(muted: bool) -> bool:
 _smart_listening = addressee.SMART_LISTENING_DEFAULT
 _ignored_in_a_row = 0
 ANSWER_WINDOW_S = 15.0       # ARYA just asked a question: what you say in the next 15 s is the answer
+FRAGMENT_JOIN_S = 4.0        # an ignored piece + the next one within 4 s are judged as one sentence
+_fragment = {"text": "", "at": 0.0}
 _last_spoke_at = 0.0          # when ARYA last finished speaking (monotonic)
 # After a bare "Hey ARYA" ("Yes?"), the next sentence within this window is the
 # request itself — it skips the "was that for me?" check.
@@ -539,7 +570,7 @@ def set_smart_listening(enabled: bool) -> None:
     emit_status(f"ARYA_SMART:{'on' if _smart_listening else 'off'}")
 
 
-async def _meant_for_arya(command: str) -> bool:
+async def _meant_for_arya(command: str, quiet: bool = False) -> bool:
     """Decide whether a follow-up was said to ARYA. Ignored speech is never
     answered, never saved to history, and doesn't keep the conversation open;
     a few ignored in a row end the conversation."""
@@ -549,15 +580,17 @@ async def _meant_for_arya(command: str) -> bool:
     recent = get_history(limit=4)
     last_reply = next((m["content"] for m in reversed(recent) if m["role"] == "assistant"), "")
     since = time.monotonic() - _last_spoke_at if _last_spoke_at else None
-    from arya.tools import browser
-    # ARYA is waiting for an answer: a yes/no, the song it asked for, or any question it just asked.
-    expecting = (policy.has_pending() or browser.awaiting_song()
+    from arya.tools import alarms, browser
+    # ARYA is waiting for an answer: a yes/no, the song or the reminder time it asked for, or any question it asked.
+    expecting = (policy.has_pending() or browser.awaiting_song() or alarms.awaiting()
                  or (last_reply.rstrip().endswith("?") and since is not None and since < ANSWER_WINDOW_S))
     ok, why = await addressee.is_addressed(command, last_reply=last_reply, seconds_since_reply=since,
                                            recent=recent, pending_confirmation=expecting)
     if ok:
         _ignored_in_a_row = 0
         return True
+    if quiet:                                    # only a trial (two fragments joined): no side effects
+        return False
     _ignored_in_a_row += 1
     print(f"Not for ARYA ({why}) — staying quiet: {command!r}")
     log_event("ignored_speech", chars=len(command), reason=why)      # what was said is not logged
@@ -805,7 +838,7 @@ async def _run_turn(message: str, wake_triggered: bool, announce_transcript: boo
                 # Bare "ARYA" — acknowledge and let the follow-up window catch
                 # the actual request. Never sent to the LLM or saved to history.
                 global _bare_wake_until
-                await _say(WAKE_ACK)
+                await _say(wake_ack())
                 _bare_wake_until = time.monotonic() + BARE_WAKE_WINDOW_S   # the next sentence IS the request
                 return
 
@@ -816,7 +849,7 @@ async def _run_turn(message: str, wake_triggered: bool, announce_transcript: boo
             if closing in ("end", "thanks"):
                 wake_engine.end_conversation()
                 if closing == "thanks":
-                    await _say(THANKS_ACK)
+                    await _say(_pick("thanks", THANKS_ACKS))
                 return
             if closing == "ack":
                 return          # "Okay." — nothing to answer; the conversation stays open

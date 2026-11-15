@@ -19,6 +19,13 @@ routes:
   - {say: "any music.", route: browser, action: open_url, addressed: true}   # from-log
   - {say: "Play Kon Tuche by Kishore Kumar", route: browser, action: open_url}   # from-log (Whisper's spelling)
   - {say: "minimise the chrome window.", route: window control, action: window}   # from-log (British spelling)
+  # 2026-11-16 log: claimed but never done, or ignored
+  - {say: "Set an alarm for tomorrow's morning 8 a.m.", route: alarms}   # from-log
+  - {say: "Set a timer for 23 minutes.", route: alarms}   # from-log
+  - {say: "Remind me tomorrow at 13:00 to send working hours to supervisor", route: alarms}   # from-log
+  - {say: "Windows Explorer", route: open app, action: open_app}   # from-log
+  - {say: "What was the music?", route: music}   # from-log
+  - {say: "play the song Kaun Tujhe on YouTube music", route: browser, action: open_url}
 
   # Study
   - {say: "start studying Dynamics for an hour", route: study mode, action: pomodoro, addressed: true}

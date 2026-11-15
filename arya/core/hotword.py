@@ -79,6 +79,7 @@ _VERIFY_PATTERN = re.compile(
 STOP_BARGE_IN = os.getenv("ARYA_BARGE_IN_STOP", "1") != "0"
 STOP_LOUDER_THAN_ECHO = float(os.getenv("BARGE_IN_STOP_RATIO", "1.8"))  # x ARYA's loud (90th pct) level
 STOP_MAX_VOICED_CHUNKS = 25        # > 2 s of loud audio isn't a "stop" — it's ARYA (or a conversation)
+COMMAND_MAX_VOICED_CHUNKS = 60     # ≤ ~5 s: may be a command said over ARYA (checked against its own words)
 STOP_MIN_VOICED_CHUNKS = 2         # ≥ 160 ms
 STOP_END_SILENCE_CHUNKS = 5        # 400 ms below the gate ends the burst
 ECHO_HISTORY_CHUNKS = 75           # ~6 s of ARYA's playback level, kept across replies
@@ -440,7 +441,7 @@ class HotwordEngine:
             cap["levels"].append(rms)
         else:
             cap["silence"] += 1
-        if cap["voiced"] > STOP_MAX_VOICED_CHUNKS:
+        if cap["voiced"] > COMMAND_MAX_VOICED_CHUNKS:
             # Long and loud: ARYA's own voice (louder than learned) or someone talking.
             # Learn from it so ARYA's playback doesn't keep opening bursts.
             self._echo_levels.extend(cap["levels"])
@@ -451,6 +452,28 @@ class HotwordEngine:
             if cap["voiced"] >= STOP_MIN_VOICED_CHUNKS:
                 threading.Thread(target=self._finish_stop, args=(cap,), daemon=True).start()
 
+    def _is_barge_in_command(self, heard: str) -> bool:
+        """A clear request for ARYA heard while it talks — and not ARYA's own words coming back."""
+        if not heard or len(re.findall(r"[A-Za-z]{2,}", heard)) < 2:
+            return False
+        try:
+            from arya.core import addressee
+            if addressee._ALWAYS_FOR_ARYA.match(heard.strip()):
+                return False                                        # "thank you", "yes", "okay": not a new request
+            rest, named = addressee.split_name(heard)
+            if not (named or addressee.quick_verdict(heard) is True):
+                return False
+        except Exception:
+            return False
+        words = set(re.findall(r"[a-z']{3,}", heard.lower()))
+        now = time.monotonic()
+        for t, said in self._recent_spoken:                         # its own sentence through the mic
+            if now - t < 15 and words:
+                overlap = len(words & set(re.findall(r"[a-z']{3,}", said.lower()))) / len(words)
+                if overlap >= 0.5:
+                    return False
+        return True
+
     def _finish_stop(self, cap: dict) -> None:
         try:
             heard = _transcribe(np.concatenate(cap["audio"]))
@@ -460,10 +483,15 @@ class HotwordEngine:
         if is_stop_phrase(heard) and stop_words_in(heard) & self._arya_said_stop_recently():
             print(f"WakeWord: ignored {heard!r} — ARYA itself just said that word")
             return
-        if is_stop_phrase(heard):
+        if is_stop_phrase(heard) and cap.get("voiced", 0) <= STOP_MAX_VOICED_CHUNKS:
             print(f"WakeWord BARGE-IN stop (no wake word): {heard!r}")
             if self._callback is not None:
                 self._post(self._callback("stop", False))   # the server stops the reply at once
+        elif self._is_barge_in_command(heard):
+            # "Decrease the volume by 50 percent" said over ARYA's "Yes?" — a request, not noise.
+            print(f"WakeWord BARGE-IN command: {heard!r}")
+            if self._callback is not None:
+                self._post(self._callback(_strip_wake_words(heard) or heard, False))
         else:
             if heard.strip():
                 print(f"WakeWord: ignored while speaking (not a stop): {heard!r}")

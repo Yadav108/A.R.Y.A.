@@ -142,6 +142,42 @@ _MULTI_PART = re.compile(r"\b(and|then|also|plus|after that|as well)\b|,", re.IG
 
 
 _in_routine: ContextVar[bool] = ContextVar("_in_routine", default=False)   # a routine's steps can't run routines
+# "Would you like me to search for X and play the first result?" — the model offers; a "yes" must then do it.
+_OFFER = re.compile(r"(?:would you like(?: me)? to|do you want me to|want me to|shall i|should i|how about i|"
+                    r"i can|i could)\s+(?P<act>[^?.!]{4,160})\?(?:[^?]*\bwould you like (?:that|it)\?)?\s*$",
+                    re.IGNORECASE)
+_OFFER_THAT = re.compile(r"(?:how about i|i can|i could)\s+(?P<act>[^?.!]{4,160})[?.!]\s*(?:would you like (?:that|it|"
+                         r"me to do that)|shall i|should i|want me to)\??\s*$", re.IGNORECASE)
+_OFFER_GENERIC = re.compile(r"^(?:help|assist)\b|\banything else\b|\bsomething else\b|^(?:know|hear|learn) more\b|"
+                            r"^(?:clarify|provide more|give (?:you )?more (?:details|context))", re.IGNORECASE)
+_OFFER_VERBS = re.compile(r"^(?:search|look up|find|play|open|set|remind|add|create|start|show|read|check|plot|draw|"
+                          r"explain|walk you through|quiz|summari[sz]e|tidy|close|minimi[sz]e|pause|turn|google|take|"
+                          r"save|note|make|put|schedule|send|go through|calculate|convert|list)\b", re.IGNORECASE)
+
+
+def remember_offer(reply: str) -> None:
+    """If the reply ends by offering an action, keep it: "yes" then runs it (pending 'do_offer')."""
+    from arya.core import policy
+
+    text = reply.strip()
+    if not text.endswith("?") or policy.has_pending():
+        return
+    m = _OFFER.search(text) or _OFFER_THAT.search(text)
+    if not m:
+        return
+    act = re.sub(r"^(?:go ahead and|also|now)\s+", "", m.group("act").strip(), flags=re.IGNORECASE)
+    if _OFFER_GENERIC.search(act) or not _OFFER_VERBS.match(act):
+        return
+    act = re.sub(r"\byours\b", "mine", re.sub(r"\byour\b", "my", re.sub(r"\byou\b", "me", act, flags=re.IGNORECASE),
+                                               flags=re.IGNORECASE), flags=re.IGNORECASE)
+    act = re.sub(r"\s+for me$", "", act).strip()
+    question = re.split(r"(?<=[.!])\s+", text)[-1]
+    policy.offer("do_offer", {"request": act}, question)
+    print(f"Offer remembered: {act!r}")
+
+
+_APP_REQUEST = re.compile(r"^\W*(?:arya\W+)?(?:please\s+)?(?:(?:open|launch|start|run)\s+(?:the\s+|my\s+)?)?"
+                          r"(?P<app>[a-z][a-z .]{1,30}?)(?:\s+(?:app|application|window|please))?\W*$", re.IGNORECASE)
 _BRIEFING = re.compile(r"^\W*(?:arya\W+)?(?:please\s+)?(?:give me|read(?: me)?|start(?: with)?|let'?s (?:have|hear)|"
                        r"what'?s|i'?d like)?\s*(?:the|my|today'?s|a)?\s*(?:daily |morning )?briefing\W*$",
                        re.IGNORECASE)
@@ -185,6 +221,10 @@ def _system_prompt(with_tools: bool = False) -> str:
         "- Lead with the answer; skip filler like 'Sure!' or 'Great question'.\n"
         "- Don't add worked numeric examples on your own. When you do give a number, it must come from "
         "a tool result or from the user's course excerpts; never calculate it in your head.\n"
+        "Personality: smart, caring and a little playful, like a brilliant friend who knows mechatronics. "
+        "Precision comes first: give the complete, exact answer with the proper technical terms and conditions. "
+        "After that you may add at most one short playful or caring line when it fits, for example when the "
+        "user is up late, stressed, or just got something right. Never promise an action you can't do in this turn.\n"
         + _profile_block()
         # The clock comes after the fixed rules: everything before it is identical between turns,
         # so the local model reuses its cached reading of it instead of re-reading the whole prompt.
@@ -2108,7 +2148,11 @@ _ACTION_CLAIM = re.compile(
     r"started|stopped|sent|saved|switched|launched)\b"
     # "Playing some classic music for you." / "I'm playing it now" (from the log: nothing was playing)
     r"|^\W*(?:now\s+)?playing\b(?!:)|\bi(?:'m| am)\s+(?:now\s+)?(?:playing|opening|starting|searching)\b"
-    r"|\b(?:i've|i have)\s+(?:just\s+)?(?:put on|started playing|queued)\b",
+    r"|\b(?:i've|i have)\s+(?:just\s+)?(?:put on|started playing|queued)\b"
+    # promises: "I will set a reminder for 13:00 tomorrow" (from the log — nothing was set)
+    r"|\bi(?:'ll| will)\s+(?:now\s+|go ahead and\s+)?(?:set|add|create|schedule|start|play|open|send|save|book|"
+    r"launch|search|minimi[sz]e|maximi[sz]e|close|turn (?:on|off|up|down)|put on|take (?:a )?note)\b"
+    r"|\bi will take note\b",
     re.IGNORECASE,
 )
 _NOT_DONE ="I haven't actually done that — ask me directly and I'll confirm with you first."
@@ -2164,6 +2208,21 @@ async def stream_with_tools(message: str):
 
     pending = policy.take_pending()
     policy.begin_turn(message)
+    if pending is not None and pending.tool == "do_offer":
+        answer = policy.parse_yes_no(message)
+        if answer is not None:
+            if answer:
+                request = pending.args["request"]
+                print(f"Offer accepted: {request!r}")
+                save_message("user", message)
+                async for sentence in stream_with_tools(request):
+                    yield sentence
+            else:
+                save_message("user", message)
+                save_message("assistant", "Okay.")
+                yield "Okay."
+            return
+        pending = None                                   # something else: the offer lapses
     if pending is not None and pending.tool == "check_solution":
         answer = policy.parse_yes_no(message)
         if answer is not None:
@@ -2314,6 +2373,36 @@ async def stream_with_tools(message: str):
             save_message("assistant", defined)
             async for sentence in _clean_stream(_aiter_text(defined)):
                 yield sentence
+            return
+
+    try:                                                # timers, alarms, reminders — set for real, missing parts asked
+        from arya.tools import alarms as _alarms
+        alarm = await _alarms.handle(message)
+    except Exception as exc:
+        print(f"Alarms skipped: {type(exc).__name__}: {exc}")
+        alarm = None
+    if alarm:
+        print("Instant answer: alarms")
+        save_message("user", message)
+        save_message("assistant", alarm)
+        async for sentence in _clean_stream(_aiter_text(alarm)):
+            yield sentence
+        return
+
+    app = _APP_REQUEST.match(message)                   # "open Chrome", "Windows Explorer" (a bare app name)
+    if app:
+        from arya.tools.os_tools import _APP_ALIASES, open_app
+        name = app.group("app").lower()
+        if name in _APP_ALIASES:
+            print("Instant answer: open app")
+            result = await open_app(name)
+            reply = f"Opening {app.group('app').strip()}." if not result.startswith("Failed") else \
+                f"I couldn't open {app.group('app').strip()}."
+            if not result.startswith("Failed"):
+                policy.note_result("open_app")
+            save_message("user", message)
+            save_message("assistant", reply)
+            yield reply
             return
 
     if _BRIEFING.search(message):                       # "give me the briefing" (also a routine step)
@@ -2836,6 +2925,7 @@ async def _stream_with_tools(message: str):
         response = await _tool_pipeline(message, history, mem_context)
         for sentence in split_sentences(response):
             yield sentence
+        remember_offer(response)
         return
 
     msg_id = save_message("user", message)
@@ -2893,3 +2983,4 @@ async def _stream_with_tools(message: str):
         if full_response:
             resp_id = save_message("assistant", full_response)
             asyncio.create_task(_store_embedding("message", resp_id, f"[assistant]: {full_response}"))
+            remember_offer(full_response)        # "Want me to …?" -> a "yes" will actually do it

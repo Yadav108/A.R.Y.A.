@@ -49,6 +49,8 @@ _APP_ALIASES: dict[str, str] = {
     "calc": "calc.exe",
     "explorer": "explorer.exe",
     "file explorer": "explorer.exe",
+    "windows explorer": "explorer.exe",
+    "files": "explorer.exe",
     "word": "WINWORD.EXE",
     "microsoft word": "WINWORD.EXE",
     "excel": "EXCEL.EXE",

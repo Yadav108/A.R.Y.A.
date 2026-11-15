@@ -177,6 +177,15 @@ _NEW_REQUEST = re.compile(r"^\W*(?:arya\W+)?(?:what|why|how|when|where|who|which
                           re.IGNORECASE)
 
 
+def _song_query(raw: str) -> str:
+    """'the song "Kaun Tujhe" by Kishore Kumar' -> 'Kaun Tujhe by Kishore Kumar' (what to search for)."""
+    q = re.sub(r"[\"“”‘’']", "", raw).strip(" ,.")
+    q = re.sub(r"^(?:me\s+)?(?:the\s+|a\s+)?(?:song|track|music video|music)\s+(?:called\s+|named\s+)?", "", q,
+               flags=re.IGNORECASE)
+    q = re.sub(r"\s+(?:song|track)$", "", q, flags=re.IGNORECASE)
+    return q.strip(" ,.") or raw.strip(" ,.")
+
+
 def awaiting_song() -> bool:
     return time.monotonic() < _awaiting_song_until
 
@@ -221,10 +230,10 @@ async def handle(message: str) -> str | None:
     s = None if m or _ANY_MUSIC.match(message) else _PLAY_SONG.match(message)
     if m or s:
         if m:
-            eng, query = m.group("eng").lower(), m.group("q").strip(" ,.")
+            eng, query = m.group("eng").lower(), _song_query(m.group("q"))
         else:
             eng = MUSIC_SITE if MUSIC_SITE in WATCH_URLS else "youtube"
-            query = (s.group("q1") or s.group("q2") or s.group("q3")).strip(" ,.")
+            query = _song_query(s.group("q1") or s.group("q2") or s.group("q3"))
         vid = await first_video(query)
         url = WATCH_URLS[eng].format(id=vid) if vid else SEARCH_URLS[eng].format(q=quote_plus(query))
         if not await _open(url):
