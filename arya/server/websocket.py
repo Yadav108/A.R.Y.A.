@@ -290,6 +290,39 @@ def _start_knowledge_indexing() -> None:
         print(f"Knowledge indexing not started: {exc}")
 
 
+MAX_PHOTO_BYTES = 15 * 1024 * 1024
+
+
+@app.post("/api/photo")
+async def api_photo(request: Request) -> JSONResponse:
+    """A photo dropped or pasted into the app window: read with OCR on this laptop, shown, kept as context."""
+    if not _authorised(request):
+        return _deny()
+    import base64
+    import binascii
+
+    body = await request.json()
+    data = str(body.get("data") or "")
+    data = data.split(",", 1)[1] if data.startswith("data:") else data
+    try:
+        raw = base64.b64decode(data, validate=True)
+    except (binascii.Error, ValueError):
+        return JSONResponse({"error": "That isn't an image."}, status_code=400)
+    if not raw or len(raw) > MAX_PHOTO_BYTES:
+        return JSONResponse({"error": "The photo is empty or larger than 15 MB."}, status_code=413)
+    name = re.sub(r"[^\w .-]", "", str(body.get("name") or "photo"))[:60] or "photo"
+    from arya.tools import screen
+    import arya.core.llm as _llm
+
+    try:
+        info = await asyncio.to_thread(screen.add_photo, raw, name)
+    except Exception as exc:
+        return JSONResponse({"error": f"I couldn't open that image ({type(exc).__name__})."}, status_code=400)
+    _llm.emit_artifact("VISUAL", {"type": "image", "id": info["image_id"], "caption": info["title"]})
+    log_event("photo_added", chars=info["chars"])
+    return JSONResponse(info)
+
+
 @app.get("/api/progress")
 async def api_progress(request: Request) -> JSONResponse:
     """The Study card: exams, per-course practice, streak, last 7 days."""

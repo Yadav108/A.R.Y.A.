@@ -102,12 +102,12 @@ def render(doc_id: int, page: int) -> bytes:
         return doc[page - 1].get_pixmap(dpi=RENDER_DPI).tobytes("png")
 
 
-async def _vision_call(png: bytes) -> str:
+async def _vision_call(png: bytes, prompt: str = _PROMPT) -> str:
     import httpx
 
     body = {"model": VISION_MODEL, "max_tokens": 900, "temperature": 0.2,
             "messages": [{"role": "user", "content": [
-                {"type": "text", "text": _PROMPT},
+                {"type": "text", "text": prompt},
                 {"type": "image_url", "image_url": {"url": "data:image/png;base64," + base64.b64encode(png).decode()}}]}]}
     async with httpx.AsyncClient(timeout=90) as client:
         r = await client.post(GROQ_URL, json=body, headers={"Authorization": f"Bearer {os.getenv('GROQ_API_KEY', '')}"})

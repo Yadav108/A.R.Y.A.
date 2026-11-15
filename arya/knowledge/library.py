@@ -37,6 +37,9 @@ CORRECTIONS_TITLE = "Your corrections"
 # Handwritten solution pages read by the cloud vision model (after asking): kept and searchable.
 TRANSCRIPTIONS = DATA_DIR / "transcriptions.md"
 TRANSCRIPTIONS_TITLE = "Handwritten solutions"
+# Text of photos you added to ARYA and asked to keep ("add it to my library").
+PHOTO_NOTES = DATA_DIR / "photo_notes.md"
+PHOTO_NOTES_TITLE = "Photo notes"
 EXTENSIONS = {".pdf", ".docx", ".pptx", ".txt", ".md"}
 SKIP_DIRS = {".git", ".venv", "venv", "node_modules", "__pycache__", "site-packages"}
 
@@ -171,24 +174,32 @@ def ocr_available() -> bool:
 
 def _ocr_page(page) -> str:
     """Printed text of one PDF page image; '' if nothing readable."""
-    import asyncio
-
-    from winrt.windows.graphics.imaging import BitmapAlphaMode, BitmapPixelFormat, SoftwareBitmap
     from winrt.windows.media.ocr import OcrEngine
-    from winrt.windows.storage.streams import DataWriter
 
     longest = max(page.rect.width, page.rect.height) / 72
     dpi = min(OCR_DPI, int(OcrEngine.max_image_dimension / max(longest, 1)))
     pix = page.get_pixmap(dpi=dpi, alpha=True)                    # RGBA, opaque
-    writer = DataWriter()
-    writer.write_bytes(bytes(pix.samples))
-    bitmap = SoftwareBitmap.create_copy_from_buffer(
-        writer.detach_buffer(), BitmapPixelFormat.RGBA8, pix.width, pix.height, BitmapAlphaMode.PREMULTIPLIED)
     try:
-        result = asyncio.run(_ocr_engine.recognize_async(bitmap))   # indexing runs in its own thread
+        return ocr_rgba(pix.width, pix.height, bytes(pix.samples))
     except Exception as exc:
         print(f"Knowledge: OCR failed on page {page.number + 1}: {exc}")
         return ""
+
+
+def ocr_rgba(width: int, height: int, rgba: bytes) -> str:
+    """Printed text in an RGBA image (a PDF page, a screenshot, a photo). Call from a worker thread."""
+    import asyncio
+
+    from winrt.windows.graphics.imaging import BitmapAlphaMode, BitmapPixelFormat, SoftwareBitmap
+    from winrt.windows.storage.streams import DataWriter
+
+    if not ocr_available():
+        return ""
+    writer = DataWriter()
+    writer.write_bytes(rgba)
+    bitmap = SoftwareBitmap.create_copy_from_buffer(
+        writer.detach_buffer(), BitmapPixelFormat.RGBA8, width, height, BitmapAlphaMode.PREMULTIPLIED)
+    result = asyncio.run(_ocr_engine.recognize_async(bitmap))
     # Keep lines with at least one real word; drops scribbles read as 'ie', '=', 'Vr'.
     lines = [ln.text for ln in result.lines if re.search(r"[A-Za-zÄÖÜäöüß]{3,}|\d+\s*[-–.]\s*\d+\)", ln.text)]
     return _clean("\n".join(lines))
@@ -257,6 +268,8 @@ def _title_and_collection(path: Path, roots: list[Path]) -> tuple[str, str]:
         return CORRECTIONS_TITLE, CORRECTIONS_TITLE
     if path == TRANSCRIPTIONS:
         return TRANSCRIPTIONS_TITLE, TRANSCRIPTIONS_TITLE
+    if path == PHOTO_NOTES:
+        return PHOTO_NOTES_TITLE, PHOTO_NOTES_TITLE
     for root in roots:
         try:
             rel = path.relative_to(root)
@@ -305,6 +318,8 @@ def _files(roots: list[Path]) -> list[Path]:
         files.append(CORRECTIONS)
     if TRANSCRIPTIONS.exists():
         files.append(TRANSCRIPTIONS)
+    if PHOTO_NOTES.exists():
+        files.append(PHOTO_NOTES)
     return files
 
 
@@ -518,10 +533,14 @@ def search(query: str, k: int = 5) -> list[Passage]:
             f"SELECT chunks.id, doc_id, page, text, title, collection, kind, path FROM chunks "
             f"JOIN documents ON documents.id = chunks.doc_id WHERE chunks.id IN ({','.join('?' * len(ids_))})", ids_)}
     core, corrections = str(CORE_NOTES), str(CORRECTIONS)
+    top_sim = max(sim_of.values()) if sim_of else 0.0
     for cid, r in rows.items():
-        if r["path"] == core:
+        # Boosts only between near-equal matches: a loosely related core-notes section must not
+        # outrank a much better match elsewhere (a photo note at 0.77 vs core notes at 0.37).
+        close = sim_of.get(cid, 0.0) >= top_sim - 0.15
+        if r["path"] == core and close:
             scores[cid] *= CORE_NOTES_BOOST       # checked fundamentals beat a lab report that shares keywords
-        elif r["path"] == corrections:
+        elif r["path"] == corrections and close:
             scores[cid] *= CORE_NOTES_BOOST * 1.3  # your own corrections beat everything
         if len(r["text"]) < SHORT_CHUNK_CHARS:
             scores[cid] *= SHORT_CHUNK_PENALTY     # near-empty pages (titles, figure captions) match too easily
@@ -765,8 +784,8 @@ def overview(question: str) -> str | None:
     q = question.lower()
     with _lock, _connect() as c:
         docs = c.execute("SELECT title, collection, pages, status, kind FROM documents "
-                         "WHERE status NOT LIKE 'duplicate%' AND path NOT IN (?, ?, ?) ORDER BY collection, title",
-                         (str(CORE_NOTES), str(CORRECTIONS), str(TRANSCRIPTIONS))).fetchall()
+                         "WHERE status NOT LIKE 'duplicate%' AND path NOT IN (?, ?, ?, ?) ORDER BY collection, title",
+                         (str(CORE_NOTES), str(CORRECTIONS), str(TRANSCRIPTIONS), str(PHOTO_NOTES))).fetchall()
     if not docs:
         return "Your course library is empty so far — I haven't indexed any documents yet."
     by_col: dict[str, list] = {}
