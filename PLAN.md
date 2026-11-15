@@ -77,7 +77,10 @@ qwen2.5:3b (~2.3 GB) and the app window fit only just. Levers: BIOS "UMA Frame B
       folder, starts pomodoros and says what to cover (cards due, new cards, next exercise, exam
       countdown); "how long have I been studying?"; "stop studying" sums up time and cards answered
 - [ ] Calendar (local ICS or connector)
-- [ ] Proactive reminders: battery, breaks, due cards
+- [x] Proactive nudges (`arya/core/proactive.py`): battery at 20 % / 10 % unplugged, a break after
+      90 min of continuous use, practice cards due once a day. Quiet during quiet hours (22-8), when
+      you're away, while ARYA talks, and when Windows is in full screen / presentation / Do Not
+      Disturb. "Do not disturb for an hour", "no nudges", "nudges back on"
 - [ ] Email summaries (ask first)
 - [ ] File agent
 - [ ] Music

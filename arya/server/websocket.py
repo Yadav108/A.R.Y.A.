@@ -166,6 +166,9 @@ async def preload_models() -> None:
 
     asyncio.create_task(_restore_scheduled())        # timers/reminders that survived a restart
 
+    from arya.core import proactive                  # battery, breaks, due cards — spoken only when it helps
+    asyncio.create_task(proactive.run(announce, busy=_voice_lock.locked))
+
     # Pre-synthesize the phrases ARYA says instantly (cached in tts.py).
     async def _warm_cache() -> None:
         for phrase in (WAKE_ACK, THANKS_ACK):

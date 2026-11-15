@@ -41,10 +41,10 @@ _CAPABILITIES = re.compile(r"^\W*(?:hey\W+)?(?:arya\W+)?(?:so\W+)?(?:what (?:can
                            r"able to do)\W*$", re.IGNORECASE)
 CAPABILITIES = (
     "I'm your study companion. I answer questions from your own course material and show you the page, "
-    "explain exercises by number, plot step responses, Bode plots and functions, draw block diagrams, and do "
-    "exact maths and unit conversions. Say \"start studying\" and a course, and I open its folder, start "
-    "pomodoros and tell you what to cover. I can also set timers, reminders and pomodoros, take and find notes, "
-    "check the weather, battery and system, open apps and files, and control music and volume. "
+    "explain exercises by number, plot responses, draw block diagrams, and do exact maths and unit conversions. "
+    "Say \"start studying\" and a course, and I open its folder, start pomodoros and tell you what to cover; "
+    "I also speak up for a low battery, a long stretch without a break or cards due, unless you say \"no nudges\". "
+    "I can set timers and reminders, take notes, check the weather and battery, open apps and files, and control music. "
     "Everything runs on this laptop unless you say \"ask the cloud\"."
 )
 
@@ -2189,6 +2189,20 @@ async def stream_with_tools(message: str):
         save_message("user", message)
         save_message("assistant", reply)
         async for sentence in _clean_stream(_aiter_text(reply)):
+            yield sentence
+        return
+
+    try:                                                # "do not disturb for an hour" / "nudges back on"
+        from arya.core import proactive as _proactive
+        muting = await asyncio.to_thread(_proactive.handle, message)
+    except Exception as exc:
+        print(f"Nudge settings skipped: {type(exc).__name__}: {exc}")
+        muting = None
+    if muting:
+        print("Instant answer: nudge settings")
+        save_message("user", message)
+        save_message("assistant", muting)
+        async for sentence in _clean_stream(_aiter_text(muting)):
             yield sentence
         return
 
