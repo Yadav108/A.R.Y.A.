@@ -92,7 +92,10 @@ qwen2.5:3b (~2.3 GB) and the app window fit only just. Levers: BIOS "UMA Frame B
       downloaded", "find the slides I downloaded yesterday", "what's taking up space?", "tidy my
       Downloads" (asks first, sorts by type, never deletes, skips today's/unfinished files),
       "undo the tidy"
-- [ ] Music
+- [x] Music (`arya/tools/music.py`, Windows media controls — any player or browser): "what's
+      playing?", "play focus music" (`ARYA_FOCUS_MUSIC_URL`, also started by study mode), and music
+      pauses when "Hey ARYA" is heard and resumes after the answer (`ARYA_PAUSE_MUSIC=0` to disable;
+      never resumed if you paused it yourself; watchdog for false wakes)
 
 ---
 

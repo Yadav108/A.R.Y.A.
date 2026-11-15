@@ -43,6 +43,8 @@ def _press(vk: int, times: int = 1) -> None:
 
 
 async def media_control(action: str, steps: int = 5) -> str:
+    from arya.tools.music import forget
+    forget()                                    # you're controlling the music: ARYA won't resume it later
     key = action.strip().lower().replace(" ", "_").replace("-", "_")
     key = _ALIASES.get(key, key)
     vk = _VK.get(key)

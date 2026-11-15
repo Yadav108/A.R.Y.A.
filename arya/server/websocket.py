@@ -166,6 +166,14 @@ async def preload_models() -> None:
 
     asyncio.create_task(_restore_scheduled())        # timers/reminders that survived a restart
 
+    from arya.tools import music                     # "Hey ARYA" pauses the music so the mic hears you
+
+    def _duck_music(event: str) -> None:
+        if event == "ARYA_LISTENING" and _loop is not None:
+            asyncio.run_coroutine_threadsafe(music.duck(busy=_voice_lock.locked), _loop)
+
+    add_status_listener(_duck_music)
+
     from arya.core import proactive                  # battery, breaks, due cards — spoken only when it helps
     asyncio.create_task(proactive.run(announce, busy=_voice_lock.locked))
 
@@ -741,6 +749,15 @@ async def interrupt() -> None:
         await _send_all("ARYA_INTERRUPT")
 
 
+def _resume_music() -> None:
+    """Music ARYA paused for 'Hey ARYA' comes back a few seconds after the answer."""
+    try:
+        from arya.tools import music
+        music.resume_later()
+    except Exception as exc:
+        print(f"Music: resume skipped ({type(exc).__name__})")
+
+
 async def _dispatch(message: str, wake_triggered: bool = False, announce_transcript: bool = False) -> None:
     """Cancel whatever ARYA is doing, then start the new turn."""
     global _current_turn
@@ -751,6 +768,7 @@ async def _dispatch(message: str, wake_triggered: bool = False, announce_transcr
     if not policy.has_pending() and _classify_closing(message) == "stop":
         speaker.stop()
         wake_engine.end_conversation()
+        _resume_music()
         if announce_transcript:
             await _send_all(f"TRANSCRIPT:{message}")
         await _send_all("ARYA_DONE")
@@ -804,6 +822,7 @@ async def _run_turn(message: str, wake_triggered: bool, announce_transcript: boo
             global _last_spoke_at
             _last_spoke_at = time.monotonic()
             wake_engine.set_speaking(False)
+            _resume_music()
             try:
                 await _send_all("ARYA_DONE")
                 if wake_engine.followup_active():
