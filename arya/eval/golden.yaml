@@ -198,7 +198,7 @@ questions:
   - id: ohm
     tags: [electrical, fundamentals]
     q: What is Ohm's law?
-    include: [["V = IR", "V = I R", "U = R·I", "U = RI", "U = R I", "V = R I", "U = I·R", "V = I·R", "U = IR", "voltage equals", "V = RI"]]
+    include: [["V = IR", "V = I R", "U = R·I", "U = RI", "U = R I", "V = R I", "U = I·R", "V = I·R", "U = IR", "voltage equals", "V = RI", "I = V/R", "I = V / R"]]
   - id: rc-time-constant
     tags: [electrical, fundamentals]
     q: What is the time constant of an RC circuit?
