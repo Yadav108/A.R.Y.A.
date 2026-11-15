@@ -312,11 +312,16 @@ class HotwordEngine:
 
     def _run(self) -> None:
         self._detector = HotwordDetector()
-        chunks: queue.Queue[np.ndarray] = queue.Queue(maxsize=256)
+        chunks: queue.Queue = queue.Queue(maxsize=256)
+        from arya.core.echo import canceller
+        aec = canceller.available()
 
         def on_audio(indata, frames, time_info, status) -> None:
+            mic = indata[:, 0].copy()
+            # The reference is taken *now*, in step with this chunk, even if the worker lags behind.
+            ref = canceller.take_reference(mic.size) if aec else None
             try:
-                chunks.put_nowait(indata[:, 0].copy())
+                chunks.put_nowait((mic, ref))
             except queue.Full:
                 pass  # worker fell behind — drop audio rather than block the driver
 
@@ -326,10 +331,12 @@ class HotwordEngine:
                   f"verify {'on' if VERIFY else 'off'}, conversation {conversation_seconds() / 60:.0f} min)")
             while self._running:
                 try:
-                    chunk = chunks.get(timeout=0.5)
+                    chunk, ref = chunks.get(timeout=0.5)
                 except queue.Empty:
                     continue
                 try:
+                    if ref is not None:
+                        chunk = canceller.process(chunk, ref)      # ARYA's own voice removed
                     self._on_chunk(chunk)
                 except Exception as exc:
                     print(f"WakeWord error: {exc}")
@@ -514,7 +521,9 @@ class HotwordEngine:
         command = ""
         if cap["speech"]:
             try:
+                t0 = time.monotonic()
                 command = _transcribe(np.concatenate(cap["audio"]))
+                print(f"Latency: speech recognised in {time.monotonic() - t0:.2f}s")
             except Exception as exc:
                 print(f"WakeWord: transcription failed ({exc})")
             command = _strip_wake_words(command)

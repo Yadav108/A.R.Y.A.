@@ -14,7 +14,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
+# 127.0.0.1, not "localhost": on Windows "localhost" tries IPv6 first and costs ~0.3-2 s per new connection.
+OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434").rstrip("/").replace("//localhost", "//127.0.0.1")
 # qwen2.5:3b: reliable tool calling and fits a 4 GB GPU next to Whisper medium.
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:3b")
 
@@ -28,6 +29,21 @@ ANSWER_TEMPERATURE = float(os.getenv("OLLAMA_TEMPERATURE", "0.3"))
 
 # Generous read timeout: the first request after idle loads the model into VRAM.
 _TIMEOUT = httpx.Timeout(120.0, connect=3.0)
+
+
+_shared: tuple | None = None                  # (event loop, client)
+
+
+def _client() -> httpx.AsyncClient:
+    """One client per event loop, kept open: creating one costs ~0.3-0.4 s on Windows (SSL setup),
+    which every spoken answer used to pay before its first word."""
+    global _shared
+    import asyncio
+
+    loop = asyncio.get_running_loop()
+    if _shared is None or _shared[0] is not loop or _shared[1].is_closed:
+        _shared = (loop, httpx.AsyncClient(timeout=_TIMEOUT))   # a client can't move between loops
+    return _shared[1]
 
 
 class LocalLLMUnavailable(RuntimeError):
@@ -103,10 +119,9 @@ async def chat_local(
     """
     payload = _payload(messages, False, tools, temperature, max_tokens)
     try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-            response = await client.post(f"{OLLAMA_HOST}/api/chat", json=payload)
-            _raise_for_status(response, response.text)
-            return response.json().get("message", {})
+        response = await _client().post(f"{OLLAMA_HOST}/api/chat", json=payload)
+        _raise_for_status(response, response.text)
+        return response.json().get("message", {})
     except httpx.HTTPError as exc:
         raise LocalLLMUnavailable(f"Cannot reach Ollama at {OLLAMA_HOST}: {exc!r}") from exc
 
@@ -119,22 +134,21 @@ async def stream_local(
     """Streaming chat. Yields content tokens as they arrive."""
     payload = _payload(messages, True, None, temperature, max_tokens)
     try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-            async with client.stream("POST", f"{OLLAMA_HOST}/api/chat", json=payload) as response:
-                if response.status_code >= 400:
-                    body = (await response.aread()).decode(errors="replace")
-                    _raise_for_status(response, body)
-                async for line in response.aiter_lines():
-                    if not line.strip():
-                        continue
-                    chunk = json.loads(line)
-                    if chunk.get("error"):
-                        raise LocalLLMUnavailable(f"Ollama error: {chunk['error']}")
-                    token = chunk.get("message", {}).get("content")
-                    if token:
-                        yield token
-                    if chunk.get("done"):
-                        break
+        async with _client().stream("POST", f"{OLLAMA_HOST}/api/chat", json=payload) as response:
+            if response.status_code >= 400:
+                body = (await response.aread()).decode(errors="replace")
+                _raise_for_status(response, body)
+            async for line in response.aiter_lines():
+                if not line.strip():
+                    continue
+                chunk = json.loads(line)
+                if chunk.get("error"):
+                    raise LocalLLMUnavailable(f"Ollama error: {chunk['error']}")
+                token = chunk.get("message", {}).get("content")
+                if token:
+                    yield token
+                if chunk.get("done"):
+                    break
     except httpx.HTTPError as exc:
         raise LocalLLMUnavailable(f"Cannot reach Ollama at {OLLAMA_HOST}: {exc!r}") from exc
 
@@ -146,11 +160,10 @@ async def warm_up(attempts: int = 2) -> bool:
 
     for attempt in range(1, attempts + 1):
         try:
-            async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-                response = await client.post(f"{OLLAMA_HOST}/api/chat", json={
-                    **_payload([{"role": "user", "content": "hi"}], False, None, None, 1),
-                })
-                _raise_for_status(response, response.text)
+            response = await _client().post(f"{OLLAMA_HOST}/api/chat", json={   # also opens the shared client
+                **_payload([{"role": "user", "content": "hi"}], False, None, None, 1),
+            })
+            _raise_for_status(response, response.text)
             print(f"LLM: local model {OLLAMA_MODEL} ready")
             return True
         except (httpx.HTTPError, LocalLLMUnavailable) as exc:

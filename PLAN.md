@@ -64,8 +64,13 @@ qwen2.5:3b (~2.3 GB) and the app window fit only just. Levers: BIOS "UMA Frame B
 - [x] Formulas readable in the app: done differently — LaTeX is turned into Unicode maths (ζ, ωₙ², √(k/m)) since M1, so KaTeX isn't needed
 
 ### M5 — Voice excellence
-- [ ] Echo cancellation with the playback as reference → reliable barge-in, full duplex
-- [ ] Wake → first word under 2.5 s
+- [x] Echo cancellation with the playback as reference (WebRTC AEC3 via `livekit`, `arya/core/echo.py`):
+      47 dB echo removed in simulation, your voice kept while ARYA talks; `ARYA_AEC=0` turns it off
+- [x] Latency, measured per answer in the log (`Latency: …`). Fixes: one shared Ollama client
+      (a new one cost ~0.4 s per answer), `127.0.0.1` instead of `localhost`, clock moved after the
+      fixed prompt rules, long first sentence voiced clause-first. End of your speech → first word:
+      pause detection 0.72 s + recognition ~0.55 s + first sentence 0.6–1.6 s + voice 0.25–0.4 s
+- [ ] Live check: 10 spoken "stop"s during replies → ≥ 9 stop; no self-interruptions in 10 minutes
 
 ### Then — PC & life assistant
 Study-mode routine, calendar, proactive reminders (battery, breaks, due cards), email summaries
