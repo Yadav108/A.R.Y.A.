@@ -119,9 +119,9 @@ def quick_verdict(text: str, pending_confirmation: bool = False) -> bool | None:
     if _ALWAYS_FOR_ARYA.match(text.strip()):
         return True
     try:
-        from arya.core.llm import quick_media_command
-        if quick_media_command(text) is not None:
-            return True
+        from arya.core.llm import contextual_media_command, quick_media_command
+        if quick_media_command(text) is not None or contextual_media_command(text) is not None:
+            return True                   # incl. "louder again" right after a volume change
     except Exception:
         pass
     try:

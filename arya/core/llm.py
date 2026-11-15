@@ -1996,13 +1996,13 @@ def quick_status_command(message: str) -> str | None:
     return None
 
 
-def quick_media_command(message: str) -> dict | None:
-    """'Turn the volume up a bit' -> {'action': 'volume_up', 'steps': 3}; None if not a media command."""
+def _media_text_and_steps(message: str) -> tuple[str, int]:
+    """Normalised command text and the volume step count ('by 30 percent' -> 15 presses of 2 %)."""
     text = re.sub(r"[^\w\s']", " ", message.lower().replace("%", " percent"))
     text = _QUICK_LEADING.sub("", re.sub(r"\s+", " ", text).strip())
     text = re.sub(r"\s+(?:please|now|thanks|thank you)$", "", text).strip()
     steps = 5
-    amount = re.search(r"\s*\bby\s+(\d{1,3})\s*(?:%|percent)?|\s*\b(\d{1,3})\s*(?:%|percent\b)", text)
+    amount = re.search(r"\s*\b(?:by|to)\s+(\d{1,3})\s*(?:%|percent)?|\s*\b(\d{1,3})\s*(?:%|percent\b)", text)
     if amount:                              # "volume down by 15%" -> 15 % (each key press is 2 %)
         steps = max(1, round(int(amount.group(1) or amount.group(2)) / 2))
         text = (text[:amount.start()] + text[amount.end():]).strip()
@@ -2010,6 +2010,47 @@ def quick_media_command(message: str) -> dict | None:
         steps, text = 3, _LITTLE.sub("", text).strip()
     elif _LOT.search(text):
         steps, text = 12, _LOT.sub("", text).strip()
+    return text, steps
+
+
+# Follow-ups to a volume command ("increase it to more 30 percent", "louder again", "a bit less") — only right
+# after one, because "more" or "again" on their own mean nothing without it.
+MEDIA_CONTEXT_S = 90.0
+_last_volume = {"action": "", "until": 0.0}
+_MORE_UP = re.compile(r"^(?:(?:increase|raise|turn up|bump|pump|push)(?:\s+(?:it|that|this|the sound))?"
+                      r"(?:\s+(?:up|to|by))?(?:\s+(?:some\s+|even\s+|a\s+bit\s+|a\s+little\s+)?more)?"
+                      r"|(?:even\s+|a\s+bit\s+|a\s+little\s+)?(?:louder|higher)(?:\s+again)?|up)$")
+_MORE_DOWN = re.compile(r"^(?:(?:decrease|lower|reduce|turn down|bring down)(?:\s+(?:it|that|this|the sound))?"
+                        r"(?:\s+(?:down|to|by))?(?:\s+(?:some\s+|even\s+|a\s+bit\s+|a\s+little\s+)?more)?"
+                        r"|(?:even\s+|a\s+bit\s+|a\s+little\s+)?(?:less|quieter|softer|lower)(?:\s+again)?|down)$")
+_SAME_AGAIN = re.compile(r"^(?:again|(?:do (?:it|that)|once|one more time|same)(?:\s+(?:again|more))?|"
+                         r"(?:some\s+|even\s+)?more|a\s+bit\s+more|a\s+little\s+more)$")
+
+
+def contextual_media_command(message: str) -> dict | None:
+    """'Increase it to more 30 percent' within 90 s of a volume change -> {'action': 'volume_up', 'steps': 15}."""
+    if time.monotonic() > _last_volume["until"] or not _last_volume["action"]:
+        return None
+    text, steps = _media_text_and_steps(message)
+    if _MORE_UP.match(text):
+        action = "volume_up"
+    elif _MORE_DOWN.match(text):
+        action = "volume_down"
+    elif _SAME_AGAIN.match(text):
+        action = _last_volume["action"]
+    else:
+        return None
+    return {"action": action, "steps": steps}
+
+
+def note_media(args: dict) -> None:
+    if args.get("action") in ("volume_up", "volume_down"):
+        _last_volume.update(action=args["action"], until=time.monotonic() + MEDIA_CONTEXT_S)
+
+
+def quick_media_command(message: str) -> dict | None:
+    """'Turn the volume up a bit' -> {'action': 'volume_up', 'steps': 3}; None if not a media command."""
+    text, steps = _media_text_and_steps(message)
     for pattern, action in _QUICK_MEDIA:
         if pattern.search(text):
             args: dict = {"action": action}
@@ -2514,9 +2555,10 @@ async def stream_with_tools(message: str):
         yield result
         return
 
-    quick = quick_media_command(message)
+    quick = quick_media_command(message) or contextual_media_command(message)
     if quick is not None:
         print(f"Instant command: media_control {quick}")
+        note_media(quick)
         result = await _execute_tool("media_control", quick)
         save_message("user", message)
         save_message("assistant", result)
