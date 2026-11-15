@@ -85,7 +85,10 @@ qwen2.5:3b (~2.3 GB) and the app window fit only just. Levers: BIOS "UMA Frame B
       you're away, while ARYA talks, and when Windows is in full screen / presentation / Do Not
       Disturb. "Do not disturb for an hour", "no nudges", "nudges back on"
 - [ ] Email summaries (ask first)
-- [ ] File agent
+- [x] File agent (`arya/tools/file_agent.py`): "what did I download today?", "open the last PDF I
+      downloaded", "find the slides I downloaded yesterday", "what's taking up space?", "tidy my
+      Downloads" (asks first, sorts by type, never deletes, skips today's/unfinished files),
+      "undo the tidy"
 - [ ] Music
 
 ---
