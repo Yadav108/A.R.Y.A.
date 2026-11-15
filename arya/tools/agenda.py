@@ -241,7 +241,8 @@ _ASK_DAY = re.compile(
     rf"(?:on\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday))\b|"
     rf"\bwhat do i have\s+(?:on\s+)?(?:today|tomorrow|this|on|next)\b|"
     rf"\bmy\s+{_CAL}\s+(?:for\s+)?(?:today|tomorrow|this week|on\s+\w+day)\b|"
-    rf"\b(?:am i|are we) (?:free|busy)\b|\bany (?:events|meetings|lectures|classes) (?:today|tomorrow)\b",
+    rf"\b(?:am i|are we) (?:free|busy)\b|\bany (?:events|meetings|lectures|classes) (?:today|tomorrow)\b|"
+    rf"\b(?:today|tomorrow)'?s\s+(?:{_CAL}|events|appointments)\b",           # "give me today's calendar"
     re.IGNORECASE)
 _ASK_NEXT = re.compile(r"\bwhat(?:'s| is)\s+next\b(?!\s+(?:step|song|track|question|exercise))|"
                        r"\b(?:when(?:'s| is)|what time is)\s+my\s+next\s+(?P<what>[a-z]+(?:\s+[a-z]+)?)\b|"

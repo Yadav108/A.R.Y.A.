@@ -33,6 +33,12 @@ routes:
   - {say: "what can you do?", route: capabilities}
   - {say: "give me a 30 minute Dynamics mock exam", route: mock exam, action: set_timer}
   - {say: "how far are the lecture transcriptions?", route: lectures}
+  - {say: "remember that I prefer short answers", route: profile}
+  - {say: "what do you remember about me?", route: profile}
+  - {say: "when I say start my day, give me the briefing and play focus music", route: routines}
+  - {say: "what routines do I have?", route: routines}
+  - {say: "no morning briefing", route: nudge settings}
+  - {say: "remember this: the lab is in room B12", route: model}
   - {say: "pause transcribing", route: lectures}
   - {say: "what did the professor say about the Coriolis acceleration in the lecture?", route: model}
 

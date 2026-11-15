@@ -44,7 +44,8 @@ CAPABILITIES = (
     "explain exercises by number, plot responses, draw block diagrams, and do exact maths and unit conversions. "
     "Say \"start studying\" and a course, and I open its folder, start pomodoros and tell you what to cover; "
     "I also speak up for a low battery, a long stretch without a break or cards due, unless you say \"no nudges\". "
-    "I keep your calendar, check your email, set timers and reminders, take notes, find and tidy your files, check the weather "
+    "I keep your calendar, check your email, remember your preferences, run your own routines, set timers and "
+    "reminders, take notes, find and tidy your files, check the weather "
     "and battery, open apps, control Chrome tabs, search Google or YouTube, and play music. "
     "Everything runs on this laptop unless you say \"ask the cloud\"."
 )
@@ -140,6 +141,24 @@ MAX_TOOL_STEPS = 4
 _MULTI_PART = re.compile(r"\b(and|then|also|plus|after that|as well)\b|,", re.IGNORECASE)
 
 
+_in_routine: ContextVar[bool] = ContextVar("_in_routine", default=False)   # a routine's steps can't run routines
+_BRIEFING = re.compile(r"^\W*(?:arya\W+)?(?:please\s+)?(?:give me|read(?: me)?|start(?: with)?|let'?s (?:have|hear)|"
+                       r"what'?s|i'?d like)?\s*(?:the|my|today'?s|a)?\s*(?:daily |morning )?briefing\W*$",
+                       re.IGNORECASE)
+
+
+def _profile_block() -> str:
+    """Preferences and facts you asked ARYA to remember — local model only, never sent to the cloud."""
+    if _groq_allowed():
+        return ""
+    try:
+        from arya.memory.profile import prompt_block
+        return prompt_block()
+    except Exception as exc:
+        print(f"Profile skipped: {type(exc).__name__}: {exc}")
+        return ""
+
+
 def _system_prompt(with_tools: bool = False) -> str:
     """Built per request so ARYA always knows the current date and time.
     Tool guidance is only included when tools are actually offered — gpt-oss
@@ -166,6 +185,7 @@ def _system_prompt(with_tools: bool = False) -> str:
         "- Lead with the answer; skip filler like 'Sure!' or 'Great question'.\n"
         "- Don't add worked numeric examples on your own. When you do give a number, it must come from "
         "a tool result or from the user's course excerpts; never calculate it in your head.\n"
+        + _profile_block()
         # The clock comes after the fixed rules: everything before it is identical between turns,
         # so the local model reuses its cached reading of it instead of re-reading the whole prompt.
         + f"Current local date and time: {now}. Home city: {city}.\n"
@@ -2269,6 +2289,46 @@ async def stream_with_tools(message: str):
         yield reply
         return
 
+    if not _in_routine.get():                           # your own routines: "start my day" -> its steps
+        try:
+            from arya.core import routines as _routines
+            steps = await asyncio.to_thread(_routines.match, message)
+            defined = None if steps else await asyncio.to_thread(_routines.handle, message)
+        except Exception as exc:
+            print(f"Routines skipped: {type(exc).__name__}: {exc}")
+            steps, defined = None, None
+        if steps:
+            print(f"Routine: {len(steps)} steps for {message[:40]!r}")
+            save_message("user", message)
+            token = _in_routine.set(True)
+            try:
+                for step in steps:
+                    async for sentence in stream_with_tools(step):
+                        yield sentence
+            finally:
+                _in_routine.reset(token)
+            return
+        if defined:
+            print("Instant answer: routines")
+            save_message("user", message)
+            save_message("assistant", defined)
+            async for sentence in _clean_stream(_aiter_text(defined)):
+                yield sentence
+            return
+
+    if _BRIEFING.search(message):                       # "give me the briefing" (also a routine step)
+        print("Instant answer: briefing")
+        try:
+            briefing = await get_daily_briefing()
+        except Exception as exc:
+            print(f"Briefing failed: {type(exc).__name__}: {exc}")
+            briefing = "I couldn't put the briefing together just now."
+        save_message("user", message)
+        save_message("assistant", briefing)
+        async for sentence in _clean_stream(_aiter_text(briefing)):
+            yield sentence
+        return
+
     try:                                                # "that's wrong — …": remember it (corrections memory)
         from arya.knowledge import corrections as _corrections
         recent = get_history(limit=6)
@@ -2341,6 +2401,20 @@ async def stream_with_tools(message: str):
         save_message("user", message)
         save_message("assistant", browsing)
         async for sentence in _clean_stream(_aiter_text(browsing)):
+            yield sentence
+        return
+
+    try:                                                # "remember that I prefer short answers", "what do you remember about me?"
+        from arya.memory import profile as _profile
+        remembered = await asyncio.to_thread(_profile.handle, message)
+    except Exception as exc:
+        print(f"Profile skipped: {type(exc).__name__}: {exc}")
+        remembered = None
+    if remembered:
+        print("Instant answer: profile")
+        save_message("user", message)
+        save_message("assistant", remembered)
+        async for sentence in _clean_stream(_aiter_text(remembered)):
             yield sentence
         return
 
