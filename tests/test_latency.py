@@ -20,3 +20,13 @@ from arya.server.websocket import split_first_for_voice
 def test_first_sentence_split(sentence, parts):
     assert split_first_for_voice(sentence) == parts
     assert " ".join(parts) == sentence                                    # nothing lost
+
+
+@pytest.mark.parametrize("model, thinks", [("qwen3:4b", True), ("qwen3:1.7b", True), ("deepseek-r1:7b", True),
+                                          ("qwen2.5:3b", False), ("llama3.2:3b", False), ("phi4-mini", False)])
+def test_thinking_is_switched_off_for_reasoning_models(monkeypatch, model, thinks):
+    import arya.core.llm_local as local
+    monkeypatch.setattr(local, "OLLAMA_MODEL", model)
+    payload = local._payload([{"role": "user", "content": "hi"}], True, None, None, None)
+    assert payload["model"] == model
+    assert (payload.get("think") is False) is thinks and ("think" in payload) is thinks

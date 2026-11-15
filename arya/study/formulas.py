@@ -26,6 +26,22 @@ _PREFIX = {"k": 1e3, "m": 1e-3, "meg": 1e6, "µ": 1e-6, "u": 1e-6, "micro": 1e-6
            "n": 1e-9, "nano": 1e-9, "p": 1e-12, "pico": 1e-12}
 
 
+_SPELLED = [  # spoken / written-out units -> the short forms the regexes above read
+    (r"kilo\s*-?\s*o?hms?\b", "k ohm"), (r"mega\s*-?\s*o?hms?\b|megohms?\b", "meg ohm"),
+    (r"(?:micro\s*-?\s*farads?|microfarads?)\b", "u F"), (r"nano\s*-?\s*farads?\b", "n F"),
+    (r"pico\s*-?\s*farads?\b", "p F"), (r"milli\s*-?\s*farads?\b", "m F"),
+    (r"micro\s*-?\s*henr(?:y|ies|ys)\b", "u H"), (r"milli\s*-?\s*henr(?:y|ies|ys)\b", "m H"),
+    (r"\bfarads?\b", "F"), (r"\bhenr(?:y|ies|ys)\b", "H"), (r"\bohms?\b", "ohm"),
+]
+
+
+def _spelled_units(text: str) -> str:
+    """'10 kilohm and 100 microfarad' -> '10 k ohm and 100 u F' (previously read as 100 farad)."""
+    for pattern, short in _SPELLED:
+        text = re.sub(pattern, short, text, flags=re.IGNORECASE)
+    return text
+
+
 def _f(x: float) -> str:
     """3 significant figures, never scientific notation: 1000, 0.00125, 37.2."""
     x = float(f"{x:.3g}")
@@ -81,8 +97,9 @@ def quick_formula_answer(message: str) -> str | None:
             return (f"The natural frequency is ωₙ = √(k/m) = {_f(w)} rad/s, "
                     f"which is {_f(w / (2 * math.pi))} Hz.")
     if re.search(r"time constant", t):
-        r = _val(_R.search(message), ohms=True)
-        c, l_ = _val(_C.search(message)), _val(_L.search(message))
+        units = _spelled_units(message)
+        r = _val(_R.search(units), ohms=True)
+        c, l_ = _val(_C.search(units)), _val(_L.search(units))
         if r and c:
             return f"The time constant of the RC circuit is τ = R·C = {_time(r * c)}."
         if r and l_:

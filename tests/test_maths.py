@@ -49,6 +49,11 @@ def test_incompatible_units():
     ("natural frequency of a mass spring system with k = 200 and m = 2", ["10 rad/s", "1.59 Hz"]),
     ("time constant of an RC circuit with R = 10 kOhm and C = 100 uF", ["1 second"]),
     ("time constant with R = 50 ohm and L = 10 mH", ["200 microseconds"]),
+    # spelled-out units (C2 hard benchmark: "100 microfarad" used to be read as 100 farad)
+    ("An RC circuit has R = 10 kilohm and C = 100 microfarad. What is its time constant?", ["1 second"]),
+    ("RC time constant with resistance 4.7 kilo ohms and capacitance 220 nanofarads", ["1.03 milliseconds"]),
+    ("RL circuit with R = 100 ohm and L = 50 millihenry, time constant?", ["500 microseconds"]),
+    ("R = 2 megohm and C = 10 picofarad, what is the time constant?", ["20 microseconds"]),
 ])
 def test_exact_course_formulas(question, must):
     answer = quick_formula_answer(question)

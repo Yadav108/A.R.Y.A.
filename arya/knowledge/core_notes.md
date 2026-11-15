@@ -97,6 +97,10 @@ Closed loop with negative feedback: T(s) = G(s) / (1 + G(s) H(s)).
 
 ## First- and second-order system responses
 
+German course names: a PT1 element is a first-order lag G(s) = K / (T s + 1); a PT2 element is a second-order lag G(s) = K / (T² s² + 2 D T s + 1), where D is the damping ratio (D = ζ) and T = 1/ω_n.
+A PT2 element is stable when D > 0 (all denominator coefficients positive); D = 0 makes it undamped (it oscillates forever, marginally stable), D < 0 makes it unstable. D between 0 and 1 is underdamped and stable, D = 1 critically damped, D > 1 overdamped — all three are stable. Common mistake: stability does NOT need D < 1 — any D > 0 is stable; D < 1 only means it overshoots. You do not stabilise a PT2 by changing D yourself: D belongs to the plant; you add a controller in a feedback loop.
+To stabilise or better damp a PT2 plant: close the loop with a controller that moves the closed-loop poles further into the left half-plane — a D (derivative) part adds damping, a PD or PID controller is the usual choice, and too much P gain alone makes the closed loop more oscillatory. Check the result with the closed-loop characteristic equation 1 + G(s) C(s) = 0 (all poles negative real parts, e.g. via Hurwitz).
+
 First order: G(s) = K / (τ s + 1). Step response y(t) = K (1 − e^(−t/τ)); 63.2 % at t = τ; 2 % settling ≈ 4τ; rise time (10–90 %) ≈ 2.2 τ.
 Second order: G(s) = K ω_n² / (s² + 2 ζ ω_n s + ω_n²). Its two parameters are the damping ratio ζ and the natural frequency ω_n.
 Stability of a second-order system: stable when both poles have negative real parts, which means ζ > 0 and ω_n > 0 (all coefficients of s² + 2ζω_n s + ω_n² positive). Stability does NOT require ζ < 1: overdamped systems are stable too. ζ = 0 is marginally stable; ζ < 0 is unstable (the response grows). Overshoot and settling time describe performance, not stability.

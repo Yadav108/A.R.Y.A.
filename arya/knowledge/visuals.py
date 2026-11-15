@@ -18,6 +18,7 @@ import ast
 import io
 import math
 import re
+import threading
 import uuid
 from collections import OrderedDict
 
@@ -41,10 +42,21 @@ def _store(png: bytes) -> str:
     return image_id
 
 
+_mpl_lock = threading.Lock()
+
+
+def _pyplot():
+    """Import matplotlib once, under a lock: two answers drawing at the same moment in different threads
+    could otherwise both run its first import and fail ("partially initialized module 'matplotlib'")."""
+    with _mpl_lock:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    return plt
+
+
 def _figure(title: str, xlabel: str, ylabel: str):
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
+    plt = _pyplot()
 
     fig, ax = plt.subplots(figsize=(7.2, 4.0), dpi=130)
     fig.patch.set_facecolor(BG)
@@ -346,9 +358,7 @@ def plot_system(kind: str = "step", numerator=None, denominator=None, natural_fr
     if kind == "bode":
         w = np.logspace(-2, 3, 600)
         w, mag, phase = signal.bode(system, w)
-        import matplotlib
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
+        plt = _pyplot()
 
         fig, (a1, a2) = plt.subplots(2, 1, figsize=(7.2, 5.2), dpi=130, sharex=True)
         fig.patch.set_facecolor(BG)

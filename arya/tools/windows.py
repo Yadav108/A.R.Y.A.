@@ -14,7 +14,7 @@ SW_MINIMIZE, SW_MAXIMIZE, SW_RESTORE = 6, 3, 9
 _ACTIONS = {"minimi": ("minimize", SW_MINIMIZE, "Minimized"), "maximi": ("maximize", SW_MAXIMIZE, "Maximized"),
             "restor": ("restore", SW_RESTORE, "Restored"), "unminimi": ("restore", SW_RESTORE, "Restored")}
 
-_CMD = re.compile(r"^\W*(?:arya\W+)?(?:(?:can you|could you|please)\s+)?(?:please\s+)?(?P<verb>minimi[sz]e|maximi[sz]e|restore|unminimi[sz]e)\s+(?:the\s+|my\s+)?"
+_CMD = re.compile(r"^\W*(?:arya\W+)?(?:(?:can you|could you|please)\s+)?(?:please\s+)?(?P<verb>minimi[sz]ed?|maximi[sz]ed?|restored?|unminimi[sz]ed?)\s+(?:the\s+|my\s+)?"
                   r"(?P<what>.+?)(?:\s+windows?)?\W*$", re.IGNORECASE)
 _DESKTOP = re.compile(r"\b(?:show (?:me )?(?:the |my )?desktop|minimi[sz]e (?:everything|all(?: the)? windows|all))\b",
                       re.IGNORECASE)

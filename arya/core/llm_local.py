@@ -7,6 +7,7 @@ Accepts and returns OpenAI-style messages so llm.py can treat both backends alik
 """
 import json
 import os
+import re
 from collections.abc import AsyncIterator
 
 import httpx
@@ -18,6 +19,8 @@ load_dotenv()
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434").rstrip("/").replace("//localhost", "//127.0.0.1")
 # qwen2.5:3b: reliable tool calling and fits a 4 GB GPU next to Whisper medium.
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:3b")
+# Models that "think" before answering (qwen3, deepseek-r1, …): thinking is switched off for spoken answers.
+THINKING_MODEL = re.compile(r"^(?:qwen3|deepseek-r1|magistral|gpt-oss)", re.IGNORECASE)
 
 # Ollama's default 2048-token context truncates ARYA's ~3k-token tool schemas.
 NUM_CTX = int(os.getenv("OLLAMA_NUM_CTX", "8192"))
@@ -90,6 +93,8 @@ def _payload(messages: list[dict], stream: bool, tools: list | None,
     }
     if tools:
         payload["tools"] = tools
+    if THINKING_MODEL.search(OLLAMA_MODEL):
+        payload["think"] = False            # hidden reasoning costs seconds before the first spoken word
     payload["options"] = options
     return payload
 

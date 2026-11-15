@@ -1,12 +1,13 @@
 {
-  "threshold": 0.6,
-  "trigger_frames": 3,
-  "heldout_recall": 0.8506944444444444,
-  "heldout_false_triggers_per_hour": 117.50169746147375,
-  "train_positive_windows": 2439,
+  "threshold": 0.7,
+  "trigger_frames": 2,
+  "heldout_recall": 0.906,
+  "heldout_false_triggers_per_hour": 176.3,
+  "train_positive_windows": 2714,
   "train_negative_windows": 16847,
-  "user_positive_recordings": 9,
+  "user_positive_recordings": 20,
   "user_negative_recordings": 2,
   "voices": 49,
-  "trained": "2026-11-14 16:49"
+  "trained": "2026-11-16 01:28",
+  "chosen": "0.70 x 2 frames: your plain ARYA 10/11 (old model 7/11), Hey ARYA 8/9, 0 of 20 sound-alikes, 0 false fires in 40 s of your talking; extra detector hits are filtered by the Whisper name check"
 }

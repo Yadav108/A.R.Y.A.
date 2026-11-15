@@ -87,11 +87,31 @@ def _regrade() -> int:
     return 0
 
 
-async def _answer(question: str) -> str:
+async def _answer(question: str) -> tuple[str, float | None]:
+    """(answer, seconds until its first sentence) — the second is what ARYA's voice waits for."""
     import arya.core.llm as llm
 
-    parts = [s async for s in llm.stream_with_tools(question)]
-    return "".join(parts).strip()
+    t0, first, parts = time.monotonic(), None, []
+    async for s in llm.stream_with_tools(question):
+        if first is None and s.strip():
+            first = time.monotonic() - t0
+        parts.append(s)
+    return "".join(parts).strip(), first
+
+
+def _model_placement(model: str) -> str:
+    """'100% GPU, 2.3 GB' from `ollama ps` — a model that spills onto the CPU gets slow."""
+    import subprocess
+    try:
+        out = subprocess.run(["ollama", "ps"], capture_output=True, text=True, timeout=10).stdout
+    except Exception:
+        return "?"
+    for line in out.splitlines():
+        if line.split() and line.split()[0] == model:
+            where = re.search(r"\d+%(?:/\d+%)? (?:CPU/GPU|GPU|CPU)", line)
+            size = re.search(r"\d+(?:\.\d+)? GB", line)
+            return f"{where.group(0) if where else '?'}, {size.group(0) if size else '?'}"
+    return "not loaded"
 
 
 def main() -> int:
@@ -140,22 +160,24 @@ def main() -> int:
         return 1
 
     mode = "cloud" if args.cloud else llm.ARYA_MODE
-    print(f"ARYA eval — {len(items)} questions, mode {mode}\n")
+    from arya.core.llm_local import OLLAMA_MODEL as model
+    print(f"ARYA eval — {len(items)} questions, mode {mode}, model {model}\n")
     results, started = [], time.monotonic()
     loop = asyncio.new_event_loop()                 # one loop for the run: cached HTTP clients stay valid
     for i, item in enumerate(items, 1):
         t0 = time.monotonic()
         try:
-            text = loop.run_until_complete(_answer(item["q"]))
+            text, first = loop.run_until_complete(_answer(item["q"]))
             ok, problems = grade(item, text, defaults)
         except Exception as exc:                                  # a crash is a failure, not the end of the run
-            text, ok, problems = "", False, [f"error: {type(exc).__name__}: {exc}"]
+            text, first, ok, problems = "", None, False, [f"error: {type(exc).__name__}: {exc}"]
         pending = [t for t in asyncio.all_tasks(loop) if not t.done()]     # e.g. memory embeddings
         if pending:
             loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
         took = time.monotonic() - t0
         results.append({"id": item["id"], "tags": item.get("tags", []), "q": item["q"], "passed": ok,
-                        "problems": problems, "answer": text, "seconds": round(took, 1)})
+                        "problems": problems, "answer": text, "seconds": round(took, 1),
+                        "first_sentence": round(first, 2) if first is not None else None})
         mark = "PASS" if ok else "FAIL"
         print(f"{i:3d}. {mark}  {item['id']:<24} {took:5.1f}s" + ("" if ok else "  — " + "; ".join(problems)))
         if args.verbose or not ok:
@@ -169,18 +191,28 @@ def main() -> int:
         for t in r["tags"]:
             by_tag.setdefault(t, []).append(r["passed"])
     print("By tag: " + ", ".join(f"{t} {sum(v)}/{len(v)}" for t, v in sorted(by_tag.items())))
+    firsts = sorted(r["first_sentence"] for r in results if r["first_sentence"] is not None)
+    placement = _model_placement(model) if mode == "offline" else "cloud"
+    if firsts:
+        p90 = firsts[min(len(firsts) - 1, int(round(0.9 * (len(firsts) - 1))))]
+        print(f"Model {model}: first sentence median {firsts[len(firsts) // 2]:.2f} s, slowest 10 % {p90:.2f} s; "
+              f"loaded as {placement}")
 
     RESULTS.mkdir(exist_ok=True)
     partial = bool(args.tag or args.id)                        # never the baseline for the next full run
-    previous = sorted(p for p in RESULTS.glob("*.json") if "-partial" not in p.name)
+    tag = re.sub(r"[^\w.-]+", "_", model)
+    previous = sorted(p for p in RESULTS.glob("*.json") if "-partial" not in p.name and "regraded" not in p.name
+                      and json.loads(p.read_text(encoding="utf-8")).get("model", "qwen2.5:3b") == model)
     if previous:
         before = {r["id"]: r["passed"] for r in json.loads(previous[-1].read_text(encoding="utf-8"))["results"]}
         fixed = [r["id"] for r in results if r["passed"] and before.get(r["id"]) is False]
         broke = [r["id"] for r in results if not r["passed"] and before.get(r["id"]) is True]
         print(f"Compared with {previous[-1].name}: fixed {fixed or 'none'}; newly failing {broke or 'none'}")
-    out = RESULTS / f"{datetime.now():%Y%m%d-%H%M%S}-{mode}{'-partial' if partial else ''}.json"
-    out.write_text(json.dumps({"mode": mode, "score": score, "passed": passed, "total": len(results),
-                               "results": results}, ensure_ascii=False, indent=1), encoding="utf-8")
+    suffix = "" if tag == "qwen2.5_3b" else "-" + tag
+    out = RESULTS / f"{datetime.now():%Y%m%d-%H%M%S}-{mode}{suffix}{'-partial' if partial else ''}.json"
+    out.write_text(json.dumps({"mode": mode, "model": model, "placement": placement, "score": score,
+                               "passed": passed, "total": len(results), "results": results},
+                              ensure_ascii=False, indent=1), encoding="utf-8")
     print(f"Saved {out.relative_to(HERE.parents[1])}")
     loop.close()
     routes_ok = 0 if partial else _routes(args.verbose)       # after the golden run: it stubs out the model
