@@ -251,7 +251,8 @@ def asked_recently(window_s: float = 600.0) -> bool:
 def acted_this_turn() -> bool:
     """Did anything that changes the laptop actually run during this request?"""
     return bool(_state.executed & (ALWAYS_CONFIRM | SIDE_EFFECTS | {"media_control", "set_timer",
-                                                                    "set_reminder", "cancel_timer", "pomodoro"}))
+                                                                    "set_reminder", "cancel_timer", "pomodoro",
+                                                                    "window_control"}))
 
 
 def has_pending() -> bool:

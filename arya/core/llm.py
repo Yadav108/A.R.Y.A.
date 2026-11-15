@@ -2034,7 +2034,15 @@ _ACTION_CLAIM = re.compile(
     r"opened|recycled|trashed|delete|remove|move|rename|close|open)\b"
     r"|\b(?:deleted|moved|closed|opened|renamed)\s+(?:it|that|the file|them)\b"
     r"|\b(?:timer|reminder|alarm)\s+(?:is\s+|has been\s+)?set\b|\bi'?ll remind you\b"
-    r"|\bi(?:'ve| have)\s+set\s+(?:a|an|the|your)\s+(?:timer|reminder|alarm)\b",
+    r"|\bi(?:'ve| have)\s+set\s+(?:a|an|the|your)\s+(?:timer|reminder|alarm)\b"
+    # "I've minimized it", "I maximized the window"
+    r"|\b(?:i've|i have|i|i'll|i will)\s+(?:just\s+)?(?:minimi[sz]ed?|maximi[sz]ed?|restored?|muted|launched|"
+    r"started|stopped|switched|paused)\b"
+    # "Window minimized to the taskbar.", "The tab is now closed." — the model's terse passive claims
+    r"|^\W*(?:the\s+|your\s+)?(?:\w+\s+)?(?:window|tab|app|application|browser|chrome|file|folder|music|song|"
+    r"volume|email|message|event|note)s?\s+(?:is\s+|are\s+|has been\s+|have been\s+|was\s+)?(?:now\s+)?"
+    r"(?:minimi[sz]ed|maximi[sz]ed|restored|closed|opened|deleted|moved|renamed|muted|unmuted|paused|"
+    r"started|stopped|sent|saved|switched|launched)\b",
     re.IGNORECASE,
 )
 _NOT_DONE = "I haven't actually done that — ask me directly and I'll confirm with you first."
@@ -2225,6 +2233,20 @@ async def stream_with_tools(message: str):
         save_message("user", message)
         save_message("assistant", reply)
         async for sentence in _clean_stream(_aiter_text(reply)):
+            yield sentence
+        return
+
+    try:                                                # "minimize Chrome", "show the desktop"
+        from arya.tools import windows as _windows
+        windowing = await _windows.handle(message)
+    except Exception as exc:
+        print(f"Window control skipped: {type(exc).__name__}: {exc}")
+        windowing = None
+    if windowing:
+        print("Instant answer: window control")
+        save_message("user", message)
+        save_message("assistant", windowing)
+        async for sentence in _clean_stream(_aiter_text(windowing)):
             yield sentence
         return
 
