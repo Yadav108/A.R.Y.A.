@@ -142,9 +142,15 @@ qwen2.5:3b (~2.3 GB) and the app window fit only just. Levers: BIOS "UMA Frame B
       wrong step, ARYA itself checks the final value against the answer sheet; recorded for spaced repetition
 
 ### C4 — Routines and memory
-- [ ] Your own voice routines ("start my day" → briefing, calendar, focus music)
-- [ ] Morning briefing on first activity after 7:00
-- [ ] Long-term preferences ("remember I prefer short answers")
+- [x] Your own voice routines (`arya/core/routines.py`): "when I say start my day, give me the briefing,
+      today's calendar and play focus music" → "start my day" runs the steps as ordinary requests;
+      "what routines do I have?", "delete the … routine"; routines can't run routines
+- [x] Morning briefing when you're back at the laptop in the morning (after 30 min away, sleep or ARYA
+      starting), once a day, respecting quiet hours / mute / full screen; "no morning briefing";
+      "give me the briefing" answers instantly
+- [x] Long-term preferences and facts (`arya/memory/profile.py`): "remember that I prefer short answers",
+      "remember my lab partner is Anna", "always use metric units", "what do you remember about me?",
+      "forget …" — in every local prompt (checked: 3 sentences → 1), never sent to the cloud
 
 ### C5 — ARYA everywhere
 - [ ] Phone access over home Wi-Fi (token-protected app), nudges on the phone

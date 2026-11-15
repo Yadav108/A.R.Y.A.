@@ -28,7 +28,10 @@ BREAK_AFTER_S = 90 * 60                # continuous activity before suggesting a
 BREAK_RESET_IDLE_S = 5 * 60            # this much idle time counts as a break
 AWAY_IDLE_S = 10 * 60                  # nobody there to hear it
 CARDS_AFTER_HOUR = 10                  # the daily practice nudge comes after 10:00
-MIN_GAP_S = 10 * 60                    # never two nudges within ten minutes (battery excepted)
+MIN_GAP_S = 10 * 60
+MORNING_FROM, MORNING_UNTIL = 7, 12    # the morning briefing: first activity in this window (after quiet hours)
+MORNING_AWAY_S = 30 * 60
+MORNING = os.getenv("ARYA_MORNING_BRIEFING", "1") != "0"                    # never two nudges within ten minutes (battery excepted)
 
 
 @dataclass
@@ -55,6 +58,25 @@ class Nudger:
     last_spoken: float = 0.0
     last_check: float = 0.0
     events_told: set = field(default_factory=set)       # calendar events already announced
+    briefing_day: str = ""                              # date of the last morning briefing
+    morning_off: bool = False                           # "no morning briefing"
+    _was_away: bool = False
+    _morning_last: float = 0.0
+    _morning_seen: str = ""
+
+    def morning(self, s: Sensors) -> bool:
+        """True once a day: you're back at the laptop in the morning (after 30 min away, a sleeping laptop or
+        ARYA starting that morning). Same rules as the nudges: not in quiet hours, muted, or full screen."""
+        t, today = s.now.timestamp(), s.now.date().isoformat()
+        gap = self._morning_last and t - self._morning_last > MORNING_AWAY_S         # slept / ARYA was off
+        returning = s.idle_s < 60 and (self._was_away or gap or self._morning_seen != today)
+        self._was_away = s.idle_s >= MORNING_AWAY_S or (self._was_away and s.idle_s >= 60)
+        self._morning_last, self._morning_seen = t, today
+        if (self.morning_off or self.briefing_day == today or not MORNING_FROM <= s.now.hour < MORNING_UNTIL
+                or not returning or t < self.muted_until or not s.windows_ok or self._quiet(s.now.hour)):
+            return False
+        self.briefing_day, self.last_spoken = today, t
+        return True
 
     def _quiet(self, hour: int) -> bool:
         start, end = self.quiet_hours
@@ -212,12 +234,15 @@ def _load(n: Nudger) -> None:
         rows = dict(c.execute("SELECT key, value FROM proactive_state").fetchall())
     n.muted_until = float(rows.get("muted_until", 0) or 0)
     n.cards_day = rows.get("cards_day", "")
+    n.briefing_day = rows.get("briefing_day", "")
+    n.morning_off = rows.get("morning_off", "0") == "1" or not MORNING
 
 
 def _save(n: Nudger) -> None:
     with _db() as c:
         c.executemany("INSERT OR REPLACE INTO proactive_state (key, value) VALUES (?, ?)",
-                      [("muted_until", str(n.muted_until)), ("cards_day", n.cards_day)])
+                      [("muted_until", str(n.muted_until)), ("cards_day", n.cards_day),
+                       ("briefing_day", n.briefing_day), ("morning_off", "1" if n.morning_off else "0")])
 
 
 def _quiet_hours() -> tuple[int, int]:
@@ -254,8 +279,21 @@ def _mute_seconds(message: str, now: datetime) -> float | None:
     return n * (3600 if m.group(2).lower().startswith("h") else 60)
 
 
+_MORNING_OFF = re.compile(r"\b(?:no|stop|turn off|disable|skip)\s+(?:the\s+|my\s+)?morning briefings?\b", re.IGNORECASE)
+_MORNING_ON = re.compile(r"\b(?:turn on|enable|start|bring back)\s+(?:the\s+|my\s+)?morning briefings?\b|"
+                         r"\bmorning briefings? (?:back )?on\b", re.IGNORECASE)
+
+
 def handle(message: str, now: datetime | None = None) -> str | None:
     now = now or datetime.now()
+    if _MORNING_OFF.search(message):
+        nudger.morning_off = True
+        _save(nudger)
+        return "Okay, no morning briefing. Say \"turn on the morning briefing\" to have it back."
+    if _MORNING_ON.search(message):
+        nudger.morning_off = False
+        _save(nudger)
+        return "Okay, I'll give you the briefing when you're back at the laptop in the morning."
     if _UNMUTE.search(message):
         nudger.muted_until = 0.0
         _save(nudger)
@@ -301,6 +339,12 @@ async def run(say, busy) -> None:
         try:
             sensors = await asyncio.to_thread(read_sensors)
             if busy():
+                continue
+            if nudger.morning(sensors):
+                await asyncio.to_thread(_save, nudger)
+                from arya.core.llm import get_daily_briefing
+                print("Nudge: morning briefing")
+                await say("Good morning. " + await get_daily_briefing())
                 continue
             text = nudger.check(sensors)
             if text:
