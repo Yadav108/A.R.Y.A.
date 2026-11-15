@@ -44,8 +44,8 @@ CAPABILITIES = (
     "explain exercises by number, plot responses, draw block diagrams, and do exact maths and unit conversions. "
     "Say \"start studying\" and a course, and I open its folder, start pomodoros and tell you what to cover; "
     "I also speak up for a low battery, a long stretch without a break or cards due, unless you say \"no nudges\". "
-    "I keep your calendar, set timers and reminders, take notes, check the weather and battery, open apps and "
-    "files, and control music. "
+    "I keep your calendar, set timers and reminders, take notes, find and tidy your files, check the weather "
+    "and battery, open apps, and control music. "
     "Everything runs on this laptop unless you say \"ask the cloud\"."
 )
 
@@ -2082,6 +2082,26 @@ async def stream_with_tools(message: str):
 
     pending = policy.take_pending()
     policy.begin_turn(message)
+    if pending is not None and pending.tool == "tidy_folder":
+        answer = policy.parse_yes_no(message)
+        if answer is not None:
+            save_message("user", message)
+            if answer:
+                from arya.tools import file_agent
+                try:
+                    reply = await asyncio.to_thread(file_agent.confirm_tidy, pending.args)
+                    policy.note_result("move_file")
+                    log_event("tidy_folder", folder=pending.args.get("folder"), files=len(pending.args["moves"]))
+                except Exception as exc:
+                    print(f"Tidy failed: {type(exc).__name__}: {exc}")
+                    reply = "Something went wrong while sorting; the files I hadn't moved yet are untouched."
+            else:
+                reply = "Okay, I left everything where it is."
+            save_message("assistant", reply)
+            async for sentence in _clean_stream(_aiter_text(reply)):
+                yield sentence
+            return
+        pending = None
     if pending is not None and pending.tool == "screen_vision":
         answer = policy.parse_yes_no(message)
         if answer is not None:
@@ -2273,6 +2293,20 @@ async def stream_with_tools(message: str):
         save_message("user", message)
         save_message("assistant", scheduling)
         async for sentence in _clean_stream(_aiter_text(scheduling)):
+            yield sentence
+        return
+
+    try:                                                # "what did I download today?", "tidy my Downloads"
+        from arya.tools import file_agent as _file_agent
+        filing = await asyncio.to_thread(_file_agent.handle, message)
+    except Exception as exc:
+        print(f"File agent skipped: {type(exc).__name__}: {exc}")
+        filing = None
+    if filing:
+        print("Instant answer: file agent")
+        save_message("user", message)
+        save_message("assistant", filing)
+        async for sentence in _clean_stream(_aiter_text(filing)):
             yield sentence
         return
 

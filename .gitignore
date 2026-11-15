@@ -13,3 +13,4 @@ arya/models/tts/
 # Test scratch library (tests/conftest.py) and benchmark results
 tests/_tmp_kb/
 arya/eval/results/
+tests/_tmp_files/
