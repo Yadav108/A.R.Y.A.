@@ -43,7 +43,9 @@ _OTHER_PERSON = re.compile(
 # Commands of the kind people give an assistant: answered without asking the model.
 _ASSISTANT_COMMAND = re.compile(
     r"^\W*(?:please\s+)?(?:set|start|open|close|play|pause|skip|turn|remind|calculate|convert|search|"
-    r"look up|show me|list|delete|move|rename|define|plot|graph|draw|sketch|mute|unmute)\b",
+    r"look up|show me|list|delete|move|rename|define|plot|graph|draw|sketch|mute|unmute|"
+    r"minimi[sz]e|maximi[sz]e|restore|reopen|switch to|go to tab|new tab|next tab|previous tab|google|"
+    r"tidy|summari[sz]e|undo|quiz me|check my|stop studying)\b",
     re.IGNORECASE,
 )
 # Question openers. People ask each other these too ("Where is it?", "Can you explain that?"),
