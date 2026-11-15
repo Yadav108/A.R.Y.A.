@@ -84,7 +84,10 @@ qwen2.5:3b (~2.3 GB) and the app window fit only just. Levers: BIOS "UMA Frame B
       90 min of continuous use, practice cards due once a day. Quiet during quiet hours (22-8), when
       you're away, while ARYA talks, and when Windows is in full screen / presentation / Do Not
       Disturb. "Do not disturb for an hour", "no nudges", "nudges back on"
-- [ ] Email summaries (ask first)
+- [x] Email (`arya/tools/mail.py`): read-only IMAP with an app password (`ARYA_MAIL_HOST`,
+      `ARYA_MAIL_USER`, `ARYA_MAIL_PASSWORD` in `.env`). "Check my email" (instant senders and
+      subjects), "summarise my emails", "what did Prof Weber email me?". Local model only; email
+      text is fenced as untrusted data; nothing is marked read or changed
 - [x] File agent (`arya/tools/file_agent.py`): "what did I download today?", "open the last PDF I
       downloaded", "find the slides I downloaded yesterday", "what's taking up space?", "tidy my
       Downloads" (asks first, sorts by type, never deletes, skips today's/unfinished files),

@@ -128,7 +128,7 @@ def describe_path(path: Path) -> str:
 ALWAYS_CONFIRM = {"delete_file", "move_file", "close_app"}
 # Results that may contain text someone else wrote (= possible injected instructions).
 UNTRUSTED_OUTPUT = {"get_clipboard", "search_wikipedia", "run_command", "file_search", "list_folder",
-                    "read_text_file", "get_notes", "search_notes"}
+                    "read_text_file", "get_notes", "search_notes", "read_email"}
 # Actions that could carry data out or change things — confirmed after untrusted input.
 SIDE_EFFECTS = {"open_url", "run_command", "set_clipboard", "open_app", "save_note"}
 # Private data that would be sent to Groq in cloud mode.
