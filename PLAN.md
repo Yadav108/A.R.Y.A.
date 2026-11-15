@@ -96,6 +96,9 @@ qwen2.5:3b (~2.3 GB) and the app window fit only just. Levers: BIOS "UMA Frame B
       playing?", "play focus music" (`ARYA_FOCUS_MUSIC_URL`, also started by study mode), and music
       pauses when "Hey ARYA" is heard and resumes after the answer (`ARYA_PAUSE_MUSIC=0` to disable;
       never resumed if you paused it yourself; watchdog for false wakes)
+- [x] Browser (`arya/tools/browser.py`): Chrome tabs by voice (new, close, reopen, next/previous,
+      "go to tab 3"; keys only sent when Chrome is in front), "search Google/YouTube for …",
+      "play X on YouTube Music" (opens the first result)
 
 ---
 
