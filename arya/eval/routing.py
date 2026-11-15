@@ -113,7 +113,10 @@ def _reset() -> None:
     from arya.study import practice, tutor
     from arya.tools import screen
 
+    from arya.tools import browser
+
     policy.cancel_pending()
+    browser._awaiting_song_until = 0.0
     practice._quiz = None
     tutor._session = None
     llm._last_exercise["until"] = 0.0

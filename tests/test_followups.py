@@ -112,3 +112,45 @@ def test_minimized_past_tense(monkeypatch):
 ])
 def test_quiz_skip(answer, skip):
     assert bool(practice._SKIP.match(answer)) is skip
+
+
+# ── 2026-11-16: ARYA asked for a song, "classic music." went to the model ("Playing some classic music for you.")
+
+def test_the_song_ARYA_asked_for(chrome):
+    assert _h("play any music.").endswith("Tell me a song or an artist and I'll put it on.")
+    assert B.awaiting_song()
+    assert _h("classic music.") == "Playing classic music on YouTube."
+    assert chrome["opened"][-1] == "https://www.youtube.com/watch?v=VIDEOID0000"
+    assert not B.awaiting_song()                                   # one answer only
+    assert _h("classic music.") is None                            # later, it's not a song request any more
+
+
+@pytest.mark.parametrize("reply", ["what's the weather like?", "no, never mind", "set a timer for 5 minutes",
+                                   "pause", "explain the Coriolis acceleration"])
+def test_a_new_request_is_not_taken_as_the_song(chrome, reply):
+    _h("any music")
+    assert _h(reply) is None and not B.awaiting_song()
+
+
+def test_song_wait_expires(chrome, monkeypatch):
+    _h("any music")
+    monkeypatch.setattr(B, "_awaiting_song_until", 0.0)
+    assert _h("Kishore Kumar") is None
+
+
+@pytest.mark.parametrize("claim", ["Playing some classic music for you.", "Now playing your favourite song.",
+                                   "I'm playing it now.", "I've put on some jazz."])
+def test_playing_claims_need_a_real_action(claim):
+    import arya.core.llm as llm
+    from arya.core import policy
+    policy.begin_turn("x")
+    assert llm._guard_claim(claim) == llm._NOT_DONE
+
+
+def test_real_playing_replies_pass():
+    import arya.core.llm as llm
+    from arya.core import policy
+    policy.begin_turn("x")
+    assert llm._guard_claim("Playing: Weightless by Marconi Union, in Spotify.").startswith("Playing:")
+    policy.note_result("open_url")
+    assert llm._guard_claim("Playing classic music on YouTube.") == "Playing classic music on YouTube."

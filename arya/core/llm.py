@@ -2044,10 +2044,13 @@ _ACTION_CLAIM = re.compile(
     r"|^\W*(?:the\s+|your\s+)?(?:\w+\s+)?(?:window|tab|app|application|browser|chrome|file|folder|music|song|"
     r"volume|email|message|event|note)s?\s+(?:is\s+|are\s+|has been\s+|have been\s+|was\s+)?(?:now\s+)?"
     r"(?:minimi[sz]ed|maximi[sz]ed|restored|closed|opened|deleted|moved|renamed|muted|unmuted|paused|"
-    r"started|stopped|sent|saved|switched|launched)\b",
+    r"started|stopped|sent|saved|switched|launched)\b"
+    # "Playing some classic music for you." / "I'm playing it now" (from the log: nothing was playing)
+    r"|^\W*(?:now\s+)?playing\b(?!:)|\bi(?:'m| am)\s+(?:now\s+)?(?:playing|opening|starting|searching)\b"
+    r"|\b(?:i've|i have)\s+(?:just\s+)?(?:put on|started playing|queued)\b",
     re.IGNORECASE,
 )
-_NOT_DONE = "I haven't actually done that — ask me directly and I'll confirm with you first."
+_NOT_DONE ="I haven't actually done that — ask me directly and I'll confirm with you first."
 
 
 def _guard_claim(sentence: str) -> str:

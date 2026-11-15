@@ -511,6 +511,7 @@ def set_microphone_muted(muted: bool) -> bool:
 
 _smart_listening = addressee.SMART_LISTENING_DEFAULT
 _ignored_in_a_row = 0
+ANSWER_WINDOW_S = 15.0       # ARYA just asked a question: what you say in the next 15 s is the answer
 _last_spoke_at = 0.0          # when ARYA last finished speaking (monotonic)
 # After a bare "Hey ARYA" ("Yes?"), the next sentence within this window is the
 # request itself — it skips the "was that for me?" check.
@@ -545,8 +546,12 @@ async def _meant_for_arya(command: str) -> bool:
     recent = get_history(limit=4)
     last_reply = next((m["content"] for m in reversed(recent) if m["role"] == "assistant"), "")
     since = time.monotonic() - _last_spoke_at if _last_spoke_at else None
+    from arya.tools import browser
+    # ARYA is waiting for an answer: a yes/no, the song it asked for, or any question it just asked.
+    expecting = (policy.has_pending() or browser.awaiting_song()
+                 or (last_reply.rstrip().endswith("?") and since is not None and since < ANSWER_WINDOW_S))
     ok, why = await addressee.is_addressed(command, last_reply=last_reply, seconds_since_reply=since,
-                                           recent=recent, pending_confirmation=policy.has_pending())
+                                           recent=recent, pending_confirmation=expecting)
     if ok:
         _ignored_in_a_row = 0
         return True

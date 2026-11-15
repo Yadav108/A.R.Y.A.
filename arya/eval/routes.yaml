@@ -17,6 +17,8 @@ routes:
   - {say: "Open YouTube.", route: browser, action: open_url, addressed: true}   # from-log
   - {say: "Go to YouTube and search", route: browser, action: open_url, addressed: true}   # from-log
   - {say: "any music.", route: browser, action: open_url, addressed: true}   # from-log
+  - {say: "Play Kon Tuche by Kishore Kumar", route: browser, action: open_url}   # from-log (Whisper's spelling)
+  - {say: "minimise the chrome window.", route: window control, action: window}   # from-log (British spelling)
 
   # Study
   - {say: "start studying Dynamics for an hour", route: study mode, action: pomodoro, addressed: true}
