@@ -116,9 +116,17 @@ qwen2.5:3b (~2.3 GB) and the app window fit only just. Levers: BIOS "UMA Frame B
       rejections vs 36 accepted
 
 ### C2 — A smarter brain within 8 GB
-- [ ] Model bake-off on golden + routes: qwen3 4B, gemma3 4B, phi-4-mini, llama3.2 3B vs qwen2.5 3B
-      (correctness, first-word latency, memory); switch only on a clear win
-- [ ] Trim the history the model re-reads (≈0.4 s per answer) without losing benchmark points
+- [x] Model comparison (golden + hard questions + routes, with ARYA's Whisper on the GPU, 2026-11-16):
+      | model | golden (of 77) | hard (of 16) | first sentence median / slowest 10 % | memory |
+      | qwen2.5 3B (kept) | 73–74 | 12–14 | ~1.0 s / 2.6–3.2 s | 2.3 GB, 100 % GPU |
+      | phi-4-mini 3.8B | 72 | 15 | 3.2 s / 11.3 s | spills to CPU |
+      | llama3.2 3B | 58–61 | 9–11 | 2.4 s / 6–8 s | 3.4 GB, 33 % CPU |
+      | qwen3 4B | — | — | 10–18 s | 3.5 GB, 34 % CPU; thinking-only, ignores think:false |
+      With 4 GB VRAM and Whisper medium (~1.5 GB) only ~2.3 GB is left: every 4B model spills to the CPU.
+      Revisit with a GPU with more memory, or Whisper small to free VRAM (costs recognition accuracy).
+- [x] Trimmed history: last 6 messages, older turns cut to 280 chars (same score, first sentence ~0.1 s sooner)
+- [x] Found on the way: "100 microfarad" read as 100 F (RC time constant 1,000,000 s); PT2 and
+      mass-doubling answers wrong → core notes + benchmark questions
 
 ### C3 — Exam season
 - [ ] Lecture recordings → Whisper overnight → library, answers with timestamps

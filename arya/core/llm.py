@@ -2657,6 +2657,26 @@ async def _stream_cloud_question(question: str, context: str = "", model: str | 
             save_message("assistant", "".join(parts).strip())
 
 
+# What the local model re-reads before every answer (C2). Reading the prompt is most of the wait before the
+# first word, and old answers are long: the last exchange stays whole, older turns are shortened.
+# Measured on the benchmark (2 runs each): 6 messages + older turns cut to 280 chars scored the same
+# (73-76 vs 73-74 of 77) with the first sentence ~0.1 s sooner (0.92 s vs 1.0-1.1 s median).
+HISTORY_MESSAGES = int(os.getenv("ARYA_HISTORY_MESSAGES", "6"))
+HISTORY_OLD_CHARS = int(os.getenv("ARYA_HISTORY_OLD_CHARS", "280"))    # 0 = keep older turns whole
+
+
+def chat_history_for_model(history: list[dict]) -> list[dict]:
+    """The last HISTORY_MESSAGES messages; all but the last exchange cut to HISTORY_OLD_CHARS."""
+    recent = history[-HISTORY_MESSAGES:] if HISTORY_MESSAGES > 0 else []
+    out = []
+    for i, item in enumerate(recent):
+        text = item["content"]
+        if HISTORY_OLD_CHARS and i < len(recent) - 2 and len(text) > HISTORY_OLD_CHARS:
+            text = text[:HISTORY_OLD_CHARS].rsplit(" ", 1)[0] + " …"
+        out.append({"role": item["role"], "content": text})
+    return out
+
+
 async def _stream_with_tools(message: str):
     """Yield the reply sentence by sentence (so TTS can start on sentence one)."""
     # Intent check and memory lookup are independent — run them together.
@@ -2686,7 +2706,7 @@ async def _stream_with_tools(message: str):
     passages = await knowledge_for(message)
     messages = [
         {"role": "system", "content": _system_prompt() + mem_context + grounding_prompt(passages, message)},
-        *({"role": item["role"], "content": item["content"]} for item in history),
+        *chat_history_for_model(history),
         {"role": "user", "content": message},
     ]
 

@@ -79,6 +79,7 @@ Instantaneous centre of rotation: the point with zero velocity at that instant; 
 
 Equation of motion: m ẍ + c ẋ + k x = F(t).
 Natural frequency ω_n = sqrt(k/m) (rad/s); f_n = ω_n / (2π) (Hz).
+How ω_n changes: it depends on the mass. Doubling the mass lowers ω_n by a factor √2 (to about 0.71 times); four times the mass halves it. Doubling the stiffness k raises ω_n by √2 (about 1.41 times); four times k doubles it. A heavier or softer system oscillates more slowly, a lighter or stiffer one faster. The period T = 2π/ω_n grows with √m.
 Damping ratio ζ = c / (2 sqrt(k m)); critical damping c_crit = 2 sqrt(k m).
 ζ < 1 under-damped (oscillates), ζ = 1 critically damped (fastest without overshoot), ζ > 1 over-damped.
 Damped natural frequency ω_d = ω_n sqrt(1 − ζ²).
@@ -97,9 +98,6 @@ Closed loop with negative feedback: T(s) = G(s) / (1 + G(s) H(s)).
 
 ## First- and second-order system responses
 
-German course names: a PT1 element is a first-order lag G(s) = K / (T s + 1); a PT2 element is a second-order lag G(s) = K / (T² s² + 2 D T s + 1), where D is the damping ratio (D = ζ) and T = 1/ω_n.
-A PT2 element is stable when D > 0 (all denominator coefficients positive); D = 0 makes it undamped (it oscillates forever, marginally stable), D < 0 makes it unstable. D between 0 and 1 is underdamped and stable, D = 1 critically damped, D > 1 overdamped — all three are stable. Common mistake: stability does NOT need D < 1 — any D > 0 is stable; D < 1 only means it overshoots. You do not stabilise a PT2 by changing D yourself: D belongs to the plant; you add a controller in a feedback loop.
-To stabilise or better damp a PT2 plant: close the loop with a controller that moves the closed-loop poles further into the left half-plane — a D (derivative) part adds damping, a PD or PID controller is the usual choice, and too much P gain alone makes the closed loop more oscillatory. Check the result with the closed-loop characteristic equation 1 + G(s) C(s) = 0 (all poles negative real parts, e.g. via Hurwitz).
 
 First order: G(s) = K / (τ s + 1). Step response y(t) = K (1 − e^(−t/τ)); 63.2 % at t = τ; 2 % settling ≈ 4τ; rise time (10–90 %) ≈ 2.2 τ.
 Second order: G(s) = K ω_n² / (s² + 2 ζ ω_n s + ω_n²). Its two parameters are the damping ratio ζ and the natural frequency ω_n.
@@ -108,6 +106,12 @@ Damping cases: ζ = 0 undamped (oscillates forever at ω_n, never settles); 0 < 
 ω_n sets the speed: a larger ω_n gives a faster response (same shape, shorter time scale).
 Percent overshoot: %OS = 100 · e^(−ζπ / sqrt(1 − ζ²)) for 0 < ζ < 1 (e.g. ζ = 0.3 gives about 37 %, ζ = 0.7 about 4.6 %).
 Peak time t_p = π / ω_d. 2 % settling time t_s ≈ 4 / (ζ ω_n). Poles at s = −ζ ω_n ± j ω_d.
+
+## PT1 and PT2 elements (German course names)
+
+German course names: a PT1 element is a first-order lag G(s) = K / (T s + 1); a PT2 element is a second-order lag G(s) = K / (T² s² + 2 D T s + 1), where D is the damping ratio (D = ζ) and T = 1/ω_n.
+A PT2 element is stable when D > 0 (all denominator coefficients positive); D = 0 makes it undamped (it oscillates forever, marginally stable), D < 0 makes it unstable. D between 0 and 1 is underdamped and stable, D = 1 critically damped, D > 1 overdamped — all three are stable. Common mistake: stability does NOT need D < 1 — any D > 0 is stable; D < 1 only means it overshoots. You do not stabilise a PT2 by changing D yourself: D belongs to the plant; you add a controller in a feedback loop.
+To stabilise or better damp a PT2 plant: close the loop with a controller that moves the closed-loop poles further into the left half-plane — a D (derivative) part adds damping, a PD or PID controller is the usual choice, and too much P gain alone makes the closed loop more oscillatory. Check the result with the closed-loop characteristic equation 1 + G(s) C(s) = 0 (all poles negative real parts, e.g. via Hurwitz).
 
 ## PID control
 
