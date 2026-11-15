@@ -674,6 +674,17 @@ def find_exercise(refs: list[str], question: str = "", k: int = 4) -> list[Passa
                                      segment, 1.0, True, note=f"exercise {ref}"))
             if found:                       # the first reading of the number that exists wins
                 break
+        if found:                           # your handwritten solution, if it was read before (transcriptions.md)
+            ref = found[0].note.replace("exercise ", "")
+            row = c.execute(
+                "SELECT chunks.doc_id, chunks.page FROM chunks JOIN documents ON documents.id = chunks.doc_id "
+                "WHERE documents.path = ? AND chunks.text LIKE ? LIMIT 1",
+                (str(TRANSCRIPTIONS), f"%## Exercise {ref} —%")).fetchone()
+            if row:
+                text, first_id = _page_text(c, row["doc_id"], row["page"])
+                found.insert(min(1, len(found)), Passage(
+                    first_id, row["doc_id"], TRANSCRIPTIONS_TITLE, TRANSCRIPTIONS_TITLE, "md", row["page"],
+                    text[:2500].strip(), 1.0, True, note=f"exercise {ref}"))
     return found[:k]
 
 

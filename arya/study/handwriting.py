@@ -69,6 +69,11 @@ def find_scan(message: str):
     return None
 
 
+def already_read(ref: str) -> bool:
+    path = transcriptions_file()
+    return path.exists() and f"## Exercise {ref} —" in path.read_text(encoding="utf-8")
+
+
 def offer(message: str) -> str | None:
     """Ask before sending: registers a pending yes/no and returns the question, or None."""
     from arya.core import policy, router
@@ -79,6 +84,8 @@ def offer(message: str) -> str | None:
     if not found:
         return None
     p, ref = found
+    if already_read(ref):
+        return None                     # transcribed before: answered locally from transcriptions.md
     policy.offer("cloud_vision", {"doc": p.doc_id, "page": p.page, "ref": ref, "label": p.label(),
                                   "question": message},
                  f"I can read your handwritten solution of exercise {ref} ({p.label()}) by sending that one page "
