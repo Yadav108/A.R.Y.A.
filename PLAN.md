@@ -157,7 +157,7 @@ qwen2.5:3b (~2.3 GB) and the app window fit only just. Levers: BIOS "UMA Frame B
 - [x] Watchdog (`arya/desktop/supervisor.py`): ARYA restarts after a crash or a 3-minute hang (`/healthz`),
       gives up after 5 restarts in 30 min; "Quit ARYA" is respected. "Start with Windows" also by voice
 - [x] Daily backup (`arya/core/upkeep.py`): arya.db (consistent SQLite copy) + corrections / photo notes /
-      transcriptions, last 7 days in %LOCALAPPDATA%\ARYAackups; "back up now", "when was the last backup?"
+      transcriptions, last 7 days in the ARYA data folder (backups); "back up now", "when was the last backup?"
 
 ---
 
