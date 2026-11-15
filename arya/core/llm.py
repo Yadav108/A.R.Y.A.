@@ -2145,6 +2145,23 @@ async def stream_with_tools(message: str):
         yield correction_reply
         return
 
+    try:                                                # quizzes with spaced repetition ("quiz me on dynamics")
+        from arya.study import practice as _practice
+        practising = await _practice.handle(message)
+    except Exception as exc:
+        print(f"Practice skipped: {type(exc).__name__}: {exc}")
+        practising = None
+    if practising:
+        reply, sources = practising
+        print(f"Practice: {'quiz' if _practice.active() else 'done'}")
+        if sources:
+            emit_artifact("SOURCES", sources)
+        save_message("user", message)
+        save_message("assistant", reply)
+        async for sentence in _clean_stream(_aiter_text(reply)):
+            yield sentence
+        return
+
     try:                                                # "explain my handwritten solution of exercise 1-13"
         from arya.study import handwriting as _handwriting
         vision_offer = await asyncio.to_thread(_handwriting.offer, message)

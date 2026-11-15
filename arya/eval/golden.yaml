@@ -29,7 +29,7 @@ questions:
   - id: critically-damped
     tags: [control, fundamentals]
     q: What damping ratio makes a second-order system critically damped?
-    include: [["ζ = 1", "zeta = 1", "ζ equals 1", "zeta equals 1", "equal to 1", "equal to one", "of 1", "of one", "exactly 1"]]
+    include: [["ζ = 1", "zeta = 1", "ζ equals 1", "zeta equals 1", "equals one", "equal to 1", "equal to one", "of 1", "of one", "exactly 1", "is one", "is 1"]]
     exclude: ["re:ζ\\s*=\\s*0[^.]{0,30}critically", "re:0\\.5[^.]{0,30}critically"]
   - id: underdamped
     tags: [control, fundamentals]
