@@ -55,6 +55,11 @@ routes:
   - {say: "minimize window explorer", route: window control, action: window}   # from-log
   - {say: "Can you restore the tab?", route: browser, action: keys}   # from-log (was window control)
   - {say: "switch to \"claude\" tab opened in chrome under JCNS group", route: browser, action: keys}   # from-log
+  # World clock (2026-11-17: Berlin here, India second)
+  - {say: "what time is it?", route: time, addressed: true}
+  - {say: "what time is it in India?", route: time}
+  - {say: "is it a good time to call home?", route: time}
+  - {say: "what time is the lecture tomorrow?", route: model}
   # Brainstorm mode
   - {say: "brainstorm mode", route: mode, addressed: true}
   - {say: "save the second idea", route: tasks}
