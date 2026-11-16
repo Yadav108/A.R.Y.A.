@@ -180,3 +180,18 @@ async def warm_up(attempts: int = 2) -> bool:
             if attempt < attempts:
                 await asyncio.sleep(5)
     return False
+
+
+async def keep_trying(busy=lambda: False, every_s: float = 120.0, on_ready=None) -> None:
+    """After a failed start (out of memory, 2026-11-16 23:47 and 00:00), load the model again every two
+    minutes until it works — closing an app is enough, no restart needed. Skipped while a turn runs."""
+    import asyncio
+
+    while True:
+        await asyncio.sleep(every_s)
+        if busy():
+            continue
+        if await warm_up(attempts=1):
+            if on_ready is not None:
+                on_ready()
+            return

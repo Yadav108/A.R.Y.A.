@@ -147,6 +147,33 @@ def blocked_remotely(tool: str) -> bool:
     return remote_turn.get() and tool in REMOTE_BLOCKED
 
 
+# From the phone log (2026-11-16 18:50): "Close the window" made the model guess close_app('Spotify'), which was
+# then blocked. Requests that can only end blocked get a clear answer at once instead.
+_REMOTE_REFUSALS = [
+    (re.compile(r"^\W*(?:please\s+)?(?:close|quit|kill)\s+(?!(?:the\s+|this\s+|that\s+|my\s+)?(?:\w+\s+)?tabs?\b)"
+                r"(?!.*\bmode\b)(?:the\s+|this\s+|that\s+|my\s+)?[\w .'-]{1,40}?\W*$", re.IGNORECASE),
+     "From the phone I don't close apps or windows, so nothing unsaved gets lost by accident. "
+     "I can minimise it instead: say \"minimise the window\"."),
+    # commands, not questions ("how do I move a file in python" is a question)
+    (re.compile(r"^\W*(?:please\s+)?(?:delete|remove|trash|move|rename)\s+(?:the\s+|this\s+|that\s+|my\s+)?"
+                r"(?:\w+\s+)?(?:files?|folders?|documents?|downloads?)\b", re.IGNORECASE),
+     "From the phone I don't touch files on the laptop. Ask me at the laptop and I'll check with you first."),
+    (re.compile(r"\bmy\s+clipboard\b|^\W*(?:please\s+)?(?:copy|paste)\s+(?:this|that|it)\b", re.IGNORECASE),
+     "Your clipboard stays private from the phone; ask me at the laptop."),
+    (re.compile(r"^\W*(?:please\s+)?run\s+(?:the\s+|a\s+|this\s+)?(?:command|script|powershell|cmd|terminal)\b",
+                re.IGNORECASE),
+     "I don't run commands from the phone. Ask me at the laptop."),
+]
+
+
+def remote_refusal(message: str) -> str | None:
+    """For a phone request that could only end blocked: what to say instead (else None)."""
+    for pattern, reply in _REMOTE_REFUSALS:
+        if pattern.search(message):
+            return reply
+    return None
+
+
 @dataclass
 class Pending:
     tool: str

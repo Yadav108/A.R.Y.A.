@@ -240,7 +240,7 @@ async def preload_models() -> None:
 
     asyncio.create_task(_warm_cache())
     if ARYA_MODE == "offline":
-        asyncio.create_task(warm_up_local_llm())    # load the local model into VRAM now
+        asyncio.create_task(_warm_up_or_keep_trying())    # load the local model into VRAM now
     brain = f"local {OLLAMA_MODEL}" + (" (say 'ask the cloud, …' to use Groq for one question)"
                                        if ARYA_MODE == "offline" else ", Groq first")
     voice = "local Piper" if TTS_ENGINE != "edge" else "Microsoft Edge (online)"
@@ -251,6 +251,18 @@ async def preload_models() -> None:
     where = "this computer only" if security.is_loopback_bind() else f"NETWORK ({security.HOST}) — token required"
     print(f"Security: accepting connections from {where}; actions logged to {LOG_FILE}")
     log_event("server_start", host=security.HOST, port=security.PORT)
+
+
+async def _warm_up_or_keep_trying() -> None:
+    """Load the model now; if memory is short, keep trying in the background and say when it's back."""
+    if await warm_up_local_llm():
+        return
+    from arya.core.llm_local import keep_trying
+
+    def ready() -> None:
+        print("LLM: the local model loaded after all — answers work again")
+        emit_status("NOTIFY:My brain is back: the language model just loaded, so I can answer questions again.")
+    await keep_trying(busy=_voice_lock.locked, on_ready=ready)
 
 
 def _page(request: Request, filename: str) -> HTMLResponse:
@@ -885,6 +897,38 @@ async def _say(text: str) -> None:
 LOW_MEMORY_GB = 1.5   # below this the local model (~2.5 GB) usually can't load, or its server crashes
 
 
+_FRIENDLY_APP = {"code": "VS Code", "chrome": "Chrome", "msedge": "Edge", "firefox": "Firefox", "claude": "Claude Code",
+                 "vmmemwsl": "WSL", "vmmem": "WSL", "spotify": "Spotify", "teams": "Teams", "ms-teams": "Teams",
+                 "discord": "Discord", "slack": "Slack", "pycharm64": "PyCharm", "idea64": "IntelliJ",
+                 "whatsapp": "WhatsApp", "zoom": "Zoom", "obs64": "OBS", "steam": "Steam"}
+_NOT_YOURS = {"pythonw", "python", "ollama", "llama-server", "svchost", "dwm", "msmpeng", "system", "registry",
+              "memory compression", "explorer", "msedgewebview2", "searchhost", "csrss", "lsass", "wininit"}
+
+
+def memory_hogs(top: int = 3) -> str:
+    """'VS Code (3.3 GB), Chrome (1.5 GB) and WSL (0.8 GB)' — the apps you could close (summed over their
+    processes; ARYA, Ollama and Windows itself are left out). Read on this laptop only."""
+    try:
+        import psutil
+        totals: dict[str, float] = {}
+        for p in psutil.process_iter(["name", "memory_info"]):
+            name = (p.info["name"] or "").lower().removesuffix(".exe")
+            mem = p.info["memory_info"]
+            if not name or name in _NOT_YOURS or mem is None:
+                continue
+            label = _FRIENDLY_APP.get(name)
+            if label is None:
+                continue                                   # only apps a person would recognise and close
+            totals[label] = totals.get(label, 0.0) + getattr(mem, "private", mem.rss) / 2**30
+        big = sorted(((gb, n) for n, gb in totals.items() if gb >= 0.3), reverse=True)[:top]
+    except Exception:
+        return ""
+    parts = [f"{n} ({gb:.1f} GB)" for gb, n in big]
+    if len(parts) <= 1:
+        return "".join(parts)
+    return ", ".join(parts[:-1]) + " and " + parts[-1]
+
+
 def _model_down_message(detail: str) -> str:
     """Say *why* the local model failed: low memory, Ollama not running, or a model missing."""
     d = detail.lower()
@@ -902,8 +946,10 @@ def _model_down_message(detail: str) -> str:
     if ("more system memory" in d or "out of memory" in d or "cuda error" in d
             or (free_gb is not None and free_gb < LOW_MEMORY_GB)):
         free = f", only {free_gb:.1f} gigabytes are free" if free_gb is not None else ""
-        return (f"My local model couldn't run because the computer is low on memory{free}. "
-                "Close a few apps or browser tabs and ask me again.")
+        hogs = memory_hogs()
+        which = (f" The biggest right now: {hogs}." if hogs else " Close a few apps or browser tabs.")
+        return (f"My local model couldn't run because the computer is low on memory{free}.{which} "
+                "I keep trying in the background and will tell you when I'm back.")
     if "not found" in d and "ollama pull" in d:
         return "My local model isn't downloaded yet. Run ollama pull, then ask me again."
     if ollama_running is False:
@@ -1041,6 +1087,11 @@ async def phone_turn(message: str) -> dict:
     """A request typed on the phone (arya/server/phone.py): answered as text, nothing spoken on the laptop.
     Waits for ARYA to finish speaking here first (one turn at a time); files, clipboard and commands are
     blocked for it (policy.REMOTE_BLOCKED)."""
+    refusal = policy.remote_refusal(message)
+    if refusal:
+        print(f"Phone request: {message[:60]}")
+        print("Instant answer: blocked from the phone")
+        return {"reply": refusal, "confirm": False}
     async with _voice_lock:
         flag = policy.remote_turn.set(True)
         try:
