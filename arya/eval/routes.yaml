@@ -38,6 +38,16 @@ routes:
   - {say: "Is the timer set?", route: alarms}
   - {say: "how much time is left?", route: alarms}
   - {say: "resume the song", route: media keys, action: media_key}   # from-log
+  # Modes and to-dos (PR 2)
+  - {say: "work mode", route: mode, addressed: true}
+  - {say: "switch to study mode", route: mode}
+  - {say: "back to normal", route: mode}
+  - {say: "what mode are you in?", route: mode}
+  - {say: "add email Dr. Weber the results to my work tasks", route: tasks}
+  - {say: "what's on my list?", route: tasks}
+  - {say: "new task: book the lab for Friday", route: tasks}
+  - {say: "what is the list of Laplace transform pairs", route: model}
+  - {say: "what mode of vibration is the first one", route: model}
 
   # Study
   - {say: "start studying Dynamics for an hour", route: study mode, action: pomodoro, addressed: true}

@@ -37,11 +37,19 @@
              border:1px solid var(--line); border-radius:12px; padding:9px 12px; max-height:120px; }
   textarea:focus { outline:2px solid var(--accent); outline-offset:-1px; }
   #unpaired { display:none; padding:40px 24px; text-align:center; color:var(--muted); }
+  #modes { display:flex; gap:6px; padding:8px 16px 0; }
+  #modes button { flex:1; padding:6px 0; font-size:14px; }
+  #modes button[aria-pressed="true"] { background:var(--me); border-color:var(--me); color:#fff; }
 </style>
 </head>
 <body>
 <header><span id="dot"></span><h1>ARYA</h1><span id="state">connecting…</span></header>
 <div id="unpaired">This phone isn't paired.<br><br>At the laptop, say <b>“connect my phone”</b> and scan the QR code.</div>
+<div id="modes" role="group" aria-label="Mode">
+  <button data-mode="default" aria-pressed="true">Normal</button>
+  <button data-mode="study" aria-pressed="false">Study</button>
+  <button data-mode="work" aria-pressed="false">Work</button>
+</div>
 <div id="nudge" role="status"></div>
 <div id="log" aria-live="polite"></div>
 <div id="yesno"><button class="primary" data-say="yes">Yes</button><button data-say="no">No</button></div>
@@ -82,10 +90,14 @@ async function api(path, body) {
   try { data = await r.json(); } catch (e) {}
   return { status: r.status, data };
 }
+function showMode(m) {
+  if (!m) return;
+  document.querySelectorAll("[data-mode]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.mode === m)));
+}
 function showUnpaired() {
   paired = false;
   $("unpaired").style.display = "block";
-  ["log", "chips", "f", "yesno"].forEach((id) => { $(id).style.display = "none"; });
+  ["log", "chips", "f", "yesno", "modes"].forEach((id) => { $(id).style.display = "none"; });
   state("not paired", false);
 }
 function nudge(item) {
@@ -112,6 +124,7 @@ async function hello() {
     if (r.status === 401) return showUnpaired();
     paired = true;
     last = r.data.last || 0;
+    showMode(r.data.mode);
     state("connected", true);
     (r.data.recent || []).forEach((it) => add("note", "🔔 " + it.at + " · " + it.text));
   } catch (e) {
@@ -125,6 +138,7 @@ async function poll() {
     const r = await api("/api/feed?after=" + last);
     if (r.status === 401) return showUnpaired();
     state("connected", true);
+    showMode(r.data.mode);
     for (const it of r.data.items || []) { last = Math.max(last, it.id); nudge(it); }
   } catch (e) {
     state("laptop not reachable", false);
@@ -158,6 +172,13 @@ $("f").addEventListener("submit", (e) => { e.preventDefault(); const t = $("t");
 $("t").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("f").requestSubmit(); } });
 $("t").addEventListener("input", (e) => { e.target.style.height = ""; e.target.style.height = e.target.scrollHeight + "px"; });
 document.querySelectorAll("[data-say]").forEach((b) => b.addEventListener("click", () => send(b.dataset.say)));
+document.querySelectorAll("[data-mode]").forEach((b) => b.addEventListener("click", async () => {
+  try {
+    const r = await api("/api/mode", { mode: b.dataset.mode });
+    if (r.status === 401) return showUnpaired();
+    if (r.status === 200) showMode(r.data.mode);
+  } catch (e) { state("laptop not reachable", false); }
+}));
 document.addEventListener("visibilitychange", () => { if (!document.hidden) poll(); });
 
 (async () => {

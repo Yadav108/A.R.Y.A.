@@ -218,6 +218,9 @@ async def preload_models() -> None:
     from arya.core import upkeep                     # daily backup of arya.db and your notes (last 7 days)
     asyncio.create_task(upkeep.run())
 
+    from arya.core import modes                      # everyday / study / work: the app and phone show the mode
+    modes.on_change(lambda m: emit_status(f"ARYA_AMODE:{m}"))
+
     from arya.server import phone                    # your phone on home Wi-Fi (only when turned on, Private networks)
     phone.set_turn_handler(phone_turn)
     add_status_listener(phone.note_event)
@@ -307,7 +310,27 @@ async def api_status(request: Request) -> JSONResponse:
         "local_only": security.is_loopback_bind(),
         "pending_confirmation": policy.has_pending(),
         "smart_listening": _smart_listening,
+        "assistant_mode": _assistant_mode(),
     })
+
+
+def _assistant_mode() -> str:
+    from arya.core import modes
+    return modes.current_name()
+
+
+@app.post("/api/assistant-mode")
+async def api_assistant_mode(request: Request) -> JSONResponse:
+    """The mode switch in the app header: default / study / work (arya/core/modes.py)."""
+    if not _authorised(request):
+        return _deny()
+    from arya.core import modes
+    body = await request.json()
+    mode = str(body.get("mode", "")).lower()
+    if mode not in modes.MODES:
+        return JSONResponse({"error": "mode must be default, study or work"}, status_code=400)
+    modes.set_mode(mode, reason="app")
+    return JSONResponse({"ok": True, "mode": mode})
 
 
 @app.post("/api/mute")
@@ -908,6 +931,7 @@ async def _run_turn(message: str, wake_triggered: bool, announce_transcript: boo
                 await _speak_stream(stream_with_tools(message), max_spoken=spoken_limit(message),
                                     started=time.monotonic())
                 print("Response complete")
+                await _maybe_suggest_mode(message)
                 if policy.has_pending():
                     await _send_all("ARYA_CONFIRM")     # app shows Yes / No buttons
             except asyncio.CancelledError:
@@ -927,6 +951,24 @@ async def _run_turn(message: str, wake_triggered: bool, announce_transcript: boo
                     await _send_all(f"ARYA_FOLLOWUP:{int(left)}")
             except Exception:
                 pass
+
+
+async def _maybe_suggest_mode(message: str) -> None:
+    """After an answer: if your last requests clearly belong to another mode, ask once (arya/core/modes.py).
+    Never instead of a question ARYA is already waiting on."""
+    if policy.has_pending():
+        return
+    try:
+        from arya.core import modes
+        target = await asyncio.to_thread(modes.suggestion, message)
+    except Exception as exc:
+        print(f"Mode suggestion skipped: {type(exc).__name__}: {exc}")
+        return
+    if target:
+        question = modes.suggestion_question(target)
+        print(f"Mode: suggesting {target}")
+        policy.offer("switch_mode", {"mode": target}, question)
+        await _say(question)
 
 
 async def phone_turn(message: str) -> dict:

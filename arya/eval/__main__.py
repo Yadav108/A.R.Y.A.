@@ -164,8 +164,12 @@ def main() -> int:
     print(f"ARYA eval — {len(items)} questions, mode {mode}, model {model}\n")
     results, started = [], time.monotonic()
     loop = asyncio.new_event_loop()                 # one loop for the run: cached HTTP clients stay valid
+    from arya.core import modes
     for i, item in enumerate(items, 1):
         t0 = time.monotonic()
+        # Each question in its mode (default: study, so scores stay comparable with earlier runs); kept in
+        # memory, so the run never changes the mode ARYA is in.
+        modes.use_memory(item.get("mode", defaults.get("mode", "study")))
         try:
             text, first = loop.run_until_complete(_answer(item["q"]))
             ok, problems = grade(item, text, defaults)

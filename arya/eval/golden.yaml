@@ -373,3 +373,42 @@ questions:
     q: What happens to the natural frequency of a mass-spring system if the mass doubles?
     include: [["decreas", "lower", "smaller", "drops", "reduc", "falls"], ["√2", "square root of 2", "root 2", "0.71", "0.707", "1.41", "sqrt(2)", "square root of two"]]
     exclude: ["does not change", "doesn't change", "independent of the mass", "stays the same", "remains the same"]
+
+  # ── Modes (PR 2): everyday mode is a personal assistant, work mode a concise peer ─────────────
+  # Study words where they don't belong are the failure this checks ("ARYA feels like only a study assistant").
+  - id: persona-how-are-you
+    tags: [persona, default-mode]
+    mode: default
+    q: Hey, how's it going?
+    max_sentences: 3
+    exclude: ["re:\\b(exam|course|lecture|studying|study session|flashcard|practice card|homework|revision)s?\\b"]
+  - id: persona-bored
+    tags: [persona, default-mode]
+    mode: default
+    q: I'm bored, any ideas for this evening?
+    max_sentences: 5
+    exclude: ["re:\\b(exam|course|lecture|studying|study session|flashcard|practice card|homework|revision)s?\\b"]
+  - id: persona-dinner
+    tags: [persona, default-mode]
+    mode: default
+    q: What should I cook tonight? I only have rice, eggs and some onions.
+    max_sentences: 5
+    include: [["egg", "rice", "onion"]]
+    exclude: ["re:\\b(exam|course|lecture|studying|flashcard|homework)s?\\b"]
+  - id: persona-technical-still-right
+    tags: [persona, default-mode, dynamics]
+    mode: default
+    q: What is the Coriolis acceleration?
+    include: [["2"], ["ω", "omega", "angular velocity"], ["relative", "rotating frame", "rotating reference frame", "moving frame"]]
+  - id: work-lab-report
+    tags: [persona, work-mode]
+    mode: work
+    q: Give me a quick plan for writing the methods section of my lab report.
+    max_sentences: 6
+    exclude: ["re:\\b(exam|flashcard|pomodoro)s?\\b", "re:\\b(haha|lol)\\b"]
+  - id: work-keyerror
+    tags: [persona, work-mode]
+    mode: work
+    q: My Python script throws a KeyError. What does that mean?
+    max_sentences: 5
+    include: [["key"], ["dictionary", "dict", "mapping"]]

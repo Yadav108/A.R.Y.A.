@@ -346,7 +346,9 @@ def index(roots: list[Path] | None = None, progress: Callable[[IndexStatus], Non
     """Bring the index up to date. Safe to call repeatedly (incremental)."""
     from arya.core.embedder import load_embedder
 
-    roots = roots if roots is not None else default_roots()
+    if roots is None:                                   # course folders + work mode's folders
+        from arya.core import modes
+        roots = list(dict.fromkeys(default_roots() + [d for d in modes.work_dirs() if d.is_dir()]))
     files = sorted(_files(roots), key=_copy_score)      # originals before 'copy of …' (stable sort)
     status.running, status.done, status.total, status.current = True, 0, len(files), ""
     model = load_embedder()
@@ -485,6 +487,7 @@ class Passage:
     similarity: float
     keyword_hit: bool
     note: str = ""          # e.g. "exercise 1-13" when found by its number
+    source: str = "course"  # course / work / notes / uploads / core (arya/core/modes.py decides per mode)
 
     def label(self) -> str:
         if "." + self.kind in _media_extensions():
@@ -567,6 +570,8 @@ def search(query: str, k: int = 5) -> list[Passage]:
         if len(r["text"]) < SHORT_CHUNK_CHARS:
             scores[cid] *= SHORT_CHUNK_PENALTY     # near-empty pages (titles, figure captions) match too easily
     best = sorted(scores, key=scores.get, reverse=True)[: k * 3]
+    from arya.core import modes
+    work = modes.work_dirs()
     out: list[Passage] = []
     seen_pages = set()
     for cid in best:
@@ -578,7 +583,7 @@ def search(query: str, k: int = 5) -> list[Passage]:
         if sim is None:
             sim = float(np.frombuffer(_embedding(cid), np.float16).astype(np.float32) @ vec)
         out.append(Passage(cid, r["doc_id"], r["title"], r["collection"], r["kind"], r["page"], r["text"],
-                           sim, cid in keyword_ids))
+                           sim, cid in keyword_ids, source=modes.source_of(r["path"], work)))
         if len(out) >= k:
             break
     return out
@@ -592,22 +597,37 @@ def _embedding(chunk_id: int) -> bytes:
 RELEVANT_SIMILARITY = float(os.getenv("ARYA_KB_MIN_SIMILARITY", "0.42"))
 
 
-def relevant(query: str, k: int = 4) -> list[Passage]:
-    """Passages good enough to ground an answer on — empty when the material doesn't cover it."""
+def relevant(query: str, k: int = 4, mode: str | None = None) -> list[Passage]:
+    """Passages good enough to ground an answer on — empty when the material doesn't cover it.
+    Each mode has its own bar per source (arya/core/modes.py): in everyday mode course material must be
+    clearly on topic, so small talk doesn't drag in Dynamics; in work mode the work folders come first."""
+    from arya.core import modes
     hits = search(query, k=k + 6)
+
+    def bar(h: Passage) -> float | None:
+        """The mode's bar for this passage's source: 'base' = RELEVANT_SIMILARITY, a number = stricter."""
+        f = modes.floor(h.source, mode)
+        return None if f is None else RELEVANT_SIMILARITY if f == "base" else float(f)
+
+    def slack(h: Passage, amount: float) -> float:
+        """Near-misses may come along with a good hit — but only from the mode's own sources; a stricter
+        source (course material in everyday mode) has to clear its bar."""
+        return amount if modes.floor(h.source, mode) == "base" else 0.0
+    hits = [h for h in hits if bar(h) is not None and h.similarity >= bar(h) - slack(h, 0.08)]
     if not hits:
         return []
-    top = max(h.similarity for h in hits)
-    if top < RELEVANT_SIMILARITY:
+    top_ok = [h for h in hits if h.similarity >= bar(h)]
+    if not top_ok:
         return []
-    keep = [h for h in hits if h.similarity >= max(RELEVANT_SIMILARITY - 0.08, top - 0.15)][:k]
+    top = max(h.similarity for h in top_ok)
+    keep = [h for h in hits if h.similarity >= max(bar(h) - slack(h, 0.08), top - 0.15)][:k]
     # The checked core notes are the most reliable source: if one is relevant but was
     # crowded out by keyword-heavy pages (lab reports), it goes in first.
-    core = [h for h in hits if h.title == "ARYA core notes" and h.similarity >= RELEVANT_SIMILARITY - 0.05]
+    core = [h for h in hits if h.title == "ARYA core notes" and h.similarity >= bar(h) - slack(h, 0.05)]
     if core and not any(h.title == "ARYA core notes" for h in keep):
         keep = [core[0]] + keep[:k - 1]
     # A correction you gave earlier on this topic always goes first.
-    fixes = [h for h in hits if h.title == CORRECTIONS_TITLE and h.similarity >= RELEVANT_SIMILARITY - 0.05]
+    fixes = [h for h in hits if h.title == CORRECTIONS_TITLE and h.similarity >= bar(h) - slack(h, 0.05)]
     if fixes:
         keep = [fixes[0]] + [h for h in keep if h.chunk_id != fixes[0].chunk_id][:k - 1]
     return keep

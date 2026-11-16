@@ -272,7 +272,7 @@ async def read_with_cloud(args: dict) -> str:
         return "That screenshot has expired. Ask me again and I'll take a new one."
     print(f"Cloud vision request: one screenshot ({len(png) // 1024} KB), '{args['title']}'")
     log_event("cloud_vision_request", bytes=len(png), source="screen")
-    prompt = (f"This is a screenshot of a window titled \"{args['title']}\" on a mechatronics student's laptop. "
-              f"The student asks: \"{args['question']}\". Answer in at most five short plain sentences (no lists "
+    prompt = (f"This is a screenshot of a window titled \"{args['title']}\" on the user's laptop. "
+              f"The user asks: \"{args['question']}\". Answer in at most five short plain sentences (no lists "
               "or markdown); describe what the picture shows where that helps. Only use what is visible.")
     return await handwriting._vision_call(png, prompt=prompt)

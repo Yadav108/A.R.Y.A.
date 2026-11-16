@@ -45,6 +45,10 @@ def _sandbox(rec: Recorder) -> None:
 
     tmp = Path(tempfile.mkdtemp(prefix="arya_routes_"))
     audit.LOG_DIR, audit.LOG_FILE = tmp, tmp / "actions.log"
+    from arya.core import modes
+    from arya.tools import tasks
+    modes.use_memory("default")                      # mode switches stay in memory; your saved mode is untouched
+    tasks.DB_OVERRIDE = tmp / "tasks.db"             # to-dos go to a scratch database
     agenda.ICS_DIR = tmp / "calendar"
     file_agent._undo_file = lambda: tmp / "tidy-undo.json"
     for key in ("ARYA_MAIL_HOST", "ARYA_MAIL_USER", "ARYA_MAIL_PASSWORD", "ARYA_FOCUS_MUSIC_URL"):

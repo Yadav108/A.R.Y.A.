@@ -191,8 +191,13 @@ def test_what_was_the_music():
 # ── Personality ────────────────────────────────────────────────────────────
 
 def test_personality_in_the_prompt():
+    from arya.core import modes
+    modes.use_memory("study")                                       # the tutor's personality
     p = llm._system_prompt()
     assert "playful" in p and "caring" in p and "Precision comes first" in p and "Never promise an action" in p
+    modes.use_memory("default")                                     # the everyday assistant's
+    p = llm._system_prompt()
+    assert "quick-witted" in p and "Never lecture" in p and "Never promise an action" in p
 
 
 def test_wake_acks_vary_and_notice_late_nights(monkeypatch):

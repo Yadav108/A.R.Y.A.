@@ -32,6 +32,15 @@ os.environ.setdefault("ARYA_MODE", "offline")
 KB_TMP = ROOT / "tests" / "_tmp_kb"
 
 
+@pytest.fixture(autouse=True)
+def _study_mode():
+    """Every test starts in study mode, in memory: the behaviour the older tests were written for, and no
+    test inherits a mode another test switched to (tests/test_modes.py picks its own)."""
+    from arya.core import modes
+    modes.use_memory("study")
+    yield
+
+
 @pytest.fixture(scope="session")
 def bg_loop():
     """An event loop running in a background thread (for code that posts coroutines from threads)."""

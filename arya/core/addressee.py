@@ -150,6 +150,13 @@ def quick_verdict(text: str, pending_confirmation: bool = False) -> bool | None:
     except Exception:
         pass
     try:
+        from arya.core import modes
+        from arya.tools import tasks
+        if modes.matches(text) or tasks.matches(text):
+            return True                   # "work mode", "what's on my list?"
+    except Exception:
+        pass
+    try:
         from arya.server import phone
         if phone.matches(text):
             return True                   # "connect phone." (from the log: dropped as not for ARYA)
