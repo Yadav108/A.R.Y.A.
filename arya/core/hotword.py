@@ -198,7 +198,10 @@ class HotwordDetector:
 def _strip_wake_words(text: str) -> str:
     """Whisper sometimes catches the tail of the wake word ("Arya, what time…")."""
     leading = re.compile(r"^\W*(?:(?:hey|hi|ok|okay)\W+)?" + _ww()._WAKE_PATTERN.pattern + r"\W*", re.IGNORECASE)
-    return leading.sub("", text).strip()
+    text = leading.sub("", text).strip()
+    from arya.core.addressee import misheard_nj
+    m = misheard_nj(text)                          # "Enjoy! How are you?" was "NJ, how are you?"
+    return text[m.end():].strip() if m else text
 
 
 # Words people wrap around "stop" when they interrupt ("Uh, stop.", "Okay, let's stop audio.").

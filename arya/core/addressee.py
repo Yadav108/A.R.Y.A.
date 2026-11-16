@@ -111,12 +111,25 @@ _NAME_FIRST = re.compile(rf"^\W*(?:(?:hey|hi|ok|okay|uh|um|so|yo)\W+)?{_LOOSE_NA
 _MISHEARD_PLAY = re.compile(r"^\W*(?:i'll|i will|ill)\s+(?=play\b)", re.IGNORECASE)
 
 
+# "NJ" as Whisper writes it without a hint (measured on the user's 22 recordings: "Enjoy! Brief me.",
+# "Hey, enjoy.", "Okay, engine, minimize the window."). Only at the very start, followed by punctuation AND
+# more words: "Enjoy your meal" / "the engine is hot" stay as they are, and a lone "Enjoy!" is not the name
+# (4 of 69 sound-alike clips came out as exactly that). Recognises 11 of the 22; only when "Hey NJ" is set up.
+_MISHEARD_NJ = re.compile(r"^\W*(?:(?:hey|hi|ok|okay)\W+)?(?:enjoy|enjie|anjay|anjie|eun-?jae|ng|engine)\s*[!,.:;]\s+"
+                          r"(?=\w)", re.IGNORECASE)
+
+
+def misheard_nj(text: str) -> re.Match | None:
+    from arya.core import hotword
+    return _MISHEARD_NJ.match(text or "") if hotword.extra_models() else None
+
+
 def split_name(text: str) -> tuple[str, bool]:
     """('Area, play Kon Tujhe', …) -> ('play Kon Tujhe', True); ('Area.') -> ('', True); else (text, False).
     Used on follow-ups: a sentence that starts with ARYA's name is for ARYA, and the name isn't the request."""
     if _NAME_ALONE.match(text):
         return "", True
-    m = _NAME_FIRST.match(text) or _MISHEARD_PLAY.match(text)
+    m = _NAME_FIRST.match(text) or _MISHEARD_PLAY.match(text) or misheard_nj(text)
     if m:
         return text[m.end():].strip(), True
     return text, False
