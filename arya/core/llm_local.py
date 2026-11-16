@@ -79,7 +79,7 @@ def _to_ollama_messages(messages: list[dict]) -> list[dict]:
 
 
 def _payload(messages: list[dict], stream: bool, tools: list | None,
-             temperature: float | None, max_tokens: int | None) -> dict:
+             temperature: float | None, max_tokens: int | None, fmt: dict | str | None = None) -> dict:
     options: dict = {"num_ctx": NUM_CTX}
     if temperature is not None:
         options["temperature"] = temperature
@@ -93,6 +93,8 @@ def _payload(messages: list[dict], stream: bool, tools: list | None,
     }
     if tools:
         payload["tools"] = tools
+    if fmt is not None:
+        payload["format"] = fmt             # structured output: "json" or a JSON schema the reply must follow
     if THINKING_MODEL.search(OLLAMA_MODEL):
         payload["think"] = False            # hidden reasoning costs seconds before the first spoken word
     payload["options"] = options
@@ -118,11 +120,13 @@ async def chat_local(
     tools: list | None = None,
     temperature: float | None = None,
     max_tokens: int | None = None,
+    fmt: dict | str | None = None,
 ) -> dict:
     """Non-streaming chat. Returns Ollama's assistant message:
     {"role": "assistant", "content": str, "tool_calls": [{"function": {"name", "arguments": dict}}]?}
+    `fmt`: a JSON schema (or "json") the reply must follow — Ollama's structured outputs.
     """
-    payload = _payload(messages, False, tools, temperature, max_tokens)
+    payload = _payload(messages, False, tools, temperature, max_tokens, fmt)
     try:
         response = await _client().post(f"{OLLAMA_HOST}/api/chat", json=payload)
         _raise_for_status(response, response.text)

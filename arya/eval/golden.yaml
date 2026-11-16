@@ -81,7 +81,7 @@ questions:
   - id: pid-parts
     tags: [control, fundamentals]
     q: What do the P, I and D parts of a PID controller do?
-    include: [["proportional"], ["integral", "accumulat", "past error", "sum of"], ["derivative", "rate of change", "anticipat", "future"]]
+    include: [["proportional"], ["integral", "integrat", "accumulat", "past error", "sum of"], ["derivative", "rate of change", "anticipat", "future"]]
   - id: pid-steady-state
     tags: [control, fundamentals]
     q: Which part of a PID controller removes steady-state error?
@@ -198,7 +198,7 @@ questions:
   - id: ohm
     tags: [electrical, fundamentals]
     q: What is Ohm's law?
-    include: [["V = IR", "V = I R", "U = R·I", "U = RI", "U = R I", "V = R I", "U = I·R", "V = I·R", "U = IR", "voltage equals", "V = RI", "I = V/R", "I = V / R"]]
+    include: [["V = IR", "V = I R", "U = R·I", "U = RI", "U = R I", "V = R I", "U = I·R", "V = I·R", "U = IR", "voltage equals", "V = RI", "I = V/R", "I = V / R", "re:\\bI equals V (over|divided by) R\\b", "re:current equals (the )?voltage (over|divided by)"]]
   - id: rc-time-constant
     tags: [electrical, fundamentals]
     q: What is the time constant of an RC circuit?

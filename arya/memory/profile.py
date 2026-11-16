@@ -141,9 +141,15 @@ def handle(message: str) -> str | None:
     m = _FORGET.match(message)
     if m and not re.search(r"\b(?:it|this|the (?:timer|reminder|note))\b$", m.group("what"), re.IGNORECASE):
         n = forget(m.group("what"))
+        try:                                                 # and what ARYA learned by itself (memory/learning.py)
+            from arya.memory import learning
+            n += learning.forget(m.group("what"))
+            anything = bool(items() or learning.memories(None))
+        except Exception:
+            anything = bool(items())
         if n:
             return f"Okay, I forgot {'that' if n == 1 else f'{n} things'}."
-        return None if not items() else "I don't have anything like that remembered about you."
+        return None if not anything else "I don't have anything like that remembered about you."
     m = _REMEMBER.match(message) or _STANDING.match(message)
     if m:
         what = m.group("what")
