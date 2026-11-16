@@ -290,14 +290,17 @@ async def hello(request: Request) -> JSONResponse:
         return JSONResponse({"paired": False}, status_code=401)
     with _state.lock:
         last = _state.next_id - 1
-    return JSONResponse({"paired": True, "last": last, "recent": feed_after(max(0, last - 5))})
+    from arya.core import modes
+    return JSONResponse({"paired": True, "last": last, "recent": feed_after(max(0, last - 5)),
+                         "mode": modes.current_name()})
 
 
 @app.get("/api/feed")
 async def feed(request: Request, after: int = 0) -> JSONResponse:
     if not _paired(request):
         return JSONResponse({"error": "unpaired"}, status_code=401)
-    return JSONResponse({"items": feed_after(after)})
+    from arya.core import modes
+    return JSONResponse({"items": feed_after(after), "mode": modes.current_name()})
 
 
 @app.post("/api/say")
@@ -323,6 +326,24 @@ async def say(request: Request) -> JSONResponse:
     except asyncio.TimeoutError:
         return JSONResponse({"reply": "That took too long — try again, or ask at the laptop.", "confirm": False})
     return JSONResponse(result)
+
+
+@app.post("/api/mode")
+async def mode(request: Request) -> JSONResponse:
+    """The mode switch on the phone page: default / study / work (arya/core/modes.py)."""
+    from arya.core import modes
+
+    if not _paired(request):
+        return JSONResponse({"error": "unpaired"}, status_code=401)
+    try:
+        body = await request.json()
+    except ValueError:
+        body = {}
+    name = str(body.get("mode", "") if isinstance(body, dict) else "").lower()
+    if name not in modes.MODES:
+        return JSONResponse({"error": "mode must be default, study or work"}, status_code=400)
+    modes.set_mode(name, reason="phone")
+    return JSONResponse({"ok": True, "mode": name})
 
 
 @app.post("/api/unpair")

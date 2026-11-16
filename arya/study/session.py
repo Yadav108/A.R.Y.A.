@@ -216,6 +216,8 @@ async def handle(message: str) -> str | None:
         policy.note_result("cancel_timer")
         from arya.study import practice
         practice._quiz = None
+        from arya.core import modes
+        modes.leave_study()                                   # back to the mode from before the session
         return f"Study session over: {summary}. Nice work."
 
     if _STATUS.search(message):
@@ -240,7 +242,8 @@ async def handle(message: str) -> str | None:
         await productivity.cancel_timer(previous["course"])
     await asyncio.to_thread(_start_row, course, sessions * POMODORO_MINUTES)
     await productivity.pomodoro(sessions=sessions, label=course)
-    from arya.core import audit, policy
+    from arya.core import audit, modes, policy
+    modes.enter_study()                                   # tutor while the session runs
     policy.note_result("pomodoro")                        # real actions: the reply may say "I started…"
     audit.log_event("study_session", course=course, minutes=sessions * POMODORO_MINUTES)
 

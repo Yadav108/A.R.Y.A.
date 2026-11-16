@@ -118,6 +118,7 @@
   }
   .segmented button[aria-pressed="true"] { background: rgba(255, 255, 255, 0.1); color: var(--text); }
   .segmented button:disabled { opacity: 0.4; cursor: not-allowed; }
+.segmented.segmented-3 { grid-template-columns: 1fr 1fr 1fr; }
   .seg-note { color: var(--dim); font-size: 12px; margin: 8px 2px 0; }
 
   dl.kv { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 7px 12px; font-size: 12.5px; }
@@ -380,6 +381,14 @@
 
     <section class="card">
       <h2>Controls</h2>
+      <div style="margin-bottom:14px">
+        <div class="segmented segmented-3" role="group" aria-label="Assistant mode">
+          <button id="amDefault" data-amode="default" aria-pressed="true">Normal</button>
+          <button id="amStudy" data-amode="study" aria-pressed="false">Study</button>
+          <button id="amWork" data-amode="work" aria-pressed="false">Work</button>
+        </div>
+        <p class="seg-note" id="amNote">Your everyday assistant.</p>
+      </div>
       <div class="row">
         <div><label for="micToggle">Microphone</label><small id="micNote">Listening for “Hey ARYA”</small></div>
         <label class="switch"><input type="checkbox" id="micToggle" checked aria-label="Microphone on"><span></span></label>
@@ -857,6 +866,16 @@
         ? "Everything stays on this laptop. Say “ask the cloud, …” for one question."
         : "Groq answers first — faster and smarter, but requests leave the laptop.";
   }
+  const AMODE_NOTES = {
+    default: "Your everyday assistant.",
+    study: "Tutor for your courses: course material first, cards and pomodoros.",
+    work: "Short and technical: your work folders and tasks first.",
+  };
+  function applyAssistantMode(m) {
+    if (!AMODE_NOTES[m]) return;
+    document.querySelectorAll("[data-amode]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.amode === m)));
+    $("amNote").textContent = AMODE_NOTES[m];
+  }
   function applyMuted(m) {
     muted = m;
     $("micToggle").checked = !m;
@@ -870,6 +889,7 @@
     applyMode(s.mode, s.cloud_configured);
     applyMuted(s.muted);
     applySmart(s.smart_listening !== false);
+    applyAssistantMode(s.assistant_mode || "default");
     $("kvBrain").textContent = s.mode === "offline" ? `${s.brain} · local` : `${s.cloud_brain} · cloud`;
     $("kvBrain").title = `Local: ${s.brain}`;
     $("kvVoice").textContent = s.voice_engine;
@@ -939,6 +959,7 @@
     if (msg.startsWith("ARYA_VISUAL:")) { try { addVisual(JSON.parse(msg.slice(12))); } catch {} return; }
     if (msg.startsWith("ARYA_KB:")) { try { applyKB(JSON.parse(msg.slice(8))); } catch {} return; }
     if (msg.startsWith("ARYA_SMART:")) { applySmart(msg.endsWith(":on")); return; }
+    if (msg.startsWith("ARYA_AMODE:")) { applyAssistantMode(msg.slice(11)); return; }
     if (msg === "ARYA_CONVERSATION_ENDED") {
       clearInterval(conversationTimer); conversationUntil = 0;
       notice("Conversation ended — say “Hey ARYA” to start again");
@@ -1049,6 +1070,10 @@
       catch { toast("Couldn't switch privacy mode"); }
     });
   }
+  document.querySelectorAll("[data-amode]").forEach((b) => b.addEventListener("click", async () => {
+    try { await api("/api/assistant-mode", { method: "POST", body: JSON.stringify({ mode: b.dataset.amode }) }); applyAssistantMode(b.dataset.amode); }
+    catch { toast("Couldn't switch mode"); }
+  }));
   $("menuBtn").addEventListener("click", () => body.classList.toggle("sidebar-open"));
 
   let toastTimer = null;

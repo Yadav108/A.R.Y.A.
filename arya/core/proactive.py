@@ -45,6 +45,7 @@ class Sensors:
     due_cards: int = 0
     practised_today: bool = False
     upcoming: tuple[str, str, datetime] | None = None   # (key, spoken description, start) of an event soon
+    nudges: frozenset = frozenset({"battery", "calendar", "break", "cards"})   # what the mode allows (modes.py)
 
 
 @dataclass
@@ -98,7 +99,7 @@ class Nudger:
         if t < self.muted_until or not s.windows_ok or s.idle_s >= AWAY_IDLE_S or self._quiet(s.now.hour):
             return None
 
-        if s.battery and not s.battery[1]:                               # battery beats the gap rule
+        if s.battery and not s.battery[1] and "battery" in s.nudges:     # battery beats the gap rule
             due = [lvl for lvl in BATTERY_LEVELS if s.battery[0] <= lvl and lvl not in self.warned_levels]
             if due:
                 self.warned_levels.update(lvl for lvl in BATTERY_LEVELS if s.battery[0] <= lvl)
@@ -107,7 +108,7 @@ class Nudger:
                     return f"Battery is down to {s.battery[0]} percent. Please plug in soon, or I'll go quiet."
                 return f"Battery is at {s.battery[0]} percent. Time to plug in the charger."
 
-        if s.upcoming and s.upcoming[0] not in self.events_told:          # a heads-up can't wait either
+        if s.upcoming and s.upcoming[0] not in self.events_told and "calendar" in s.nudges:   # can't wait either
             key, what, start = s.upcoming
             self.events_told.add(key)
             self.last_spoken = t
@@ -117,7 +118,7 @@ class Nudger:
         if t - self.last_spoken < MIN_GAP_S:
             return None
 
-        if (not s.studying and not self.break_nudged and self.active_since is not None
+        if ("break" in s.nudges and not s.studying and not self.break_nudged and self.active_since is not None
                 and t - self.active_since >= BREAK_AFTER_S):
             self.break_nudged = True
             self.last_spoken = t
@@ -126,7 +127,7 @@ class Nudger:
                     "Stand up, drink some water and rest your eyes for five minutes.")
 
         today = s.now.date().isoformat()
-        if (s.due_cards and not s.practised_today and not s.studying and self.cards_day != today
+        if ("cards" in s.nudges and s.due_cards and not s.practised_today and not s.studying and self.cards_day != today
                 and s.now.hour >= CARDS_AFTER_HOUR):
             self.cards_day = today
             self.last_spoken = t
@@ -186,6 +187,15 @@ def _practice_today() -> tuple[int, bool]:
     return practice.due_count(), bool(done)
 
 
+def _mode_nudges() -> frozenset:
+    """Which nudges the current mode wants (arya/core/modes.py): practice cards only in study mode."""
+    try:
+        from arya.core import modes
+        return modes.current().nudges
+    except Exception:
+        return frozenset({"battery", "calendar", "break", "cards"})
+
+
 def read_sensors() -> Sensors:
     import psutil
 
@@ -216,7 +226,7 @@ def read_sensors() -> Sensors:
         print(f"Nudges: calendar check failed ({type(exc).__name__}: {exc})")
     return Sensors(now=now, battery=battery, idle_s=_idle_seconds(),
                    windows_ok=_windows_accepts_notifications(), studying=studying,
-                   due_cards=due, practised_today=practised, upcoming=upcoming)
+                   due_cards=due, practised_today=practised, upcoming=upcoming, nudges=_mode_nudges())
 
 
 # ── State that survives a restart (mute, today's practice nudge) ─────────────

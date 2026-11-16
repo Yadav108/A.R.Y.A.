@@ -156,8 +156,11 @@ def test_capabilities_question(question, is_cap):
 
 def test_capabilities_answer_is_true_and_short():
     import arya.core.llm as llm
+    from arya.core import modes
 
-    assert "translat" not in llm.CAPABILITIES.lower() and len(llm.split_sentences(llm.CAPABILITIES)) <= 5
+    for mode in modes.MODES.values():                      # every mode's answer
+        caps = mode.capabilities
+        assert "translat" not in caps.lower() and len(llm.split_sentences(caps)) <= 5, mode.name
 
 
 @pytest.mark.parametrize("text, trimmed", [
