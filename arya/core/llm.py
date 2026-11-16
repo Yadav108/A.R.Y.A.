@@ -2330,6 +2330,9 @@ async def stream_with_tools(message: str):
     from arya.core.audit import log_event
 
     pending = policy.take_pending()
+    if pending is None:                                 # "Hurry up, pause the music." -> "pause the music."
+        from arya.core import addressee as _addressee
+        message = _addressee.strip_filler(message)
     policy.begin_turn(message)
     from arya.core import language, modes
     _turn_language.set(language.turn_language(message))                # Hinglish request -> Hinglish answer

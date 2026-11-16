@@ -119,9 +119,28 @@ _MISHEARD_NJ = re.compile(r"^\W*(?:(?:hey|hi|ok|okay)\W+)?(?:enjoy|enjie|anjay|a
                           r"(?=\w)", re.IGNORECASE)
 
 
+# From the log (2026-11-16/17): "Hey, engine." / "Hi, NG." (the name alone, after a greeting) and
+# "Enjoy open window explorer." (no pause after it, but a clear command follows).
+_MISHEARD_NJ_ALONE = re.compile(r"^\W*(?:hey|hi|ok|okay)\W+(?:enjoy|enjie|anjay|anjie|eun-?jae|ng|engine)\W*$",
+                                re.IGNORECASE)
+_MISHEARD_NJ_TIGHT = re.compile(r"^\W*(?:(?:hey|hi|ok|okay)\W+)?(?:enjoy|anjay|engine)\s+(?=\w)", re.IGNORECASE)
+
+
 def misheard_nj(text: str) -> re.Match | None:
     from arya.core import hotword
-    return _MISHEARD_NJ.match(text or "") if hotword.extra_models() else None
+    if not hotword.extra_models():
+        return None
+    text = text or ""
+    m = _MISHEARD_NJ.match(text) or _MISHEARD_NJ_ALONE.match(text)
+    if m:
+        return m
+    m = _MISHEARD_NJ_TIGHT.match(text)                 # "Enjoy open …": only if the rest is a command for ARYA
+    if m and _ASSISTANT_COMMAND.match(text[m.end():]) and not _ENJOY_OBJECT.match(text[m.end():]):
+        return m
+    return None
+
+
+_ENJOY_OBJECT = re.compile(r"(?:your|the|it|this|that|yourself|life|my|our|his|her|their)\b", re.IGNORECASE)
 
 
 def split_name(text: str) -> tuple[str, bool]:
@@ -135,11 +154,25 @@ def split_name(text: str) -> tuple[str, bool]:
     return text, False
 
 
+_FILLER = re.compile(r"^\W*(?:hurry\s+up|come\s+on|quick(?:ly)?|okay\s+so|ok\s+so|alright|all\s+right|now|"
+                     r"listen|wait|oh|hmm|yeah|yes|no|sorry|please|and|so|um|uh)\s*[,.!:;-]+\s*(?=\w)", re.IGNORECASE)
+
+
+def strip_filler(text: str) -> str:
+    """'Hurry up, pause the music.' -> 'pause the music.' — only when what follows is a clear command."""
+    m = _FILLER.match(text or "")
+    rest = text[m.end():].strip() if m else ""
+    return rest if rest and quick_verdict(rest) is True else text
+
+
 def quick_verdict(text: str, pending_confirmation: bool = False) -> bool | None:
     """True/False when a rule settles it, None when the model should decide."""
     if pending_confirmation:
         return True                       # ARYA asked a yes/no question — the answer is for it
     if _NAME.search(text):
+        return True
+    filler = _FILLER.match(text)          # "Hurry up, pause the music." (from the log: ignored)
+    if filler and text[filler.end():].strip() and quick_verdict(text[filler.end():]) is True:
         return True
     if _ALWAYS_FOR_ARYA.match(text.strip()):
         return True

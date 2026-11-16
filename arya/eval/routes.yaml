@@ -55,6 +55,10 @@ routes:
   - {say: "minimize window explorer", route: window control, action: window}   # from-log
   - {say: "Can you restore the tab?", route: browser, action: keys}   # from-log (was window control)
   - {say: "switch to \"claude\" tab opened in chrome under JCNS group", route: browser, action: keys}   # from-log
+  # Field limits (log 2026-11-16/17)
+  - {say: "Hurry up, pause the music.", route: media keys, action: media_key, addressed: true}   # from-log
+  - {say: "open window explorer.", route: open app, action: open_app, addressed: true}         # from-log
+  - {say: "No, that's not it.", route: model}
   # Webcam, only when asked (PR F)
   - {say: "take a photo with the webcam", route: webcam, action: webcam, addressed: true}
   - {say: "what am I holding?", route: webcam, action: webcam, addressed: true}

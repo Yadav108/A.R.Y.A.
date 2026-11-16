@@ -53,6 +53,38 @@ class LocalLLMUnavailable(RuntimeError):
     """Ollama is not running, or the configured model has not been pulled."""
 
 
+# The GPU is full (from the log, 2026-11-16: "llama-server reported out-of-memory during startup: cudaMalloc",
+# "process has terminated: exit status 0xc0000409"): ARYA went quiet for an hour. Instead, load the model
+# partly (then fully) on the CPU — slower answers, but answers — and try the whole GPU again after a while.
+import time as _time
+
+_GPU_FULL = re.compile(r"cudaMalloc|out.of.memory|ggml_backe|CUDA error|0xc0000409|0xc0000005", re.IGNORECASE)
+GPU_STEPS = (18, 0)                       # layers on the GPU (qwen2.5:3b has 36): half, then none
+GPU_RETRY_S = 10 * 60
+_gpu: dict = {"layers": None, "until": 0.0}
+
+
+def _gpu_layers() -> int | None:
+    if _gpu["layers"] is not None and _time.monotonic() >= _gpu["until"]:
+        _gpu["layers"] = None             # try the whole GPU again
+    return _gpu["layers"]
+
+
+def _step_down(exc: Exception) -> bool:
+    """After a GPU-memory failure: use fewer GPU layers next. False when there's nothing left to try."""
+    if not _GPU_FULL.search(str(exc)):
+        return False
+    current = _gpu_layers()
+    smaller = [n for n in GPU_STEPS if current is None or n < current]
+    if not smaller:
+        return False
+    _gpu.update(layers=smaller[0], until=_time.monotonic() + GPU_RETRY_S)
+    where = "partly on the CPU" if smaller[0] else "on the CPU"
+    print(f"LLM: GPU memory full — loading {OLLAMA_MODEL} {where} for now (slower; GPU again in "
+          f"{GPU_RETRY_S // 60} min)")
+    return True
+
+
 def _to_ollama_messages(messages: list[dict]) -> list[dict]:
     """Convert OpenAI-style messages to Ollama's format.
 
@@ -85,6 +117,8 @@ def _payload(messages: list[dict], stream: bool, tools: list | None,
         options["temperature"] = temperature
     if max_tokens is not None:
         options["num_predict"] = max_tokens
+    if _gpu_layers() is not None:
+        options["num_gpu"] = _gpu_layers()
     payload: dict = {
         "model": OLLAMA_MODEL,
         "messages": _to_ollama_messages(messages),
@@ -126,13 +160,17 @@ async def chat_local(
     {"role": "assistant", "content": str, "tool_calls": [{"function": {"name", "arguments": dict}}]?}
     `fmt`: a JSON schema (or "json") the reply must follow — Ollama's structured outputs.
     """
-    payload = _payload(messages, False, tools, temperature, max_tokens, fmt)
-    try:
-        response = await _client().post(f"{OLLAMA_HOST}/api/chat", json=payload)
-        _raise_for_status(response, response.text)
-        return response.json().get("message", {})
-    except httpx.HTTPError as exc:
-        raise LocalLLMUnavailable(f"Cannot reach Ollama at {OLLAMA_HOST}: {exc!r}") from exc
+    while True:
+        payload = _payload(messages, False, tools, temperature, max_tokens, fmt)
+        try:
+            response = await _client().post(f"{OLLAMA_HOST}/api/chat", json=payload)
+            _raise_for_status(response, response.text)
+            return response.json().get("message", {})
+        except httpx.HTTPError as exc:
+            raise LocalLLMUnavailable(f"Cannot reach Ollama at {OLLAMA_HOST}: {exc!r}") from exc
+        except LocalLLMUnavailable as exc:
+            if not _step_down(exc):
+                raise
 
 
 async def stream_local(
@@ -141,6 +179,19 @@ async def stream_local(
     max_tokens: int | None = None,
 ) -> AsyncIterator[str]:
     """Streaming chat. Yields content tokens as they arrive."""
+    while True:
+        yielded = False
+        try:
+            async for token in _stream_once(messages, temperature, max_tokens):
+                yielded = True
+                yield token
+            return
+        except LocalLLMUnavailable as exc:
+            if yielded or not _step_down(exc):
+                raise
+
+
+async def _stream_once(messages: list[dict], temperature: float | None, max_tokens: int | None) -> AsyncIterator[str]:
     payload = _payload(messages, True, None, temperature, max_tokens)
     try:
         async with _client().stream("POST", f"{OLLAMA_HOST}/api/chat", json=payload) as response:
@@ -167,16 +218,22 @@ async def warm_up(attempts: int = 2) -> bool:
     Retries once — a load can fail transiently while Whisper is still settling."""
     import asyncio
 
-    for attempt in range(1, attempts + 1):
+    attempt = 0
+    while attempt < attempts:
+        attempt += 1
         try:
             response = await _client().post(f"{OLLAMA_HOST}/api/chat", json={   # also opens the shared client
                 **_payload([{"role": "user", "content": "hi"}], False, None, None, 1),
             })
             _raise_for_status(response, response.text)
-            print(f"LLM: local model {OLLAMA_MODEL} ready")
+            print(f"LLM: local model {OLLAMA_MODEL} ready"
+                  + ("" if _gpu_layers() is None else f" ({_gpu_layers()} layers on the GPU)"))
             return True
         except (httpx.HTTPError, LocalLLMUnavailable) as exc:
             print(f"LLM: local model warm-up failed (attempt {attempt}): {str(exc)[:160]}")
+            if _step_down(exc):                    # GPU full: try again at once with fewer GPU layers
+                attempt -= 1
+                continue
             if attempt < attempts:
                 await asyncio.sleep(5)
     return False
