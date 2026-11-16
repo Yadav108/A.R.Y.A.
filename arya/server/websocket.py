@@ -218,6 +218,9 @@ async def preload_models() -> None:
     from arya.core import upkeep                     # daily backup of arya.db and your notes (last 7 days)
     asyncio.create_task(upkeep.run())
 
+    from arya.memory import learning                 # learns from finished conversations while ARYA is idle
+    asyncio.create_task(learning.run(busy=_voice_lock.locked))
+
     from arya.core import modes                      # everyday / study / work: the app and phone show the mode
     modes.on_change(lambda m: emit_status(f"ARYA_AMODE:{m}"))
 

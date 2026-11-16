@@ -1,0 +1,120 @@
+# Learning benchmark (python -m arya.eval --learning): what ARYA learns from a conversation.
+#
+# Each case is one conversation (or a sequence of them, read in order) through the real local model and the
+# real checks in arya/memory/learning.py. Then:
+#   expect: every pattern must match some kept memory (recall)
+#   forbid: no kept memory may match any of these (the failures that matter most)
+#   accept: right but not required (not counted against precision)
+# A kept memory that matches no `expect` pattern counts as "extra" — reported, and part of precision.
+# Patterns are regular expressions, case-insensitive. Kept = active or candidate.
+
+cases:
+  - id: project-and-style
+    conversations:
+      - - [user, "I'm working on a line-following robot for my project course, can you remind me how PID works?"]
+        - [assistant, "A PID controller adds a proportional, an integral and a derivative term of the error."]
+        - [user, "thanks, and keep it shorter next time, I prefer quick answers"]
+    expect: ["robot", "short|quick|brief"]
+    forbid: ["PID works", "asked"]
+
+  - id: just-a-question
+    conversations:
+      - - [user, "What is the Coriolis acceleration and when does it appear?"]
+        - [assistant, "It is two times omega cross the relative velocity, in a rotating frame."]
+        - [user, "And why is there a factor of two in it?"]
+        - [assistant, "One half comes from the changing relative velocity, the other from the rotating frame."]
+    expect: []
+    forbid: ["coriolis", "rotating", "physics", "interested"]
+
+  - id: one-off-requests
+    conversations:
+      - - [user, "set a timer for ten minutes for the pasta"]
+        - [assistant, "Pasta timer set for 10 minutes."]
+        - [user, "and play some Arijit Singh on YouTube music please"]
+        - [assistant, "Playing Arijit Singh on YouTube Music."]
+    expect: []
+    forbid: ["timer", "pasta"]
+
+  - id: sister
+    conversations:
+      - - [user, "My sister Priya is visiting next month, she loves hiking, any trail ideas near Würzburg?"]
+        - [assistant, "The Main valley has nice trails, for example around Veitshöchheim."]
+    expect: ["priya"]
+    forbid: ["würzburg", "the user (loves|enjoys|likes) hiking"]
+
+  - id: tired-today
+    conversations:
+      - - [user, "I'm so tired today, it was a really long day at the lab"]
+        - [assistant, "Sounds exhausting. Want me to keep things short tonight?"]
+        - [user, "yeah, just tell me the weather for tomorrow"]
+    expect: []
+    forbid: ["tired", "long day", "weather"]
+
+  - id: health
+    conversations:
+      - - [user, "remind me about my dentist appointment on Thursday, my tooth has been hurting all week"]
+        - [assistant, "Reminder set for Thursday."]
+    expect: []
+    forbid: ["dentist", "tooth", "hurt"]
+
+  - id: arya-said-it
+    conversations:
+      - - [assistant, "You might enjoy some jazz while you work, like Miles Davis."]
+        - [user, "ok sure, put something on"]
+        - [assistant, "Playing Miles Davis."]
+    expect: []
+    forbid: ["jazz", "miles davis"]
+
+  - id: gym-routine
+    conversations:
+      - - [user, "I usually go to the gym on Monday and Thursday evenings, so don't plan study sessions then"]
+        - [assistant, "Got it, I'll keep Monday and Thursday evenings free."]
+    expect: ["gym"]
+    accept: ["study sessions? on monday"]
+    forbid: []
+
+  - id: metric
+    conversations:
+      - - [user, "please always use metric units with me, I live in Germany and miles mean nothing to me"]
+        - [assistant, "Metric it is."]
+    expect: ["metric"]
+    accept: ["germany"]
+    forbid: ["miles mean"]
+
+  - id: research-job
+    conversations:
+      - - [user, "I work as a research assistant at the institute, mostly battery modelling in Python"]
+        - [assistant, "Nice. What kind of models, equivalent circuits or electrochemical?"]
+        - [user, "equivalent circuit models for now, fitting them to measurement data"]
+    expect: ["research assistant|institute", "battery"]
+    forbid: []
+
+  - id: someone-else
+    conversations:
+      - - [user, "Who was Isaac Newton and what did he discover?"]
+        - [assistant, "An English physicist who described gravity and the laws of motion."]
+    expect: []
+    forbid: ["newton"]
+
+  - id: vegetarian
+    conversations:
+      - - [user, "I'm vegetarian, so no meat in any recipe you suggest. What can I make with chickpeas?"]
+        - [assistant, "A chickpea curry with tomatoes and spinach works well."]
+    expect: ["vegetarian|meat"]
+    forbid: ["chickpea"]
+
+  - id: lab-partner-changes
+    conversations:
+      - - [user, "my lab partner is Anna, we do the control lab together every Wednesday"]
+        - [assistant, "Good to know."]
+      - - [user, "Anna switched groups, my lab partner is now Ben"]
+        - [assistant, "Got it, Ben from now on."]
+    expect: ["ben"]
+    forbid: ["anna"]
+
+  - id: money
+    conversations:
+      - - [user, "I spent way too much money this month, remind me to check my bank account on Friday"]
+        - [assistant, "Reminder set for Friday."]
+    expect: []
+    forbid: ["money", "bank", "spent"]

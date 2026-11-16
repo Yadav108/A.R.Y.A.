@@ -127,6 +127,8 @@ def main() -> int:
                     help="re-score the answers of the latest run with the current golden.yaml (no model calls)")
     ap.add_argument("--routes", action="store_true",
                     help="only the routing benchmark (routes.yaml): which part of ARYA answers each command")
+    ap.add_argument("--learning", action="store_true",
+                    help="the learning benchmark (learning.yaml): what ARYA learns from conversations")
     args = ap.parse_args()
     if args.regrade:
         return _regrade()
@@ -144,6 +146,9 @@ def main() -> int:
 
     if args.routes:
         return _routes(args.verbose)
+    if args.learning:
+        from arya.eval import learning as learning_eval
+        return learning_eval.run(args.verbose)
     llm.set_artifact_sink(lambda kind, payload: None)          # no app window during the run
     from arya.core.embedder import load_embedder
     from arya.knowledge import library

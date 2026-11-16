@@ -534,17 +534,24 @@ async def _get_semantic_context(message: str, exclude: set[str]) -> str:
     Embed message, search memory, return a formatted memory block to append to
     SYSTEM_PROMPT — or an empty string when nothing relevant is found.
     """
+    learned = ""
+    if not _groq_allowed():                     # what ARYA learned about you never goes to the cloud
+        try:
+            from arya.memory import learning
+            learned = await asyncio.to_thread(learning.prompt_block, message)
+        except Exception as exc:
+            print(f"Learned memories skipped: {type(exc).__name__}: {exc}")
     try:
         from arya.core.embedder import embed
         vec = await embed(message)
         hits = semantic_search(vec, top_k=3, exclude_content=exclude)
         if not hits:
-            return ""
+            return learned
         lines = "\n".join(f"  - {h[:150]}" for h in hits)
-        return f"\n\n### Relevant context from memory:\n{lines}"
+        return learned + f"\n\n### Relevant context from memory:\n{lines}"
     except Exception as exc:
         print(f"Semantic search skipped: {exc}")
-        return ""
+        return learned
 
 
 async def chat(message: str) -> str:
@@ -2613,6 +2620,20 @@ async def stream_with_tools(message: str):
         save_message("user", message)
         save_message("assistant", phone_reply)
         async for sentence in _clean_stream(_aiter_text(phone_reply)):
+            yield sentence
+        return
+
+    try:                                                # "what have you learned about me?", "pause learning"
+        from arya.memory import learning as _learning
+        learned = await asyncio.to_thread(_learning.handle, message)
+    except Exception as exc:
+        print(f"Learning skipped: {type(exc).__name__}: {exc}")
+        learned = None
+    if learned:
+        print("Instant answer: learning")
+        save_message("user", message)
+        save_message("assistant", learned)
+        async for sentence in _clean_stream(_aiter_text(learned)):
             yield sentence
         return
 
