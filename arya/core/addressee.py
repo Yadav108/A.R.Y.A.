@@ -130,6 +130,12 @@ def quick_verdict(text: str, pending_confirmation: bool = False) -> bool | None:
             return True                   # "battery?", "what time is it"
     except Exception:
         pass
+    try:
+        from arya.server import phone
+        if phone.matches(text):
+            return True                   # "connect phone." (from the log: dropped as not for ARYA)
+    except Exception:
+        pass
     if _OTHER_PERSON.match(text):
         return False                      # opens by addressing someone else
     if _ASSISTANT_COMMAND.match(text):

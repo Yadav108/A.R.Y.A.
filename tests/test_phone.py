@@ -112,7 +112,8 @@ def test_spoken_nudges_reach_the_phone(client):
 # ── Voice ────────────────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("text", ["connect my phone", "Turn on phone access", "pair my phone please",
-                                  "show me the phone QR code"])
+                                  "show me the phone QR code", "connect phone.",       # from-log 2026-11-16
+                                  "connect my phone to ARYA", "pair phone"])
 def test_turn_on(text):
     assert "Phone access is on" in P.handle(text)
     assert P.enabled()
@@ -139,8 +140,18 @@ def test_public_wifi_is_explained(monkeypatch):
 
 
 def test_not_for_phone_access():
-    for text in ["call my phone", "where is my phone", "what's on my phone bill", "turn on the lights"]:
+    for text in ["call my phone", "where is my phone", "what's on my phone bill", "turn on the lights",
+                 "how do I connect my phone to the TV", "connect phone to bluetooth", "link my phone number",
+                 "connect the phone charger"]:
         assert P.handle(text) is None
+        assert not P.matches(text)
+
+
+def test_smart_listening_never_drops_phone_commands():
+    from arya.core import addressee
+    assert addressee.quick_verdict("connect phone.") is True               # from-log: "staying quiet"
+    assert addressee.quick_verdict("turn off phone access") is True
+    assert P.enabled() is False                                            # judging it changes nothing
 
 
 def test_replies_pass_the_false_claim_guard(monkeypatch):

@@ -433,7 +433,10 @@ def open_pairing_page() -> None:
 
 # ── Voice ─────────────────────────────────────────────────────────────────────
 
-_PHONE = r"(?:my|the|a)\s+(?:phone|mobile)"
+# "connect my phone", "connect phone" (from the log) — but not "connect my phone to the TV / Bluetooth",
+# "link my phone number"
+_PHONE = (r"(?:(?:my|the|a)\s+)?(?:phone|mobile)(?!\s+(?:number|bill|case|charger|call|screen)\b)"
+          r"(?!\s+(?:to|with)\b(?!\s+(?:arya|aria|you|the laptop|this laptop)\b))")
 _NEW = re.compile(r"\b(?:new|reset|change|renew)\s+(?:the\s+)?phone\s+(?:link|code|key|access)\b|"
                   r"\bforget\s+my\s+phone\b", re.IGNORECASE)
 _OFF = re.compile(r"\b(?:turn|switch)\s+off\s+(?:the\s+)?phone\s+access\b|"
@@ -447,6 +450,11 @@ _ON = re.compile(r"\b(?:turn|switch)\s+on\s+(?:the\s+)?phone\s+access\b|"
 _STATUS = re.compile(r"\bis\s+(?:the\s+)?phone\s+access\s+(?:on|off|working|enabled)\b|"
                      r"\bphone\s+access\s+status\b|\bcan\s+my\s+phone\s+(?:reach|connect\s+to|talk\s+to)\b",
                      re.IGNORECASE)
+
+
+def matches(message: str) -> bool:
+    """A phone-access command (no side effects) — so smart listening never drops "connect phone"."""
+    return any(p.search(message) for p in (_NEW, _STATUS, _OFF, _ON))
 
 
 def _why(where: Where) -> str:

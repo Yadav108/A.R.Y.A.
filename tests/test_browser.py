@@ -29,6 +29,7 @@ def chrome(monkeypatch):
     monkeypatch.setattr(os_tools, "open_url", fake_open)
     monkeypatch.setattr(os_tools, "open_app", fake_app)
     monkeypatch.setattr(B, "first_video", fake_video)
+    monkeypatch.setattr(B, "MUSIC_SITE", "youtube")          # not whatever .env says (ARYA_MUSIC_SITE)
     monkeypatch.setattr(llm, "save_message", lambda role, content: 0)
     monkeypatch.setattr(llm, "get_history", lambda limit=10: [])
     return state
