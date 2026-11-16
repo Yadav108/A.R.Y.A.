@@ -221,6 +221,12 @@ async def preload_models() -> None:
     from arya.core import intercom                   # "say … on the laptop" from the phone, "where's my laptop?"
     intercom.set_speaker(speak_on_laptop)
 
+    from arya.tools import remote                    # "put the laptop to sleep in 10 minutes": warned aloud first
+    remote.set_announcer(announce)
+
+    from arya.core import quiet                      # meeting mode, and quiet during Teams / Zoom calls
+    asyncio.create_task(quiet.run(lambda text: emit_status("NOTIFY:" + text)))
+
     from arya.core import attachments                # uploads: transcription progress goes to the app
     attachments.set_event_sink(emit_status)
 
@@ -838,6 +844,8 @@ async def _speak_stream(sentences: AsyncIterator[str], max_spoken: int = 0, star
     With `started`, logs how long the first sentence and the first sound took."""
     queue: asyncio.Queue[asyncio.Task | None] = asyncio.Queue()
     marks: dict[str, float] = {}
+    from arya.core import quiet
+    silent = quiet.active()                            # meeting mode: the answer is shown, not said
 
     async def produce() -> None:
         spoken, cut = 0, False
@@ -845,6 +853,8 @@ async def _speak_stream(sentences: AsyncIterator[str], max_spoken: int = 0, star
             async for sentence in sentences:
                 marks.setdefault("text", time.monotonic())
                 await _send_all(sentence)
+                if silent:
+                    continue
                 if max_spoken and spoken >= max_spoken:
                     if not cut and re.search(r"\w", sentence):
                         cut = True
@@ -900,36 +910,7 @@ async def _say(text: str) -> None:
 LOW_MEMORY_GB = 1.5   # below this the local model (~2.5 GB) usually can't load, or its server crashes
 
 
-_FRIENDLY_APP = {"code": "VS Code", "chrome": "Chrome", "msedge": "Edge", "firefox": "Firefox", "claude": "Claude Code",
-                 "vmmemwsl": "WSL", "vmmem": "WSL", "spotify": "Spotify", "teams": "Teams", "ms-teams": "Teams",
-                 "discord": "Discord", "slack": "Slack", "pycharm64": "PyCharm", "idea64": "IntelliJ",
-                 "whatsapp": "WhatsApp", "zoom": "Zoom", "obs64": "OBS", "steam": "Steam"}
-_NOT_YOURS = {"pythonw", "python", "ollama", "llama-server", "svchost", "dwm", "msmpeng", "system", "registry",
-              "memory compression", "explorer", "msedgewebview2", "searchhost", "csrss", "lsass", "wininit"}
-
-
-def memory_hogs(top: int = 3) -> str:
-    """'VS Code (3.3 GB), Chrome (1.5 GB) and WSL (0.8 GB)' — the apps you could close (summed over their
-    processes; ARYA, Ollama and Windows itself are left out). Read on this laptop only."""
-    try:
-        import psutil
-        totals: dict[str, float] = {}
-        for p in psutil.process_iter(["name", "memory_info"]):
-            name = (p.info["name"] or "").lower().removesuffix(".exe")
-            mem = p.info["memory_info"]
-            if not name or name in _NOT_YOURS or mem is None:
-                continue
-            label = _FRIENDLY_APP.get(name)
-            if label is None:
-                continue                                   # only apps a person would recognise and close
-            totals[label] = totals.get(label, 0.0) + getattr(mem, "private", mem.rss) / 2**30
-        big = sorted(((gb, n) for n, gb in totals.items() if gb >= 0.3), reverse=True)[:top]
-    except Exception:
-        return ""
-    parts = [f"{n} ({gb:.1f} GB)" for gb, n in big]
-    if len(parts) <= 1:
-        return "".join(parts)
-    return ", ".join(parts[:-1]) + " and " + parts[-1]
+from arya.tools.remote import memory_hogs   # the biggest closable apps (shared with remote control)
 
 
 def _model_down_message(detail: str) -> str:
@@ -1072,6 +1053,10 @@ async def speak_on_laptop(text: str, sound: bytes, shown: str) -> None:
     """Intercom / find my laptop (arya/core/intercom.py): a chime or beeps, then the words, aloud on the laptop.
     Waits for the turn that asked for it to finish (it holds the voice lock). Shown in the app only — the phone
     that sent it doesn't need its own message back."""
+    from arya.core import quiet
+    if quiet.active():                                 # meeting mode: on the laptop screen, not out loud
+        await _broadcast("NOTIFY:" + shown)
+        return
     async with _voice_lock:
         wake_engine.set_speaking(True)
         try:
@@ -1140,6 +1125,10 @@ async def phone_turn(message: str) -> dict:
 
 async def announce(text: str) -> None:
     """Speak a timer/reminder/pomodoro alert — works with no browser open."""
+    from arya.core import quiet
+    if quiet.active():                                 # meeting mode: the phone (vibrates) and the app, no sound
+        await _send_all("NOTIFY:" + text)
+        return
     async with _voice_lock:
         wake_engine.set_speaking(True)
         try:

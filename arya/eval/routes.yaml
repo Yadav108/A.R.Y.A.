@@ -55,6 +55,13 @@ routes:
   - {say: "minimize window explorer", route: window control, action: window}   # from-log
   - {say: "Can you restore the tab?", route: browser, action: keys}   # from-log (was window control)
   - {say: "switch to \"claude\" tab opened in chrome under JCNS group", route: browser, action: keys}   # from-log
+  # Remote control and meeting mode (PR C)
+  - {say: "lock the laptop", route: remote control, action: lock, addressed: true}
+  - {say: "put the laptop to sleep in 20 minutes", route: remote control, action: sleep}
+  - {say: "what's running?", route: remote control}
+  - {say: "I'm in a meeting for an hour", route: remote control, addressed: true}
+  - {say: "I'm back", route: model}   # no meeting running: just a greeting (during one it ends meeting mode; unit-tested)
+  - {say: "I have a meeting tomorrow at 10", route: model}
   # World clock (2026-11-17: Berlin here, India second)
   - {say: "what time is it?", route: time, addressed: true}
   - {say: "what time is it in India?", route: time}
@@ -94,7 +101,7 @@ routes:
   - {say: "what did the professor say about the Coriolis acceleration in the lecture?", route: model}
 
   # Life
-  - {say: "do not disturb for two hours", route: nudge settings, reply: "won't disturb you"}
+  - {say: "do not disturb for two hours", route: remote control, reply: "Meeting mode until"}   # PR C: DND = meeting mode
   - {say: "nudges back on", route: nudge settings}
   - {say: "what's on my calendar tomorrow?", route: calendar}
   - {say: "add Control lab every Thursday at 2 pm", route: calendar, reply: "Added Control lab every Thursday"}

@@ -58,6 +58,10 @@ def _sandbox(rec: Recorder) -> None:
     browser._focus = lambda hwnd: True
     browser._press = lambda *keys: rec.add("keys")
     browser._type = lambda text: None                  # typing into Chrome's tab search: never for real
+    from arya.tools import remote
+    remote._lock = lambda: rec.add("lock")             # never lock or sleep the laptop during a benchmark
+    remote._suspend = lambda: rec.add("sleep")
+    remote.schedule_sleep = lambda seconds: rec.add("sleep")
 
     async def first_video(q):
         return "VIDEOID0000"
@@ -132,6 +136,8 @@ def _reset() -> None:
     from arya.tools import alarms
 
     policy.cancel_pending()
+    from arya.core import quiet
+    quiet.end()                                        # one test sentence's meeting mode doesn't carry over
     browser._awaiting_song_until = 0.0
     alarms._slot = None
     mock_exam._exam = None
