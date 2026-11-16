@@ -164,9 +164,9 @@ def quick_verdict(text: str, pending_confirmation: bool = False) -> bool | None:
     except Exception:
         pass
     try:
-        from arya.core import modes
+        from arya.core import intercom, modes
         from arya.tools import tasks
-        if modes.matches(text) or tasks.matches(text):
+        if modes.matches(text) or tasks.matches(text) or intercom.matches(text):
             return True                   # "work mode", "what's on my list?"
     except Exception:
         pass

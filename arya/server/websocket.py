@@ -218,6 +218,9 @@ async def preload_models() -> None:
     from arya.core import upkeep                     # daily backup of arya.db and your notes (last 7 days)
     asyncio.create_task(upkeep.run())
 
+    from arya.core import intercom                   # "say … on the laptop" from the phone, "where's my laptop?"
+    intercom.set_speaker(speak_on_laptop)
+
     from arya.core import attachments                # uploads: transcription progress goes to the app
     attachments.set_event_sink(emit_status)
 
@@ -1063,6 +1066,29 @@ async def _run_turn(message: str, wake_triggered: bool, announce_transcript: boo
                     await _send_all(f"ARYA_FOLLOWUP:{int(left)}")
             except Exception:
                 pass
+
+
+async def speak_on_laptop(text: str, sound: bytes, shown: str) -> None:
+    """Intercom / find my laptop (arya/core/intercom.py): a chime or beeps, then the words, aloud on the laptop.
+    Waits for the turn that asked for it to finish (it holds the voice lock). Shown in the app only — the phone
+    that sent it doesn't need its own message back."""
+    async with _voice_lock:
+        wake_engine.set_speaking(True)
+        try:
+            await _broadcast("NOTIFY:" + shown)
+            if LOCAL_AUDIO:
+                await speaker.play(sound)
+                await speaker.play(await _synthesize(text))
+            else:
+                await _send_all(sound)
+                audio = await _synthesize(text)
+                if audio:
+                    await _send_all(audio)
+        except Exception as exc:
+            print(f"Intercom failed: {exc}")
+        finally:
+            wake_engine.set_speaking(False)
+            await _send_all("ARYA_DONE")
 
 
 async def _maybe_suggest_mode(message: str) -> None:
