@@ -132,15 +132,17 @@ def load_model() -> WhisperModel:
 model_lock = threading.Lock()      # live commands and lecture transcription take turns on the one model
 
 
-def _run_model(m: WhisperModel, source, prompt: str | None = None) -> str:
+def _run_model(m: WhisperModel, source, prompt: str | None = None, **kw) -> str:
     with model_lock:
-        return _run_model_locked(m, source, prompt)
+        return _run_model_locked(m, source, prompt, **kw)
 
 
-def _run_model_locked(m: WhisperModel, source, prompt: str | None = None) -> str:
+def _run_model_locked(m: WhisperModel, source, prompt: str | None = None, task: str = "transcribe",
+                      language: str = "en") -> str:
     segments, _ = m.transcribe(
         source,
-        language="en",
+        language=language,
+        task=task,
         beam_size=WHISPER_BEAM_SIZE,
         best_of=1,
         temperature=0.0,
@@ -155,16 +157,16 @@ def _run_model_locked(m: WhisperModel, source, prompt: str | None = None) -> str
     return _accept_segments(segments)
 
 
-def _run_with_cpu_fallback(source, prompt: str | None = None) -> str:
+def _run_with_cpu_fallback(source, prompt: str | None = None, **kw) -> str:
     global _model
     model = load_model()
     try:
-        return _run_model(model, source, prompt)
+        return _run_model(model, source, prompt, **kw)
     except RuntimeError as exc:
         if any(k in str(exc).lower() for k in ("cublas", "cuda", "cufft", "curand")):
             print(f"STT: CUDA runtime error — switching to the CPU. ({exc})")
             _model = _load_on_cpu()
-            return _run_model(_model, source, prompt)
+            return _run_model(_model, source, prompt, **kw)
         raise
 
 
@@ -173,7 +175,7 @@ def _transcribe_sync(audio_bytes: bytes) -> str:
         f.write(audio_bytes)
         tmp_path = f.name
     try:
-        return _run_with_cpu_fallback(tmp_path)
+        return _english_if_hindi(_run_with_cpu_fallback(tmp_path), tmp_path)     # push-to-talk: same as voice
     finally:
         try:
             os.unlink(tmp_path)
@@ -187,7 +189,28 @@ def transcribe_array(audio: "np.ndarray") -> str:
     transcript after the small model has spotted the wake word."""
     if audio is None or len(audio) == 0:
         return ""
-    return _run_with_cpu_fallback(audio.astype("float32", copy=False))
+    text = _run_with_cpu_fallback(audio.astype("float32", copy=False))
+    return _english_if_hindi(text, audio)
+
+
+def _english_if_hindi(text: str, audio) -> str:
+    """Romanized Hindi ('Kal ek bajhe mujhe yaad dilana'): the same audio once more in translate mode, so ARYA's
+    commands understand it ('Remind me tomorrow at 1 o'clock'); what you said is kept for the screen and so
+    ARYA answers in Hinglish (arya/core/language.py). English speech costs nothing extra."""
+    from arya.core import language
+    if not language.is_hinglish(text):
+        return text
+    try:
+        source = audio.astype("float32", copy=False) if hasattr(audio, "astype") else audio     # array or file path
+        english = _run_with_cpu_fallback(source, task="translate", language="hi")
+    except Exception as exc:
+        print(f"STT: translation skipped ({type(exc).__name__})")
+        return text
+    if not english.strip() or language.is_hinglish(english):
+        return text
+    print(f"STT: Hinglish {text!r} -> {english!r}")
+    language.note_spoken(text, english)
+    return english
 
 
 def transcribe_wake(audio: "np.ndarray") -> str:

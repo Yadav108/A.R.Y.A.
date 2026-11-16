@@ -412,3 +412,25 @@ questions:
     q: My Python script throws a KeyError. What does that mean?
     max_sentences: 5
     include: [["key"], ["dictionary", "dict", "mapping"]]
+
+  # ── Hinglish (2026-11-17): answered in Latin-alphabet Hinglish, never Devanagari, still correct ─────────
+  - id: hinglish-plans
+    tags: [hinglish, default-mode]
+    mode: default
+    q: yaar aaj kya plan hai, kuch mazedaar batao
+    max_sentences: 5
+    include: [["re:\\b(hai|karo|kya|aaj|yaar|thoda|bhi|mein|kuch|chalo|lo|ho)\\b"]]
+    exclude: ["re:[\\u0900-\\u097F]"]
+  - id: hinglish-pid
+    tags: [hinglish, default-mode, control]
+    mode: default
+    q: mujhe PID controller simple mein samjhao
+    include: [["proportional"], ["integral", "integrat"], ["re:\\b(hai|hota|karta|karte|mein|matlab|yeh|ye|aur)\\b"]]
+    exclude: ["re:[\\u0900-\\u097F]"]
+  - id: hinglish-exam
+    tags: [hinglish, default-mode]
+    mode: default
+    q: kal mera exam hai, thoda dar lag raha hai
+    max_sentences: 5
+    include: [["re:\\b(hai|karo|lo|mat|tension|tum|aap|achhi|acchi|kal|sab|ho)\\b"]]
+    exclude: ["re:[\\u0900-\\u097F]"]
