@@ -20,6 +20,7 @@ scikit-learn  # only for tools/train_wakeword.py
 pystray>=0.19.5  # desktop app: tray icon
 Pillow           # desktop app: tray icon images
 pywebview>=6.2.1  # desktop app window (Edge WebView2)
+segno            # QR code that pairs your phone (arya/server/phone.py)
 # knowledge library (course material) and visuals
 pymupdf>=1.24     # PDF text + page previews
 python-docx       # Word files

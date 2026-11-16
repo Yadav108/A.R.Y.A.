@@ -25,6 +25,7 @@ import fnmatch
 import os
 import re
 import time
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -134,6 +135,16 @@ SIDE_EFFECTS = {"open_url", "run_command", "set_clipboard", "open_app", "save_no
 # Private data that would be sent to Groq in cloud mode.
 PRIVATE_READS = {"get_clipboard", "read_text_file", "list_folder", "file_search", "run_command",
                  "get_notes", "search_notes"}
+
+# Requests typed on the phone (arya/server/phone.py) travel over Wi-Fi without HTTPS, so they never touch
+# files, the clipboard or commands, and never delete / move / close anything — even after a "yes".
+REMOTE_BLOCKED = ALWAYS_CONFIRM | {"run_command", "get_clipboard", "set_clipboard", "read_text_file",
+                                   "list_folder", "file_search"}
+remote_turn: ContextVar[bool] = ContextVar("remote_turn", default=False)
+
+
+def blocked_remotely(tool: str) -> bool:
+    return remote_turn.get() and tool in REMOTE_BLOCKED
 
 
 @dataclass
