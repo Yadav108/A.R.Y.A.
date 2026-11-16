@@ -103,7 +103,7 @@ def parse(days: float = 7, paths: list[Path] | None = None, now: datetime | None
     rep = Report(since=now - timedelta(days=days))
     paths = paths or [LOG_DIR / "arya.log.1", LOG_DIR / "arya.log"]
     turn: Turn | None = None
-    ignored_recent: list[str] = []
+    ignored_recent: list[tuple[datetime, str]] = []
     for when, line in _lines(paths):
         if when < rep.since:
             continue
@@ -113,7 +113,9 @@ def parse(days: float = 7, paths: list[Path] | None = None, now: datetime | None
         if line.startswith("Processing: "):
             text = line[len("Processing: "):]
             turn = Turn(when, text)
-            if any(text.startswith(i[:60]) or i.startswith(text) for i in ignored_recent[-3:]):
+            # "It was for you" comes right after: only within 2 minutes ("Yes" 33 minutes later is new speech)
+            if any((text.startswith(i[:60]) or i.startswith(text)) and when - t <= timedelta(minutes=2)
+                   for t, i in ignored_recent[-3:]):
                 turn.overridden = True
             rep.turns.append(turn)
             continue
@@ -141,7 +143,7 @@ def parse(days: float = 7, paths: list[Path] | None = None, now: datetime | None
             rep.ignored += 1
             m = re.search(r"staying quiet: '(.*)'$", line) or re.search(r'staying quiet: "(.*)"$', line)
             if m:
-                ignored_recent.append(m.group(1))
+                ignored_recent.append((when, m.group(1)))
         if line.startswith("Blocked a false action claim") and turn is not None:
             turn.blocked.append(line.split(": ", 1)[-1])
         if _ERRORS.match(line):

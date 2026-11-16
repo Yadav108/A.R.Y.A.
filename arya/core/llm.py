@@ -942,11 +942,15 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "set_timer",
-            "description": "Start a countdown timer. Give the duration as minutes and/or seconds, "
-                           "exactly as the user said it (10 minutes -> minutes=10).",
+            "description": "Start a countdown timer. Give the duration as hours, minutes and/or seconds, "
+                           "exactly as the user said it (10 minutes -> minutes=10; one hour -> hours=1).",
             "parameters": {
                 "type": "object",
                 "properties": {
+                    "hours": {
+                        "type": "number",
+                        "description": "Hours part of the duration",
+                    },
                     "minutes": {
                         "type": "number",
                         "description": "Minutes part of the duration",
@@ -1209,7 +1213,7 @@ TOOLS = [
                     "action": {
                         "type": "string",
                         "enum": [
-                            "play_pause", "next", "previous", "stop",
+                            "play", "pause", "next", "previous", "stop",
                             "volume_up", "volume_down", "mute",
                         ],
                         "description": "The media action. 'mute' toggles mute on/off.",
@@ -1496,11 +1500,19 @@ async def _dispatch_tool(tool_name: str, args: dict) -> str:
         return await get_battery()
     elif tool_name == "set_timer":
         try:
-            duration_seconds = round(float(args.get("minutes") or 0) * 60 + float(args.get("seconds") or 0)
-                                     + float(args.get("duration_seconds") or 0))
+            duration_seconds = round(float(args.get("hours") or 0) * 3600 + float(args.get("minutes") or 0) * 60
+                                     + float(args.get("seconds") or 0) + float(args.get("duration_seconds") or 0))
             label = str(args.get("label", "Timer"))
         except (TypeError, ValueError) as exc:
             raise RuntimeError("Model returned invalid timer arguments.") from exc
+        # The user's own words win over the model's arithmetic (from the log: "a timer of one hour" ->
+        # minutes=1, and the timer rang a minute later).
+        from arya.core import policy
+        from arya.tools import alarms
+        said = alarms.duration_seconds(policy._state.request or "")
+        if said and round(said) != duration_seconds:
+            print(f"Timer: model said {duration_seconds}s, the request says {round(said)}s — using the request")
+            duration_seconds = round(said)
         if duration_seconds <= 0:
             raise RuntimeError("Timer needs a duration — ask the user how long.")
 
@@ -1867,12 +1879,13 @@ async def _multi_part_pipeline(message: str, parts: list[str], messages: list[di
         # Ask about the pending action after reporting what's already done;
         # the question itself stays out of history (see _tool_pipeline).
         if reply:
-            resp_id = save_message("assistant", reply)
-            asyncio.create_task(_store_embedding("message", resp_id, f"[assistant]: {reply}"))
+            resp_id = save_message("assistant", _as_said(reply))
+            asyncio.create_task(_store_embedding("message", resp_id, f"[assistant]: {_as_said(reply)}"))
         return (reply + " " + question).strip()
     reply = reply or "Done."
-    resp_id = save_message("assistant", reply)
-    asyncio.create_task(_store_embedding("message", resp_id, f"[assistant]: {reply}"))
+    said = _as_said(reply)
+    resp_id = save_message("assistant", said)
+    asyncio.create_task(_store_embedding("message", resp_id, f"[assistant]: {said}"))
     return reply
 
 
@@ -2007,8 +2020,9 @@ async def _tool_pipeline(
     if not assistant_response.strip():
         assistant_response = "Done."
 
-    resp_id = save_message("assistant", assistant_response)
-    asyncio.create_task(_store_embedding("message", resp_id, f"[assistant]: {assistant_response}"))
+    said = _as_said(assistant_response)
+    resp_id = save_message("assistant", said)
+    asyncio.create_task(_store_embedding("message", resp_id, f"[assistant]: {said}"))
     return assistant_response
 
 
@@ -2032,8 +2046,10 @@ _QUICK_MEDIA = [
                 r"|^(?:make\s+it\s+)?(?:quieter|softer)$|^(?:lower|decrease|reduce)\s+(?:the\s+)?volume$"
                 r"|^turn\s+down\s+(?:the\s+)?(?:volume|sound|music)$"), "volume_down"),
     (re.compile(r"^(?:un)?mute(?:\s+(?:the\s+)?(?:sound|volume|audio|it|music|pc|computer))?$"), "mute"),
-    (re.compile(r"^(?:pause|resume|unpause|continue)(?:\s+(?:the\s+)?(?:music|song|video|playback|it|track))?$"
-                r"|^play(?:\s+(?:the\s+)?(?:music|song|video|it))?$"), "play_pause"),
+    # Real pause / play, not one toggle for all (from the log: "resume", then "play", paused it again)
+    (re.compile(r"^pause(?:\s+(?:the\s+)?(?:music|song|video|playback|it|track))?$"), "pause"),
+    (re.compile(r"^(?:resume|unpause|continue)(?:\s+(?:the\s+)?(?:music|song|video|playback|it|track))?$"
+                r"|^play(?:\s+(?:the\s+)?(?:music|song|video|it))?$"), "play"),
     (re.compile(r"^(?:next|skip)(?:\s+(?:this\s+|the\s+)?(?:song|track|one|video))?$"
                 r"|^(?:play\s+)?(?:the\s+)?next\s+(?:song|track)$"), "next"),
     (re.compile(r"^(?:previous|go\s+back)(?:\s+(?:song|track))?$"
@@ -2174,13 +2190,27 @@ _ACTION_CLAIM = re.compile(
 _NOT_DONE ="I haven't actually done that — ask me directly and I'll confirm with you first."
 
 
-def _guard_claim(sentence: str) -> str:
+def _guard_claim(sentence: str, quiet: bool = False) -> str:
     from arya.core import policy
 
     if _ACTION_CLAIM.search(sentence) and not policy.acted_this_turn() and "?" not in sentence:
-        print(f"Blocked a false action claim: {sentence.strip()[:100]!r}")
+        if not quiet:
+            print(f"Blocked a false action claim: {sentence.strip()[:100]!r}")
         return _NOT_DONE
     return sentence
+
+
+def _as_said(text: str) -> str:
+    """The reply as the user heard it — with the claim guard applied — for history and memory.
+    From the log (2026-11-16): a blocked "The Study Timer is set for 1 hour and 30 minutes" was saved
+    unguarded, so the model read it back and said it again three turns in a row."""
+    out: list[str] = []
+    for sentence in split_sentences(text):
+        said = _guard_claim(sentence, quiet=True)
+        if said == _NOT_DONE and out and out[-1] == _NOT_DONE:
+            continue
+        out.append(said.strip())
+    return " ".join(s for s in out if s)
 
 
 _SPOKEN_RESULT_TOOLS = {"delete_file", "move_file", "close_app", "set_clipboard", "open_app", "open_url",
@@ -2925,7 +2955,7 @@ async def _stream_cloud_question(question: str, context: str = "", model: str | 
     finally:
         _cloud_turn.reset(token)
         if parts:
-            save_message("assistant", "".join(parts).strip())
+            save_message("assistant", _as_said("".join(parts).strip()))
 
 
 # What the local model re-reads before every answer (C2). Reading the prompt is most of the wait before the
@@ -3025,6 +3055,7 @@ async def _stream_with_tools(message: str):
         # history records what was actually said instead of a dangling question.
         full_response = "".join(full_response_parts).strip()
         if full_response:
-            resp_id = save_message("assistant", full_response)
-            asyncio.create_task(_store_embedding("message", resp_id, f"[assistant]: {full_response}"))
+            said = _as_said(full_response)
+            resp_id = save_message("assistant", said)
+            asyncio.create_task(_store_embedding("message", resp_id, f"[assistant]: {said}"))
             remember_offer(full_response)        # "Want me to …?" -> a "yes" will actually do it

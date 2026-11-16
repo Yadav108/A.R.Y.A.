@@ -134,20 +134,29 @@ class StampedStream:
         self._lock = threading.Lock()
 
     def write(self, text: str) -> int:
+        # Logging must never take a thread down with it: from the log (2026-11-16 18:24), a write failing
+        # with OSError 22 under memory pressure — inside the wake-word thread's own error handler — killed
+        # that thread, and ARYA stayed deaf until restarted. A lost log line is the lesser evil.
         if not text:
             return 0
-        with self._lock:
-            out = []
-            for piece in text.splitlines(keepends=True):
-                if self._at_line_start:
-                    out.append(time.strftime("[%Y-%m-%d %H:%M:%S] "))
-                out.append(piece)
-                self._at_line_start = piece.endswith("\n")
-            self._stream.write("".join(out))
+        try:
+            with self._lock:
+                out = []
+                for piece in text.splitlines(keepends=True):
+                    if self._at_line_start:
+                        out.append(time.strftime("[%Y-%m-%d %H:%M:%S] "))
+                    out.append(piece)
+                    self._at_line_start = piece.endswith("\n")
+                self._stream.write("".join(out))
+        except (OSError, ValueError, MemoryError):
+            pass
         return len(text)
 
     def flush(self) -> None:
-        self._stream.flush()
+        try:
+            self._stream.flush()
+        except (OSError, ValueError, MemoryError):
+            pass
 
     def fileno(self) -> int:
         return self._stream.fileno()

@@ -84,8 +84,20 @@ def test_sentence_after_bare_wake_skips_the_check(quiet, monkeypatch):
     assert ws._answers_bare_wake() is True
     assert ws._answers_bare_wake() is False                # only the first sentence
     asyncio.run(ws._run_turn("", wake_triggered=True, announce_transcript=False))
-    ws._bare_wake_until = time.monotonic() - 1             # 10 s passed
+    ws._bare_wake_until = time.time() - 1                  # the window passed
     assert ws._answers_bare_wake() is False
+
+
+def test_filler_after_bare_wake_keeps_the_window_open(quiet, monkeypatch):
+    """From the log: "Hey ARYA" → "That's what, um." → the request 23 s later was ignored."""
+    async def say(t):
+        pass
+    monkeypatch.setattr(ws, "_say", say)
+    asyncio.run(ws._run_turn("", wake_triggered=True, announce_transcript=False))
+    assert ws.BARE_WAKE_WINDOW_S >= 20
+    assert ws._answers_bare_wake("That's what, um.") is False
+    assert ws._answers_bare_wake("open the lab report") is True
+    assert ws._is_filler("Um, so, like…") and not ws._is_filler("next song")
 
 
 @pytest.mark.parametrize("free_gb, procs, detail, expect", [

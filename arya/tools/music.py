@@ -88,6 +88,31 @@ async def duck(busy=lambda: False, watchdog_s: float = WATCHDOG_S) -> None:
         _resume_task = asyncio.create_task(watchdog())
 
 
+async def set_playing(play: bool, app: str | None = None) -> str | None:
+    """Really play or really pause (not a toggle): the session ARYA paused (`app`), else the current one.
+    'played' / 'paused' / 'already' when done, None when there are no media controls (use the key)."""
+    try:
+        manager = await _manager()
+        session = None
+        if app:
+            session = next((s for s in manager.get_sessions() if (s.source_app_user_model_id or "?") == app), None)
+        session = session or manager.get_current_session()
+        if session is None:
+            return None
+        status = int(session.get_playback_info().playback_status)
+        if play and status == PLAYING or not play and status != PLAYING:
+            return "already"
+        ok = await (session.try_play_async() if play else session.try_pause_async())
+        return ("played" if play else "paused") if ok else None
+    except Exception as exc:
+        print(f"Music: media controls unavailable ({type(exc).__name__})")
+        return None
+
+
+def paused_by_arya() -> str | None:
+    return _paused_by_arya
+
+
 def forget() -> None:
     """You controlled the music yourself — don't resume it behind your back."""
     global _paused_by_arya

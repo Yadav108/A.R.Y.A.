@@ -94,6 +94,23 @@ if WHISPER_MODEL not in WHISPER_MODELS:
     WHISPER_MODEL = "medium"
 
 
+# Without the GPU, medium is far too slow for live speech (from the log, 2026-11-16 00:40: after a CUDA
+# out-of-memory it ran on the CPU and fell 12 minutes behind). The CPU gets a smaller model; base if even
+# that can't be allocated (the startup at 18:31 died with "mkl_malloc: failed to allocate memory").
+CPU_WHISPER_MODEL = os.getenv("WHISPER_CPU_MODEL", "small").strip() or "small"
+
+
+def _load_on_cpu() -> WhisperModel:
+    for name in dict.fromkeys([CPU_WHISPER_MODEL, "base"]):
+        try:
+            m = WhisperModel(name, device="cpu", compute_type="int8")
+            print(f"STT: Whisper {name} loaded on CPU (int8) — the GPU wasn't available")
+            return m
+        except (RuntimeError, MemoryError) as exc:
+            print(f"STT: Whisper {name} on CPU failed ({exc})")
+    raise RuntimeError("Whisper couldn't load on the GPU or the CPU — not enough memory")
+
+
 def load_model() -> WhisperModel:
     """Load the Whisper model (WHISPER_MODEL, default medium). Called once at server startup."""
     global _model
@@ -106,9 +123,8 @@ def load_model() -> WhisperModel:
         _model = WhisperModel(WHISPER_MODEL, device="cuda", compute_type=CUDA_COMPUTE_TYPE)
         print(f"STT: Whisper {WHISPER_MODEL} loaded on CUDA ({CUDA_COMPUTE_TYPE})")
     except Exception as exc:
-        print(f"STT: CUDA load failed ({exc}), falling back to CPU int8")
-        _model = WhisperModel(WHISPER_MODEL, device="cpu", compute_type="int8")
-        print(f"STT: Whisper {WHISPER_MODEL} loaded on CPU (int8)")
+        print(f"STT: CUDA load failed ({exc}), falling back to the CPU")
+        _model = _load_on_cpu()
 
     return _model
 
@@ -146,9 +162,8 @@ def _run_with_cpu_fallback(source, prompt: str | None = None) -> str:
         return _run_model(model, source, prompt)
     except RuntimeError as exc:
         if any(k in str(exc).lower() for k in ("cublas", "cuda", "cufft", "curand")):
-            print(f"STT: CUDA runtime error — switching to CPU permanently. ({exc})")
-            _model = WhisperModel(WHISPER_MODEL, device="cpu", compute_type="int8")
-            print(f"STT: Whisper {WHISPER_MODEL} reloaded on CPU (int8)")
+            print(f"STT: CUDA runtime error — switching to the CPU. ({exc})")
+            _model = _load_on_cpu()
             return _run_model(_model, source, prompt)
         raise
 

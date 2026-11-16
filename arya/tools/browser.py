@@ -281,7 +281,7 @@ async def handle(message: str) -> str | None:
         now = await music.now_playing()
         if now and not now["playing"] and (now["title"] or now["artist"]):
             from arya.tools.media import media_control
-            await media_control("play_pause")
+            await media_control("play")
             policy.note_result("media_control")
             return f"Resuming {now['title'] or 'your music'}{' by ' + now['artist'] if now['artist'] else ''}."
         if not await _open(SITES["youtube music"]):
