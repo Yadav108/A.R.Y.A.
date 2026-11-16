@@ -39,8 +39,9 @@ _SAVE = re.compile(r"\b(?:add|save|put|keep|store)\b.{0,20}\b(?:it|this|that|the
 MAX_PHOTO_SIDE = 2600
 
 
-def add_photo(data: bytes, name: str = "photo") -> dict:
-    """A photo from the app window: straightened, scaled down, read by OCR, kept in memory as context."""
+def add_photo(data: bytes, name: str = "photo", keep_s: float = CONTEXT_S) -> dict:
+    """A photo from the app window: straightened, scaled down, read by OCR, kept in memory as context
+    for `keep_s` seconds (uploads: 30 minutes)."""
     from PIL import Image, ImageOps
 
     from arya.knowledge import visuals
@@ -53,7 +54,7 @@ def add_photo(data: bytes, name: str = "photo") -> dict:
     image_id = visuals._store(buf.getvalue())
     text = ocr_image(img)
     title = f"Photo: {name}"
-    _context.update(text=text, title=title, image_id=image_id, until=time.monotonic() + CONTEXT_S, kind="photo")
+    _context.update(text=text, title=title, image_id=image_id, until=time.monotonic() + keep_s, kind="photo")
     print(f"Photo '{name}': {img.size[0]}x{img.size[1]}, {len(text)} characters read")
     return {"image_id": image_id, "title": title, "chars": len(text)}
 
