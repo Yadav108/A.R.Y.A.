@@ -154,6 +154,21 @@ _PLAY_SONG = re.compile(r"^\W*(?:arya\W+)?(?:please\s+)?play\s+(?:me\s+)?(?:the\
                         r"(?:song|track|music video)\s+(?P<q1>.+?)|(?P<q2>.+?\s+by\s+.+?)|"
                         r"(?P<q3>.+?\s+(?:songs|beats|playlist|mix|music))"
                         r")\W*$", re.IGNORECASE)
+# "Play Sati Gatha", "play romantic song" — any other "play X" is a song, unless X is a media key ("play it",
+# "play the next song"), a game, or something on the laptop. (From the log: these went to the model, which
+# pressed play/pause and nothing started.)
+_PLAY_BARE = re.compile(r"^\W*(?:arya\W+)?(?:please\s+)?(?:can you\s+|could you\s+)?play\s+(?:me\s+)?(?P<q>.+?)"
+                        r"(?:\s+please)?\W*$", re.IGNORECASE)
+_NOT_A_SONG = re.compile(r"^(?:it|that|this|them|again|something|anything|back|along|around|"
+                         r"(?:the\s+|my\s+|some\s+|any\s+)?(?:music|video|playback|audio|sound)|"
+                         r"(?:the\s+)?(?:next|previous|last|same)\b.*|.*\b(?:again|game|games|chess|quiz|"
+                         r"card|cards|flashcards?|file|recording|lecture|voice ?note|podcast|"
+                         # study: "play the step response", "play the simulation"
+                         r"response|plot|graph|animation|simulation|diagram|example|exercise|solution|slides?|"
+                         r"step|bode|signal)\b.*)$", re.IGNORECASE)
+# "Open YouTube Music and play romantic song" → one tab that plays it, not an empty site plus a search
+_OPEN_AND_PLAY = re.compile(r"^\W*(?:arya\W+)?(?:please\s+)?(?:open|go to|launch)\s+(?P<eng>youtube music|youtube)"
+                            r"\s*,?\s*(?:and\s+)?(?:then\s+)?play\s+(?P<q>.+?)\W*$", re.IGNORECASE)
 _ANY_MUSIC = re.compile(r"^\W*(?:arya\W+)?(?:please\s+)?(?:(?:play|put on)\s+(?:some|any|me some|a little)\s+music|"
                         r"(?:some|any)\s+music)(?:\s+please)?\W*$", re.IGNORECASE)
 SITES = {"youtube music": "https://music.youtube.com", "youtube": "https://www.youtube.com",
@@ -184,6 +199,23 @@ def _song_query(raw: str) -> str:
                flags=re.IGNORECASE)
     q = re.sub(r"\s+(?:song|track)$", "", q, flags=re.IGNORECASE)
     return q.strip(" ,.") or raw.strip(" ,.")
+
+
+def _bare_song(message: str):
+    """'play Sati Gatha' → match with the song in group 'q'; None for media keys, games and the like."""
+    m = _PLAY_BARE.match(message)
+    if not m or _NOT_A_SONG.match(m.group("q").strip(" ,.!?")) or not re.search(r"[A-Za-z]{2,}", m.group("q")):
+        return None
+    from arya.core.llm import quick_media_command
+    return None if quick_media_command(message) else m
+
+
+def matches(message: str) -> bool:
+    """Would handle() act on this (without doing it)? For splitting multi-part requests."""
+    return bool(_OPEN_AND_PLAY.match(message) or _PLAY.search(message) or _PLAY_SONG.match(message)
+                or _bare_song(message) or _ANY_MUSIC.match(message) or _OPEN_SITE.match(message)
+                or _SEARCH.search(message) or _REOPEN.search(message) or _CLOSE.search(message)
+                or _NEW.search(message) or _GOTO.search(message) or _NEXT.search(message) or _PREV.search(message))
 
 
 def awaiting_song() -> bool:
@@ -226,14 +258,14 @@ async def handle(message: str) -> str | None:
             os.getenv("ARYA_FOCUS_MUSIC_URL", "").strip()
             or re.search(r"\b(?:focus|study|concentration|background)\s+music\b", message, re.IGNORECASE)):
         return None          # your focus playlist (or how to set it up) — the music handler's; "lofi beats" → YouTube
-    m = _PLAY.search(message)
-    s = None if m or _ANY_MUSIC.match(message) else _PLAY_SONG.match(message)
+    m = _OPEN_AND_PLAY.match(message) or _PLAY.search(message)
+    s = None if m or _ANY_MUSIC.match(message) else (_PLAY_SONG.match(message) or _bare_song(message))
     if m or s:
         if m:
             eng, query = m.group("eng").lower(), _song_query(m.group("q"))
         else:
             eng = MUSIC_SITE if MUSIC_SITE in WATCH_URLS else "youtube"
-            query = _song_query(s.group("q1") or s.group("q2") or s.group("q3"))
+            query = _song_query(next(g for g in s.groups() if g))
         vid = await first_video(query)
         url = WATCH_URLS[eng].format(id=vid) if vid else SEARCH_URLS[eng].format(q=quote_plus(query))
         if not await _open(url):

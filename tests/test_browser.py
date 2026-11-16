@@ -100,8 +100,54 @@ def test_play_falls_back_to_results(chrome):
     assert chrome["opened"] == ["https://music.youtube.com/search?q=Coldplay"]
 
 
+@pytest.mark.parametrize("message, query", [
+    ("Play Sati Gatha.", "Sati Gatha"),                                    # from-log 2026-11-16
+    ("play sati katha", "sati katha"),                                     # from-log (Whisper's spelling)
+    ("play romantic song", "romantic"),                                    # from-log
+    ("ARYA, play Kesariya please", "Kesariya"),
+    ("can you play Tum Hi Ho", "Tum Hi Ho"),
+])
+def test_play_a_song_by_name(chrome, message, query):
+    assert _h(message) == f"Playing {query} on YouTube."
+    assert chrome["opened"] == ["https://www.youtube.com/watch?v=3NycM9lYdRI"]
+
+
+def test_open_youtube_music_and_play(chrome):
+    """From the phone, 2026-11-16: both parts became a play/pause key press and nothing started."""
+    assert _h("Arya open youtube music and play romantic song") == "Playing romantic on YouTube Music."
+    assert chrome["opened"] == ["https://music.youtube.com/watch?v=3NycM9lYdRI"]     # one tab, playing
+
+
 @pytest.mark.parametrize("message", [
-    "search for Bode plots",                        # the course library's job
+    "play it", "play it again", "play the next song", "play the previous track", "play music", "play the video",
+    "play a game", "play chess with me", "play the lecture recording", "play the simulation",
+])
+def test_play_that_is_not_a_song(chrome, message):
+    assert _h(message) is None
+    assert chrome["opened"] == []
+
+
+def test_two_part_requests_use_browser_commands(chrome, monkeypatch):
+    calls = []
+
+    async def no_model(*a, **k):
+        calls.append(a)
+        raise AssertionError("the model should not pick tools for browser parts")
+
+    async def compose(*a, **k):
+        return type("C", (), {"content": "Done.", "tool_calls": []})()
+
+    monkeypatch.setattr(llm, "_complete", no_model)
+    parts = llm.split_multi_part("close this tab and play Sati Gatha")
+    assert parts == ["close this tab", "play Sati Gatha"]
+    monkeypatch.setattr(llm, "_complete", compose)
+    asyncio.run(llm._multi_part_pipeline("close this tab and play Sati Gatha", parts, []))
+    assert chrome["keys"] == [(C, ord("W"))]
+    assert chrome["opened"] == ["https://www.youtube.com/watch?v=3NycM9lYdRI"]
+
+
+@pytest.mark.parametrize("message", [
+    "search for Bode plots",                       # the course library's job
     "search my notes for torque", "find the slides I downloaded yesterday", "play", "pause the music",
     "open chrome", "close chrome", "what is a tabular method", "explain the Coriolis acceleration",
     "look up exercise 1-13", "play the step response",

@@ -26,6 +26,11 @@ routes:
   - {say: "Windows Explorer", route: open app, action: open_app}   # from-log
   - {say: "What was the music?", route: music}   # from-log
   - {say: "play the song Kaun Tujhe on YouTube music", route: browser, action: open_url}
+  # 2026-11-16 evening: a song by name never started
+  - {say: "Arya open youtube music and play romantic song", route: browser, action: open_url}   # from-log (phone)
+  - {say: "Play Sati Gatha.", route: browser, action: open_url, addressed: true}   # from-log
+  - {say: "play sati katha", route: browser, action: open_url}   # from-log
+  - {say: "play chess with me", route: model}
 
   # Study
   - {say: "start studying Dynamics for an hour", route: study mode, action: pomodoro, addressed: true}
