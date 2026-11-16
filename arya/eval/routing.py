@@ -51,6 +51,28 @@ def _sandbox(rec: Recorder) -> None:
     tasks.DB_OVERRIDE = tmp / "tasks.db"             # to-dos go to a scratch database
     from arya.core import activity
     activity.DB_OVERRIDE = tmp / "activity.db"       # "remind me when I'm back" too
+    from arya.core import capture
+    capture.DB_OVERRIDE = tmp / "inbox.db"           # captures and voice notes: a scratch inbox
+    from arya.tools import notes as _notes
+
+    async def fake_note(content, tag="general"):
+        rec.add("save_note")
+        return "Saved."
+    _notes.save_note = fake_note                     # nothing lands in your real notes
+
+    class FakeMic:                                   # "record a voice note": no real microphone
+        _on = False
+
+        def start_note(self):
+            FakeMic._on = True
+
+        def recording_note(self):
+            return FakeMic._on
+
+        def stop_note(self):
+            FakeMic._on = False
+            return None
+    capture.set_engine(FakeMic())
     agenda.ICS_DIR = tmp / "calendar"
     file_agent._undo_file = lambda: tmp / "tidy-undo.json"
     for key in ("ARYA_MAIL_HOST", "ARYA_MAIL_USER", "ARYA_MAIL_PASSWORD", "ARYA_FOCUS_MUSIC_URL"):

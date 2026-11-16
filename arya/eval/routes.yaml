@@ -55,6 +55,14 @@ routes:
   - {say: "minimize window explorer", route: window control, action: window}   # from-log
   - {say: "Can you restore the tab?", route: browser, action: keys}   # from-log (was window control)
   - {say: "switch to \"claude\" tab opened in chrome under JCNS group", route: browser, action: keys}   # from-log
+  # Quick capture and voice notes (PR E)
+  - {say: "note: buy resistors", route: capture, addressed: true}
+  - {say: "jot down what if the gripper had suction", route: capture}
+  - {say: "remember to email my supervisor the report", route: capture, addressed: true}
+  - {say: "what's in my inbox?", route: capture}
+  - {say: "record a voice note", route: capture, addressed: true}
+  - {say: "stop recording", route: capture}
+  - {say: "capture the screen", route: model}   # not a capture
   # Your day (PR D)
   - {say: "remind me to email Ben when I'm back at the laptop", route: alarms, addressed: true}
   - {say: "wrap up my day", route: your day, addressed: true}

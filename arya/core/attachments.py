@@ -95,7 +95,7 @@ class Upload:
     path: str = ""                 # the file in uploads/ (a recording: its transcript)
     doc_id: int | None = None
     added: float = field(default_factory=time.time)
-    status: str = "ready"          # ready / transcribing / failed
+    status: str = "ready"          # ready / transcribing / failed / filed (a voice note, filed by capture)
     progress: float = 1.0
     detail: str = ""
 
@@ -149,8 +149,9 @@ def wants_summary(question: str) -> bool:
 
 # ── Handling an upload ────────────────────────────────────────────────────────
 
-async def accept(tmp: Path, name: str) -> dict:
-    """A file the app (or phone) streamed to `tmp`. Returns what the app shows; may start background work."""
+async def accept(tmp: Path, name: str, as_note: bool = False) -> dict:
+    """A file the app (or phone) streamed to `tmp`. Returns what the app shows; may start background work.
+    as_note: a voice note recorded on the phone (🎙) -- transcribed and filed by arya/core/capture.py."""
     kind = kind_of(name)
     if kind is None:
         tmp.unlink(missing_ok=True)
@@ -183,8 +184,9 @@ async def accept(tmp: Path, name: str) -> dict:
         return {"error": f"That recording is {int(duration // 60)} minutes long; I take up to {MAX_MEDIA_S // 60}."}
     u = Upload("recording", Path(name).stem, status="transcribing", progress=0.0)
     _uploads.append(u)
-    asyncio.create_task(_transcribe_upload(u, tmp, name, folder, duration))
-    return {"kind": "recording", "title": u.title, "minutes": round(duration / 60, 1), "status": "transcribing"}
+    asyncio.create_task(_transcribe_upload(u, tmp, name, folder, duration, as_note))
+    return {"kind": "recording", "title": u.title, "minutes": round(duration / 60, 1), "status": "transcribing",
+            "note": as_note}
 
 
 def _duration(path: Path) -> float:
@@ -195,7 +197,8 @@ def _duration(path: Path) -> float:
 _transcribing: asyncio.Lock | None = None             # created inside the running loop, on first use
 
 
-async def _transcribe_upload(u: Upload, media: Path, name: str, folder: Path, duration: float) -> None:
+async def _transcribe_upload(u: Upload, media: Path, name: str, folder: Path, duration: float,
+                             as_note: bool = False) -> None:
     global _transcribing
     if _transcribing is None:
         _transcribing = asyncio.Lock()
@@ -206,6 +209,15 @@ async def _transcribe_upload(u: Upload, media: Path, name: str, folder: Path, du
             if not text.strip():
                 u.status, u.detail = "failed", "no speech or text found"
                 _emit(u)
+                return
+            if as_note:                                        # 🎙 from the phone: filed like a laptop voice note
+                from arya.core import capture
+                plain = " ".join(re.sub(r"^\[[\d:]+\]\s*", "", line) for line in text.splitlines())
+                reply = await capture.finish_note(plain, duration, "phone")
+                u.status, u.progress = "filed", 1.0
+                if _events is not None:
+                    _events("NOTIFY:🎙 " + reply)
+                print(f"Upload: voice note from the phone filed ({int(duration)} s)")
                 return
             dest = _unique(folder, safe_name(Path(name).stem + " (transcript).md"))
             dest.write_text(f"# {Path(name).stem} — transcript\n\n{text}\n", encoding="utf-8")

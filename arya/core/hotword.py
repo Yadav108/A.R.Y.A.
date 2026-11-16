@@ -60,6 +60,7 @@ TRIGGER_COOLDOWN_S = 1.5
 PREROLL_CHUNKS = 5                 # 400 ms kept before a follow-up starts
 MIN_FOLLOWUP_SPEECH_CHUNKS = 3     # ≥240 ms of voiced audio before a follow-up is transcribed
 STALE_SPEECH_S = 8.0               # speech waiting longer than this for Whisper is dropped, not answered late
+NOTE_MAX_CHUNKS = int(10 * 60 / 0.08)   # a voice note keeps at most 10 minutes (~19 MB in memory)
 _STT_GATE = threading.Semaphore(1)
 
 # Second check: transcribe the audio that triggered the detector and require the name.
@@ -405,6 +406,24 @@ class HotwordEngine:
     def _speech_threshold(self) -> float:
         return max(ENERGY_FLOOR, self._noise_floor * 3.0)
 
+    # ── Voice notes (arya/core/capture.py): everything the mic hears, until "stop recording" ──
+
+    def start_note(self) -> None:
+        self._note = {"chunks": [], "wake_at": None, "wake_time": 0.0}
+
+    def recording_note(self) -> bool:
+        return getattr(self, "_note", None) is not None
+
+    def stop_note(self) -> np.ndarray | None:
+        """The recording, without the "Hey ARYA, stop recording" at its end (when that's how it was stopped)."""
+        note, self._note = getattr(self, "_note", None), None
+        if not note or not note["chunks"]:
+            return None
+        chunks = note["chunks"]
+        if note["wake_at"] is not None and time.monotonic() - note["wake_time"] < 20:
+            chunks = chunks[:max(0, note["wake_at"])]
+        return np.concatenate(chunks) if chunks else None
+
     def _on_chunk(self, chunk: np.ndarray) -> None:
         if self._muted:
             return
@@ -413,6 +432,9 @@ class HotwordEngine:
         ducked = self._is_ducked()
         score = self._detector.score(chunk)
         self._history.append(chunk)
+        note = getattr(self, "_note", None)
+        if note is not None and len(note["chunks"]) < NOTE_MAX_CHUNKS:
+            note["chunks"].append(chunk.copy())
 
         if self._capture is not None and self._capture["kind"] != "stop":
             self._capture_step(chunk, rms, now)
@@ -432,6 +454,8 @@ class HotwordEngine:
             word = getattr(self._detector, "last_word", "arya")
             print(f"WakeWord: detector fired (score {score:.2f}{', while speaking' if ducked else ''}"
                   f"{'' if word == 'arya' else f', {word}'})")
+            if note is not None:                           # where "Hey ARYA, stop recording" began
+                note["wake_at"], note["wake_time"] = len(note["chunks"]) - VERIFY_WINDOW_CHUNKS, now
             # (a "Hey ARYA" takes over from a stop burst being captured)
             cap = {"kind": "wake", "audio": [], "start": now, "speech": False, "silence": 0, "voiced": 0,
                    "ducked": ducked, "verified": threading.Event(), "ok": not VERIFY, "aborted": False}
@@ -463,7 +487,7 @@ class HotwordEngine:
             # Track the room's noise floor while nobody is talking.
             self._noise_floor = 0.95 * self._noise_floor + 0.05 * rms
 
-        if not ducked and speechy and self._followup_mode_enabled():
+        if not ducked and speechy and self._followup_mode_enabled() and note is None:   # dictating: not requests
             self._capture = {"kind": "followup", "audio": list(self._preroll) + [chunk], "start": now,
                              "speech": True, "silence": 0, "voiced": 1, "aborted": False}
             self._preroll.clear()
