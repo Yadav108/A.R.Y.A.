@@ -218,6 +218,9 @@ async def preload_models() -> None:
     from arya.core import upkeep                     # daily backup of arya.db and your notes (last 7 days)
     asyncio.create_task(upkeep.run())
 
+    from arya.core import attachments                # uploads: transcription progress goes to the app
+    attachments.set_event_sink(emit_status)
+
     from arya.memory import learning                 # learns from finished conversations while ARYA is idle
     asyncio.create_task(learning.run(busy=_voice_lock.locked))
 
@@ -414,6 +417,65 @@ async def api_photo(request: Request) -> JSONResponse:
         return JSONResponse({"error": f"I couldn't open that image ({type(exc).__name__})."}, status_code=400)
     _llm.emit_artifact("VISUAL", {"type": "image", "id": info["image_id"], "caption": info["title"]})
     log_event("photo_added", chars=info["chars"])
+    return JSONResponse(info)
+
+
+@app.post("/api/upload")
+async def api_upload(request: Request, name: str = "") -> JSONResponse:
+    """A document, photo, audio or video from the app (📎, drop, paste): streamed to disk, then read
+    (arya/core/attachments.py). Raw body, so a 400 MB video never sits in memory."""
+    if not _authorised(request):
+        return _deny()
+    return await receive_upload(request, name)
+
+
+async def receive_upload(request: Request, name: str) -> JSONResponse:
+    """Shared by the app and the phone (arya/server/phone.py)."""
+    import uuid
+    from arya.core import attachments
+
+    kind = attachments.kind_of(name or "")
+    if kind is None:
+        return JSONResponse({"error": "I can read PDFs, Word, PowerPoint, text, photos, audio and video."},
+                            status_code=415)
+    limit = attachments.limit_for(kind)
+    declared = int(request.headers.get("content-length") or 0)
+    if declared > limit:
+        return JSONResponse({"error": f"That file is larger than {limit // (1024 * 1024)} MB."}, status_code=413)
+    if not attachments.room_for(declared or limit):
+        return JSONResponse({"error": "There isn't enough free disk space for that file."}, status_code=507)
+    incoming = attachments.uploads_dir() / ".incoming"
+    incoming.mkdir(parents=True, exist_ok=True)
+    tmp = incoming / f"{uuid.uuid4().hex}{Path(name).suffix.lower()}"
+    size = 0
+    try:
+        with open(tmp, "wb") as f:
+            async for chunk in request.stream():
+                size += len(chunk)
+                if size > limit:
+                    raise ValueError("too large")
+                f.write(chunk)
+    except ValueError:
+        tmp.unlink(missing_ok=True)
+        return JSONResponse({"error": f"That file is larger than {limit // (1024 * 1024)} MB."}, status_code=413)
+    except Exception as exc:
+        tmp.unlink(missing_ok=True)
+        return JSONResponse({"error": f"The upload broke off ({type(exc).__name__})."}, status_code=400)
+    if size == 0:
+        tmp.unlink(missing_ok=True)
+        return JSONResponse({"error": "The file is empty."}, status_code=400)
+    try:
+        info = await attachments.accept(tmp, name)
+    except Exception as exc:
+        tmp.unlink(missing_ok=True)
+        print(f"Upload failed: {type(exc).__name__}: {exc}")
+        return JSONResponse({"error": f"I couldn't read that file ({type(exc).__name__})."}, status_code=400)
+    if "error" in info:
+        return JSONResponse(info, status_code=400)
+    if info.get("kind") == "photo":
+        import arya.core.llm as _llm
+        _llm.emit_artifact("VISUAL", {"type": "image", "id": info["image_id"], "caption": info["title"]})
+    log_event("upload", what=info.get("kind"), bytes=size)                 # never the file name or content
     return JSONResponse(info)
 
 

@@ -277,6 +277,8 @@ def _title_and_collection(path: Path, roots: list[Path]) -> tuple[str, str]:
         return TRANSCRIPTIONS_TITLE, TRANSCRIPTIONS_TITLE
     if path == PHOTO_NOTES:
         return PHOTO_NOTES_TITLE, PHOTO_NOTES_TITLE
+    if (DATA_DIR / "uploads") in path.parents:
+        return title, "Uploads"                      # files you gave ARYA (arya/core/attachments.py)
     for root in roots:
         try:
             rel = path.relative_to(root)
@@ -346,9 +348,10 @@ def index(roots: list[Path] | None = None, progress: Callable[[IndexStatus], Non
     """Bring the index up to date. Safe to call repeatedly (incremental)."""
     from arya.core.embedder import load_embedder
 
-    if roots is None:                                   # course folders + work mode's folders
+    if roots is None:                                   # course folders + work mode's folders + your uploads
         from arya.core import modes
-        roots = list(dict.fromkeys(default_roots() + [d for d in modes.work_dirs() if d.is_dir()]))
+        uploads = [DATA_DIR / "uploads"] if (DATA_DIR / "uploads").is_dir() else []
+        roots = list(dict.fromkeys(default_roots() + [d for d in modes.work_dirs() if d.is_dir()] + uploads))
     files = sorted(_files(roots), key=_copy_score)      # originals before 'copy of …' (stable sort)
     status.running, status.done, status.total, status.current = True, 0, len(files), ""
     model = load_embedder()
@@ -657,6 +660,58 @@ def index_file(path: Path) -> None:
     _save_doc(path, title, collection, path.stat(), _fingerprint(path), len(pages), list(zip(items, vectors)),
               0, "indexed", row)
     _matrix_cache.clear()
+
+
+# ── One document (uploads: arya/core/attachments.py) ──────────────────────────
+
+def doc_id_for(path: Path) -> int | None:
+    """The indexed document at `path` with at least one chunk of text, else None."""
+    with _lock, _connect() as c:
+        r = c.execute("SELECT id, chunks FROM documents WHERE path = ?", (str(path),)).fetchone()
+    return r["id"] if r is not None and (r["chunks"] or 0) > 0 else None
+
+
+def page_count(doc_id: int) -> int:
+    with _lock, _connect() as c:
+        r = c.execute("SELECT pages FROM documents WHERE id = ?", (doc_id,)).fetchone()
+    return int(r["pages"] or 0) if r else 0
+
+
+def remove_doc(doc_id: int) -> None:
+    with _lock, _connect() as c:
+        _delete_doc(c, doc_id)
+    _matrix_cache.clear()
+
+
+def _doc_passages(doc_id: int, rows, sims) -> list[Passage]:
+    with _lock, _connect() as c:
+        d = c.execute("SELECT title, collection, kind FROM documents WHERE id = ?", (doc_id,)).fetchone()
+    if d is None:
+        return []
+    return [Passage(r["id"], doc_id, d["title"], d["collection"], d["kind"], r["page"], r["text"], float(s), False,
+                    source="uploads") for r, s in zip(rows, sims)]
+
+
+def search_in(doc_id: int, query: str, k: int = 4) -> list[Passage]:
+    """The passages of one document closest to the question (no similarity floor: you asked about this file)."""
+    from arya.core.embedder import embed_sync
+    with _lock, _connect() as c:
+        rows = c.execute("SELECT id, page, text, embedding FROM chunks WHERE doc_id = ?", (doc_id,)).fetchall()
+    if not rows:
+        return []
+    m = np.vstack([np.frombuffer(r["embedding"], np.float16).astype(np.float32) for r in rows])
+    sims = m @ embed_sync(query)
+    order = np.argsort(-sims)[:k]
+    picked = sorted(order, key=lambda i: (rows[i]["page"], rows[i]["id"]))            # in reading order
+    return _doc_passages(doc_id, [rows[i] for i in picked], [sims[i] for i in picked])
+
+
+def first_passages(doc_id: int, k: int = 4) -> list[Passage]:
+    """The beginning of a document — for 'summarise it' (where the question says nothing about the content)."""
+    with _lock, _connect() as c:
+        rows = c.execute("SELECT id, page, text FROM chunks WHERE doc_id = ? ORDER BY page, id LIMIT ?",
+                         (doc_id, k)).fetchall()
+    return _doc_passages(doc_id, rows, [1.0] * len(rows))
 
 
 # ── Exercises by number ───────────────────────────────────────────────────────

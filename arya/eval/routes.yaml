@@ -47,6 +47,10 @@ routes:
   - {say: "what's on my list?", route: tasks}
   - {say: "new task: book the lab for Friday", route: tasks}
   - {say: "what is the list of Laplace transform pairs", route: model}
+  # Uploads (PR 4)
+  - {say: "what files did I give you?", route: uploads}
+  - {say: "how far is the video?", route: uploads}
+  - {say: "delete the file on my desktop", route: model + tools}   # not an upload command
   - {say: "what mode of vibration is the first one", route: model}
 
   # Study
