@@ -2,7 +2,9 @@
 Keeps ARYA running (roadmap C5): the desktop shortcut and "Start with Windows" start this small watchdog,
 which starts ARYA itself as a child process and
 
-  - restarts it if it crashes (any exit except your own "Quit ARYA"),
+  - restarts it if it crashes (any exit except your own "Quit ARYA"), noticed within seconds; that includes
+    its server failing to start while the window stays open (the child then exits with SERVER_STOPPED),
+    and a start that failed early waits 30 s before the next try (usually memory),
   - restarts it if its server stops answering for 3 minutes while the window lives on (a hung model or
     GPU driver), checked once a minute at http://127.0.0.1:<port>/healthz,
   - gives up after 5 restarts in 30 minutes instead of looping, and logs every restart.
@@ -21,11 +23,15 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 LAUNCHER = ROOT / "arya_desktop.py"
-CHECK_EVERY_S = 60
+POLL_S = 2                       # has ARYA exited? (cheap — noticed within seconds)
+CHECK_EVERY_S = 60               # does its server answer?
 STARTUP_GRACE_S = 180            # models take a while to load
 HUNG_AFTER_FAILS = 3             # 3 missed checks in a row -> hung
 MAX_RESTARTS, WINDOW_S = 5, 30 * 60
 BACKOFF_S = 5
+# A start that failed within the grace period was usually short of memory (2026-11-16: "mkl_malloc: failed
+# to allocate memory" while another model was still loaded) — give memory time to free up first.
+FAILED_START_BACKOFF_S = 30
 
 
 def _log(text: str) -> None:
@@ -47,13 +53,21 @@ def healthy(port: int, timeout: float = 10.0) -> bool:
         return False
 
 
+SERVER_STOPPED = 3               # exit code of a child whose server died while its window lived on
+ENV_FLAG = "ARYA_SUPERVISED"     # set for the child: "exit when your server stops, I'll restart you"
+
+
+def _spawn(cmd: list[str], cwd: str | None = None):
+    return subprocess.Popen(cmd, cwd=cwd, env={**os.environ, ENV_FLAG: "1"})
+
+
 def _child_command(args: list[str]) -> list[str]:
     exe = Path(sys.executable)
     pythonw = exe.with_name("pythonw.exe")
     return [str(pythonw if pythonw.exists() else exe), str(LAUNCHER), "--child", *args]
 
 
-def supervise(args: list[str], *, spawn=subprocess.Popen, check=healthy, sleep=time.sleep, clock=time.monotonic,
+def supervise(args: list[str], *, spawn=_spawn, check=healthy, sleep=time.sleep, clock=time.monotonic,
               port: int | None = None) -> int:
     """Run ARYA and keep it running. Returns the exit code to leave with."""
     port = port or int(os.getenv("ARYA_PORT", "8000"))
@@ -62,7 +76,7 @@ def supervise(args: list[str], *, spawn=subprocess.Popen, check=healthy, sleep=t
         started = clock()
         child = spawn(_child_command(args), cwd=str(ROOT))
         _log(f"started ARYA (pid {getattr(child, 'pid', '?')})")
-        fails, reason = 0, ""
+        fails, reason, last_check = 0, "", started
         while True:
             code = child.poll()
             if code is not None:
@@ -70,10 +84,14 @@ def supervise(args: list[str], *, spawn=subprocess.Popen, check=healthy, sleep=t
                     _log("ARYA quit normally")
                     return 0
                 reason = f"exited with code {code}"
+                if code == SERVER_STOPPED:
+                    reason = "server stopped (often low memory)"
                 break
-            sleep(CHECK_EVERY_S)
-            if clock() - started < STARTUP_GRACE_S:
+            sleep(POLL_S)
+            now = clock()
+            if now - started < STARTUP_GRACE_S or now - last_check < CHECK_EVERY_S:
                 continue
+            last_check = now
             fails = 0 if check(port) else fails + 1
             if fails >= HUNG_AFTER_FAILS:
                 reason = "stopped answering for 3 minutes"
@@ -90,5 +108,6 @@ def supervise(args: list[str], *, spawn=subprocess.Popen, check=healthy, sleep=t
             _log(f"ARYA {reason}; {MAX_RESTARTS} restarts in 30 minutes — giving up")
             return 1
         restarts.append(now)
-        _log(f"ARYA {reason} — restarting in {BACKOFF_S} s")
-        sleep(BACKOFF_S)
+        wait = FAILED_START_BACKOFF_S if now - started < STARTUP_GRACE_S else BACKOFF_S
+        _log(f"ARYA {reason} — restarting in {wait} s")
+        sleep(wait)
