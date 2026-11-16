@@ -153,8 +153,11 @@ qwen2.5:3b (~2.3 GB) and the app window fit only just. Levers: BIOS "UMA Frame B
       "forget …" — in every local prompt (checked: 3 sentences → 1), never sent to the cloud
 
 ### C5 — ARYA everywhere
-- [ ] Phone access over home Wi-Fi (token-protected app), nudges on the phone
-- [ ] Start at login, restart after a crash, daily backup of arya.db
+- [ ] Phone access over home Wi-Fi (token-protected app), nudges on the phone — waiting for your decision
+- [x] Watchdog (`arya/desktop/supervisor.py`): ARYA restarts after a crash or a 3-minute hang (`/healthz`),
+      gives up after 5 restarts in 30 min; "Quit ARYA" is respected. "Start with Windows" also by voice
+- [x] Daily backup (`arya/core/upkeep.py`): arya.db (consistent SQLite copy) + corrections / photo notes /
+      transcriptions, last 7 days in the ARYA data folder (backups); "back up now", "when was the last backup?"
 
 ---
 

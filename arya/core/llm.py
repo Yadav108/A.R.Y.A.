@@ -2493,6 +2493,20 @@ async def stream_with_tools(message: str):
             yield sentence
         return
 
+    try:                                                # "back up now", "start ARYA with Windows"
+        from arya.core import upkeep as _upkeep
+        housekeeping = await asyncio.to_thread(_upkeep.handle, message)
+    except Exception as exc:
+        print(f"Upkeep skipped: {type(exc).__name__}: {exc}")
+        housekeeping = None
+    if housekeeping:
+        print("Instant answer: upkeep")
+        save_message("user", message)
+        save_message("assistant", housekeeping)
+        async for sentence in _clean_stream(_aiter_text(housekeeping)):
+            yield sentence
+        return
+
     try:                                                # "remember that I prefer short answers", "what do you remember about me?"
         from arya.memory import profile as _profile
         remembered = await asyncio.to_thread(_profile.handle, message)
