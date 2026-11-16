@@ -168,11 +168,35 @@ def set_turn_handler(handler: Callable[[str], Awaitable[dict]]) -> None:
     _turn = handler
 
 
+_upload: Callable | None = None
+
+
+def set_upload_handler(handler: Callable) -> None:
+    """websocket.py: receive_upload(request, name) — the same checks and processing as the laptop app."""
+    global _upload
+    _upload = handler
+
+
 def note_event(event: str) -> None:
-    """Status listener: every spoken nudge ('NOTIFY:…') is kept for the phone. Any thread."""
-    if not isinstance(event, str) or not event.startswith("NOTIFY:"):
+    """Status listener: every spoken nudge ('NOTIFY:…') is kept for the phone, and a recording you
+    uploaded becoming ready (or failing) too. Any thread."""
+    if not isinstance(event, str):
         return
-    text = event[len("NOTIFY:"):].strip()
+    if event.startswith("ARYA_UPLOAD:"):
+        try:
+            u = json.loads(event[len("ARYA_UPLOAD:"):])
+        except ValueError:
+            return
+        if u.get("status") == "ready":
+            text = f"📎 {u.get('title', 'Your file')} is ready — ask me anything about it."
+        elif u.get("status") == "failed":
+            text = f"📎 I couldn't read {u.get('title', 'your file')}."
+        else:
+            return                                     # progress: not worth a nudge
+    elif event.startswith("NOTIFY:"):
+        text = event[len("NOTIFY:"):].strip()
+    else:
+        return
     if not text:
         return
     with _state.lock:
@@ -326,6 +350,21 @@ async def say(request: Request) -> JSONResponse:
     except asyncio.TimeoutError:
         return JSONResponse({"reply": "That took too long — try again, or ask at the laptop.", "confirm": False})
     return JSONResponse(result)
+
+
+@app.post("/api/upload")
+async def upload(request: Request, name: str = "") -> JSONResponse:
+    """A photo from the camera, or a document / audio / video from the phone, sent TO ARYA as context.
+    Send-only: the phone still never reads the laptop's files. Same type, size and disk checks as the
+    laptop app; the file's text is untrusted (actions after reading it need a "yes")."""
+    from arya.core.audit import log_event
+
+    if not _paired(request):
+        return JSONResponse({"error": "unpaired"}, status_code=401)
+    if _upload is None:
+        return JSONResponse({"error": "ARYA is still starting"}, status_code=503)
+    log_event("phone_upload", client=request.client.host if request.client else "?")
+    return await _upload(request, name)
 
 
 @app.post("/api/mode")

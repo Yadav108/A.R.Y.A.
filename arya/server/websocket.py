@@ -229,6 +229,7 @@ async def preload_models() -> None:
 
     from arya.server import phone                    # your phone on home Wi-Fi (only when turned on, Private networks)
     phone.set_turn_handler(phone_turn)
+    phone.set_upload_handler(receive_upload)         # photos and files sent from the phone
     add_status_listener(phone.note_event)
     asyncio.create_task(phone.run())
 

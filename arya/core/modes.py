@@ -63,7 +63,7 @@ MODES: dict[str, Mode] = {
         ),
         capabilities="I'm your personal assistant. " + _COMMON_CAPS
         + " In study mode I'm your tutor for your courses; in work mode a concise partner for research and code.",
-        floors={"notes": "base", "uploads": "base", "core": 0.55, "course": 0.55, "work": 0.55},
+        floors={"notes": "base", "uploads": "base", "core": "base", "course": 0.55, "work": 0.55},
         nudges=frozenset({"battery", "calendar", "break"}),
         briefing="the time, the weather, today's calendar, reminders and timers, and any to-dos",
     ),
@@ -97,7 +97,7 @@ MODES: dict[str, Mode] = {
         capabilities="I'm your work partner: I answer from your work folders (papers, notes, reports), keep your "
                      "work tasks, prepare you for meetings from your calendar, and keep answers short and "
                      "technical. " + _COMMON_CAPS,
-        floors={"notes": "base", "uploads": "base", "work": "base", "core": 0.50, "course": 0.55},
+        floors={"notes": "base", "uploads": "base", "work": "base", "core": "base", "course": 0.55},
         nudges=frozenset({"battery", "calendar", "break"}),
         briefing="the time, the weather, today's meetings, open to-dos and unread mail that looks important",
     ),

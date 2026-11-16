@@ -109,6 +109,40 @@ def test_spoken_nudges_reach_the_phone(client):
     assert client.get(f"/api/feed?after={items[0]['id']}").json()["items"][0]["text"] == "Reminder: call Anna"
 
 
+# ── Uploads from the phone (PR 5) ────────────────────────────────────────────
+
+NOTES = ("# Lab notes\n\nThe pendulum period was 2.01 seconds for a length of one metre. "
+         "Damping was negligible over twenty swings.\n\n") * 4
+
+
+def test_phone_upload_needs_pairing_and_the_page(client, monkeypatch):
+    import arya.server.websocket as ws
+    monkeypatch.setattr(P, "_upload", ws.receive_upload)
+    assert client.post("/api/upload?name=notes.md", content=NOTES.encode(), headers=POST).status_code == 401
+    _pair(client)
+    assert client.post("/api/upload?name=notes.md", content=NOTES.encode()).status_code == 403    # no X-ARYA
+    r = client.post("/api/upload?name=notes.md", content=NOTES.encode(), headers=POST)
+    assert r.status_code == 200 and r.json()["kind"] == "document"
+    assert client.post("/api/upload?name=setup.exe", content=b"MZ", headers=POST).status_code == 415
+    from arya.core import attachments
+    attachments._uploads.clear()
+
+
+def test_phone_upload_before_startup(client, monkeypatch):
+    monkeypatch.setattr(P, "_upload", None)
+    _pair(client)
+    assert client.post("/api/upload?name=notes.md", content=b"hi", headers=POST).status_code == 503
+
+
+def test_finished_recordings_reach_the_phone(client):
+    _pair(client)
+    P.note_event('ARYA_UPLOAD:{"kind": "recording", "title": "meeting", "status": "transcribing", "progress": 0.4}')
+    P.note_event('ARYA_UPLOAD:{"kind": "recording", "title": "meeting", "status": "ready", "progress": 1}')
+    P.note_event("ARYA_UPLOAD:not json")
+    items = client.get("/api/feed?after=0").json()["items"]
+    assert [i["text"] for i in items] == ["📎 meeting is ready — ask me anything about it."]
+
+
 # ── Voice ────────────────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("text", ["connect my phone", "Turn on phone access", "pair my phone please",
