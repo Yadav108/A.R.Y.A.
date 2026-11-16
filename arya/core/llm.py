@@ -2357,6 +2357,21 @@ async def stream_with_tools(message: str):
     except Exception as exc:
         print(f"Mode auto-switch skipped: {type(exc).__name__}: {exc}")
 
+    try:                                                # meeting mode; laptop remote control (lock, sleep, what's open)
+        from arya.core import quiet as _quiet
+        from arya.tools import remote as _remote
+        controlled = (_quiet.handle(message) if _quiet.matches(message)
+                      else await _remote.handle(message) if _remote.matches(message) else None)
+    except Exception as exc:
+        print(f"Remote / meeting skipped: {type(exc).__name__}: {exc}")
+        controlled = None
+    if controlled:
+        print("Instant answer: remote control")
+        save_message("user", message)
+        save_message("assistant", controlled)
+        yield controlled
+        return
+
     try:                                                # "what time is it (in India)?", "good time to call home?"
         from arya.tools import worldclock as _clock
         clock = _clock.handle(message) if _clock.matches(message) else None
