@@ -466,7 +466,7 @@ def handle(message: str, remote: bool = False) -> str | None:
         new_token()
         if enabled():
             open_pairing_page()
-            return "Done: phones paired before can't reach me any more. Scan the new code I've opened to pair again."
+            return "Done: phones paired before can't reach me any more. The new QR code is on your screen; scan it to pair again."
         return "Done: phones paired before can't reach me any more. Say \"connect my phone\" when you want one back."
     if _STATUS.search(message):                     # before on/off: "is phone access on?" must not turn it on
         if not enabled():
@@ -489,8 +489,8 @@ def handle(message: str, remote: bool = False) -> str | None:
         where = where_to_listen()
         open_pairing_page()
         if where.ip:
-            return ("Phone access is on. I've opened a QR code — scan it with your phone camera; the phone needs "
+            return ("Phone access is on. The QR code is on your screen — scan it with your phone camera; the phone needs "
                     "to be on the same Wi-Fi. From the phone you can ask anything and see my reminders, but not "
                     "touch files or commands.")
-        return f"Phone access is on, but {_why(where)}. I've opened a page with the details."
+        return f"Phone access is on, but {_why(where)}. The details are on your screen."
     return None

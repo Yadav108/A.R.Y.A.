@@ -1,5 +1,6 @@
 """C5: phone access over home Wi-Fi. The network, the browser and ARYA's answers are faked."""
 import asyncio
+import re
 
 import pytest
 from fastapi.testclient import TestClient
@@ -140,6 +141,20 @@ def test_public_wifi_is_explained(monkeypatch):
 def test_not_for_phone_access():
     for text in ["call my phone", "where is my phone", "what's on my phone bill", "turn on the lights"]:
         assert P.handle(text) is None
+
+
+def test_replies_pass_the_false_claim_guard(monkeypatch):
+    """From the log: "I've opened a QR code" was replaced by "I haven't actually done that"."""
+    from arya.core import llm
+
+    policy.begin_turn("connect my phone")                       # nothing 'acted' this turn
+    replies = [P.handle("connect my phone"), P.handle("new phone link"), P.handle("is phone access on?"),
+               P.handle("turn off phone access"), P.handle("new phone link")]
+    monkeypatch.setattr(P, "where_to_listen", lambda: P.Where(None, "public", "Cafe"))
+    replies += [P.handle("connect my phone"), P.handle("is phone access on?")]
+    for reply in replies:
+        for sentence in re.split(r"(?<=[.!?])\s+", reply):
+            assert llm._guard_claim(sentence) == sentence, sentence
 
 
 def test_from_the_phone_itself():
