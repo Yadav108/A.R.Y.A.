@@ -2186,8 +2186,17 @@ def note_media(args: dict) -> None:
         _last_volume.update(action=args["action"], until=time.monotonic() + MEDIA_CONTEXT_S)
 
 
+# "Play, the song is paused" / "Pause, the music is too loud" (from the phone log): the command, then why.
+_MEDIA_WITH_REASON = re.compile(r"^\W*(?:arya\W+)?(?P<cmd>play|resume|unpause|continue|pause)\s*[,;:–-]\s+"
+                                r"(?:the\s+|my\s+)?(?:song|music|video|track|it)(?:'s|\s+is|\s+was|\s+has|\s+stopped|"
+                                r"\s+paused|\s+keeps)\b", re.IGNORECASE)
+
+
 def quick_media_command(message: str) -> dict | None:
     """'Turn the volume up a bit' -> {'action': 'volume_up', 'steps': 3}; None if not a media command."""
+    reason = _MEDIA_WITH_REASON.match(message)
+    if reason:
+        return {"action": "pause" if reason.group("cmd").lower() == "pause" else "play"}
     text, steps = _media_text_and_steps(message)
     for pattern, action in _QUICK_MEDIA:
         if pattern.search(text):
