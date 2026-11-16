@@ -218,6 +218,11 @@ async def preload_models() -> None:
     from arya.core import upkeep                     # daily backup of arya.db and your notes (last 7 days)
     asyncio.create_task(upkeep.run())
 
+    from arya.server import phone                    # your phone on home Wi-Fi (only when turned on, Private networks)
+    phone.set_turn_handler(phone_turn)
+    add_status_listener(phone.note_event)
+    asyncio.create_task(phone.run())
+
     # Pre-synthesize the phrases ARYA says instantly (cached in tts.py).
     async def _warm_cache() -> None:
         for phrase in (*WAKE_ACKS, *THANKS_ACKS, NIGHT_ACK):
@@ -257,6 +262,17 @@ async def index(request: Request) -> HTMLResponse:
 @app.get("/classic")
 async def classic(request: Request) -> HTMLResponse:
     return _page(request, "index.html")
+
+
+@app.get("/phone")
+async def phone_pairing(request: Request) -> HTMLResponse:
+    """The QR code that pairs your phone — like the token in the app page, only for this machine."""
+    from arya.server import phone
+
+    if not security.is_local_client(request.client.host if request.client else None):
+        return HTMLResponse("Not here.", status_code=403)
+    return HTMLResponse(await asyncio.to_thread(phone.pairing_page),
+                        headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
 
 
 # ── App API (token-protected) ─────────────────────────────────────────────────
@@ -887,6 +903,24 @@ async def _run_turn(message: str, wake_triggered: bool, announce_transcript: boo
                     await _send_all(f"ARYA_FOLLOWUP:{int(left)}")
             except Exception:
                 pass
+
+
+async def phone_turn(message: str) -> dict:
+    """A request typed on the phone (arya/server/phone.py): answered as text, nothing spoken on the laptop.
+    Waits for ARYA to finish speaking here first (one turn at a time); files, clipboard and commands are
+    blocked for it (policy.REMOTE_BLOCKED)."""
+    async with _voice_lock:
+        flag = policy.remote_turn.set(True)
+        try:
+            print(f"Phone request: {message[:60]}")
+            sentences = [s async for s in stream_with_tools(message)]
+        except Exception as exc:
+            print(f"Phone pipeline error: {exc}")
+            sentences = [_error_message(exc)]
+        finally:
+            policy.remote_turn.reset(flag)
+    reply = re.sub(r"[ \t]+\n", "\n", " ".join(s.strip() for s in sentences if s.strip()))
+    return {"reply": reply or "Done.", "confirm": policy.has_pending()}
 
 
 async def announce(text: str) -> None:

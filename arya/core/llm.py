@@ -1708,6 +1708,11 @@ async def _execute_tool(tool_name: str, args: dict, confirmed: bool = False) -> 
     from arya.core import policy
     from arya.core.audit import log_event, log_tool
 
+    if policy.blocked_remotely(tool_name):
+        log_event("blocked", tool=tool_name, reason="requested from the phone")
+        return (f"Not allowed from the phone: {tool_name.replace('_', ' ')} only works when asked at the laptop. "
+                f"Tell the user that.")
+
     cloud = ARYA_MODE == "cloud" or _cloud_turn.get()
     if not confirmed and policy.needs_confirmation(tool_name, args, cloud):
         question = policy.request_confirmation(tool_name, args, cloud)
@@ -2504,6 +2509,20 @@ async def stream_with_tools(message: str):
         save_message("user", message)
         save_message("assistant", housekeeping)
         async for sentence in _clean_stream(_aiter_text(housekeeping)):
+            yield sentence
+        return
+
+    try:                                                # "connect my phone", "turn off phone access"
+        from arya.server import phone as _phone
+        phone_reply = await asyncio.to_thread(_phone.handle, message, policy.remote_turn.get())
+    except Exception as exc:
+        print(f"Phone access skipped: {type(exc).__name__}: {exc}")
+        phone_reply = None
+    if phone_reply:
+        print("Instant answer: phone access")
+        save_message("user", message)
+        save_message("assistant", phone_reply)
+        async for sentence in _clean_stream(_aiter_text(phone_reply)):
             yield sentence
         return
 
