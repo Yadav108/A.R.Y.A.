@@ -96,6 +96,32 @@ def test_nj_counts_as_the_name(text):
     assert addressee.quick_verdict(text) is True
 
 
+@pytest.mark.parametrize("text, rest", [
+    ("Enjoy! How are you?", "How are you?"),                    # from the log, 2026-11-16 23:49
+    ("Enjoy! Brief me.", "Brief me."), ("Hey, enjoy. What's next?", "What's next?"),
+    ("Okay, engine, minimize the window.", "minimize the window."),
+])
+def test_misheard_nj_at_the_start_is_the_name(text, rest, monkeypatch):
+    from arya.core import hotword
+    monkeypatch.setattr(hotword, "extra_models", lambda: ["hey_nj.npz"])
+    assert addressee.split_name(text) == (rest, True)
+    assert hotword._strip_wake_words(text) == rest
+
+
+@pytest.mark.parametrize("text", ["Enjoy your meal.", "Enjoy!", "The engine is overheating.", "Engine oil, please.",
+                                  "I enjoy jazz, honestly."])
+def test_ordinary_enjoy_stays(text, monkeypatch):
+    from arya.core import hotword
+    monkeypatch.setattr(hotword, "extra_models", lambda: ["hey_nj.npz"])
+    assert addressee.split_name(text) == (text, False)
+
+
+def test_misheard_rule_only_with_nj_set_up(monkeypatch):
+    from arya.core import hotword
+    monkeypatch.setattr(hotword, "extra_models", lambda: [])
+    assert addressee.split_name("Enjoy! How are you?") == ("Enjoy! How are you?", False)
+
+
 def test_nj_is_stripped_like_arya():
     from arya.core.hotword import _strip_wake_words, is_wake_word
     assert _strip_wake_words("Hey NJ, what's the weather?") == "what's the weather?"
