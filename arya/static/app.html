@@ -440,6 +440,17 @@
       </div>
     </section>
 
+    <section class="card" id="weekCard">
+      <h2>This week</h2>
+      <dl class="kv">
+        <dt>At the laptop</dt><dd id="wkLaptop">–</dd>
+        <dt>Study</dt><dd id="wkStudy">–</dd>
+        <dt>Cards practised</dt><dd id="wkCards">–</dd>
+        <dt>To-dos done</dt><dd id="wkTodos">–</dd>
+        <dt>Study streak</dt><dd id="wkStreak">–</dd>
+      </dl>
+    </section>
+
     <section class="card">
       <h2>Recent actions</h2>
       <ul class="activity" id="activity"><li><span class="empty">Nothing yet</span></li></ul>
@@ -798,7 +809,20 @@
     if (!(p.courses || []).length) list.append(el("li", "kb-sub", "Say “quiz me” to start practising."));
     $("studyStreak").textContent = p.streak ? `${p.streak}-day streak` : "";
   }
-  async function refreshStudy() { try { applyProgress(await api("/api/progress")); } catch { /* not critical */ } }
+  async function refreshStudy() { try { applyProgress(await api("/api/progress")); } catch { /* not critical */ } refreshWeek(); }
+  function hm(s) { const m = Math.round((s || 0) / 60); return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${m % 60} min`; }
+  async function refreshWeek() {
+    try {
+      const w = await api("/api/stats");
+      const modes = Object.entries(w.by_mode || {}).sort((a, b) => b[1] - a[1]);
+      const top = modes.length > 1 ? ` · mostly ${({ default: "normal" })[modes[0][0]] || modes[0][0]}` : "";
+      $("wkLaptop").textContent = hm(w.laptop_s) + top;
+      $("wkStudy").textContent = hm(w.study_s);
+      $("wkCards").textContent = String(w.cards);
+      $("wkTodos").textContent = String(w.todos_done);
+      $("wkStreak").textContent = w.streak ? `${w.streak} day${w.streak === 1 ? "" : "s"}` : "start one today";
+    } catch { /* not critical */ }
+  }
   $("studyQuiz").addEventListener("click", () => send("quiz me"));
   $("kbReindex").addEventListener("click", async () => {
     try { await api("/api/kb/reindex", { method: "POST", body: "{}" }); toast("Checking your course files for changes…"); }

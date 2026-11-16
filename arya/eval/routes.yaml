@@ -55,6 +55,11 @@ routes:
   - {say: "minimize window explorer", route: window control, action: window}   # from-log
   - {say: "Can you restore the tab?", route: browser, action: keys}   # from-log (was window control)
   - {say: "switch to \"claude\" tab opened in chrome under JCNS group", route: browser, action: keys}   # from-log
+  # Your day (PR D)
+  - {say: "remind me to email Ben when I'm back at the laptop", route: alarms, addressed: true}
+  - {say: "wrap up my day", route: your day, addressed: true}
+  - {say: "how was my week?", route: your day}
+  - {say: "remind me at 5 to call Ben", route: alarms}
   # Remote control and meeting mode (PR C)
   - {say: "lock the laptop", route: remote control, action: lock, addressed: true}
   - {say: "put the laptop to sleep in 20 minutes", route: remote control, action: sleep}
