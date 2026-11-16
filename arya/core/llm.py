@@ -2372,6 +2372,20 @@ async def stream_with_tools(message: str):
         yield captured
         return
 
+    try:                                                # KiCad: "new board project …", "check the board", design log
+        from arya.eda import projects as _eda
+        designing = (await _eda.handle(message, remote=policy.remote_turn.get())
+                     if _eda.matches(message) else None)
+    except Exception as exc:
+        print(f"KiCad skipped: {type(exc).__name__}: {exc}")
+        designing = None
+    if designing:
+        print("Instant answer: kicad")
+        save_message("user", message)
+        save_message("assistant", designing)
+        yield designing
+        return
+
     try:                                                # "work mode", "back to normal", "what mode are you in?"
         switched = await asyncio.to_thread(modes.handle, message) if modes.matches(message) else None
     except Exception as exc:

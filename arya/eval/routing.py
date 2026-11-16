@@ -128,6 +128,17 @@ def _sandbox(rec: Recorder) -> None:
         return types.SimpleNamespace(task=types.SimpleNamespace(cancel=lambda: None))
     productivity._register = register
     screen.capture = lambda: None
+    from arya.eda import kicad, projects as eda
+    kicad.projects_dir = lambda: tmp / "kicad"      # board projects in a scratch folder
+    kicad._new_board = lambda path: path.write_text("(kicad_pcb)", encoding="utf-8")
+
+    def fake_cli(*args):                               # never run KiCad during a benchmark
+        rec.add("kicad")
+        out = Path(args[args.index("-o") + 1]) if "-o" in args else None
+        if out is not None and out.suffix == ".json":
+            out.write_text('{"sheets": [], "violations": []}', encoding="utf-8")
+    kicad._cli = fake_cli
+    eda._state.update(active=None, loaded=True)
     from arya.tools import webcam
 
     def fake_grab():                                 # never switch the real camera on

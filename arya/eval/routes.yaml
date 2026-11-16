@@ -55,6 +55,14 @@ routes:
   - {say: "minimize window explorer", route: window control, action: window}   # from-log
   - {say: "Can you restore the tab?", route: browser, action: keys}   # from-log (was window control)
   - {say: "switch to \"claude\" tab opened in chrome under JCNS group", route: browser, action: keys}   # from-log
+  # KiCad projects (K1)
+  - {say: "new board project called motor driver", route: kicad, addressed: true}
+  - {say: "requirement: runs from 12 V", route: kicad, addressed: true}
+  - {say: "continue the motor driver design", route: kicad, addressed: true}
+  - {say: "check the schematic", route: kicad, addressed: true}
+  - {say: "list my board projects", route: kicad}
+  - {say: "back to the drawing board", route: model}
+  - {say: "what's a PCB?", route: model}
   # Field limits (log 2026-11-16/17)
   - {say: "Hurry up, pause the music.", route: media keys, action: media_key, addressed: true}   # from-log
   - {say: "open window explorer.", route: open app, action: open_app, addressed: true}         # from-log
