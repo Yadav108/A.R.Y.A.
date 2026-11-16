@@ -30,9 +30,26 @@ _IN = re.compile(r"\bin\s+(?P<n>\d+(?:\.\d+)?|an?|one|two|three|four|five|six|se
                  r"thirty|forty|forty-five|half an)\s*(?P<u>seconds?|secs?|minutes?|mins?|hours?|hrs?)\b", re.IGNORECASE)
 _DUR = re.compile(r"\b(?P<n>\d+(?:\.\d+)?|an?|one|two|three|four|five|six|seven|eight|nine|ten|fifteen|twenty|thirty|"
                   r"forty|forty-five|half an)[\s-]*(?P<u>seconds?|secs?|minutes?|mins?|hours?|hrs?)\b", re.IGNORECASE)
-_ASK = r"^\W*(?:(?:hey|ok|okay)\W+)?(?:arya\W+)?(?:(?:can|could|would|will) you\s+|please\s+|i want you to\s+)?(?:please\s+)?"
-_TIMER = re.compile(_ASK + r"(?:(?:set|start|make|put on)\s+(?:me\s+)?(?:a|an|the)?\s*(?:\d+[\s-]*(?:minute|min|second|"
-                    r"hour)s?\s+)?(?:timer|countdown)\b|timer\s+for\b)", re.IGNORECASE)
+# Spoken lead-ins: "Just set a timer…", "So set a timer…", "Okay, now set…" (from the log: these reached the model)
+_ASK = (r"^\W*(?:(?:hey|ok|okay)\W+)?(?:arya\W+)?(?:(?:just|so|now|and|also|then|alright|right)\W+)*"
+        r"(?:(?:can|could|would|will) you\s+|please\s+|i want you to\s+)?(?:please\s+)?(?:just\s+)?")
+# "set a timer", "set a 1 hours decision timer for…", "start a ninety minute study countdown"
+_TIMER = re.compile(_ASK + r"(?:(?:set|start|make|put on)\s+(?:me\s+)?(?:a|an|the)?\s*(?:[\w.'-]+\s+){0,4}?"
+                    r"(?:timer|countdown)\b|timer\s+for\b)", re.IGNORECASE)
+_HALF = re.compile(r"\b(?P<n>\d+|an?|one|two|three|four|five|six|seven|eight|nine|ten)\s+and\s+a\s+half\s+"
+                   r"(?P<u>hours?|hrs?|minutes?|mins?)\b|\b(?P<n2>an?|one|\d+)\s+(?P<u2>hours?|hrs?|minutes?|mins?)"
+                   r"\s+and\s+a\s+half\b", re.IGNORECASE)
+# "Is the timer set?", "how much time is left?", "any timers running?" — answered from the real timers. (From the
+# log: the model answered these from memory, and the claim guard then blocked even a true answer.)
+_STATUS = re.compile(r"\b(?:is|are)\s+(?:the|my|a|any|there\s+(?:a|any))\s+(?:\w+\s+)?(?:timers?|alarms?|reminders?)"
+                     r"(?:\s+(?:still\s+)?(?:set|running|on|going|active))?\b|"
+                     r"\bhow\s+(?:much|long)\s+(?:time\s+)?(?:is\s+)?(?:left|remaining|to go)\b"
+                     r"(?!.*\b(?:until|till|before|for (?:the|my) exam|in the (?:exam|semester|lecture))\b)|"
+                     r"\b(?:what|which|any)\s+(?:\w+\s+)?(?:timers?|alarms?|reminders?)\s+(?:are|do i have|is|"
+                     r"running|set)\b|\b(?:list|show)\s+(?:my\s+|the\s+)?(?:timers?|alarms?|reminders?)\b|"
+                     r"\btime\s+left\s+on\b", re.IGNORECASE)
+_NOT_A_LABEL = {"a", "an", "the", "me", "my", "set", "start", "make", "new", "another", "quick", "countdown", "and",
+                "half", "minute", "minutes", "hour", "hours", "second", "seconds", "min", "mins", "hr", "hrs"}
 _ALARM = re.compile(_ASK + r"(?:(?:set|create|make|put)\s+(?:me\s+)?(?:an?|the|my)?\s*alarm\b|wake me(?: up)?\b|"
                     r"alarm\s+(?:for|at)\b)", re.IGNORECASE)
 _REMIND = re.compile(r"\bremind me\b|\bset (?:a|an) reminder\b|\bdon'?t let me forget\b", re.IGNORECASE)
@@ -66,6 +83,32 @@ def _number(raw: str) -> float:
 def _seconds(n: str, unit: str) -> float:
     u = unit.lower()
     return _number(n) * (1 if u.startswith("s") else 3600 if u.startswith("h") else 60)
+
+
+def duration_seconds(message: str) -> float | None:
+    """'1 hour and 30 minutes' -> 5400, 'one and a half hours' / 'an hour and a half' -> 5400,
+    'half an hour' -> 1800, '90 minutes' -> 5400. None if no duration is said."""
+    total, rest = 0.0, message
+    for m in _HALF.finditer(message):
+        n, u = (m.group("n"), m.group("u")) if m.group("n") else (m.group("n2"), m.group("u2"))
+        total += (_number(n) + 0.5) * _seconds("1", u)
+    rest = _HALF.sub(" ", message)
+    for m in _DUR.finditer(rest):
+        total += _seconds(m.group("n"), m.group("u"))
+    return total or None
+
+
+def _timer_label(message: str) -> str:
+    """'…decision timer…' -> 'Decision'; '…timer for the pasta' -> 'Pasta'; else 'Timer'."""
+    plain = _HALF.sub(" ", _DUR.sub(" ", message))
+    before = re.search(r"\b(?P<l>[a-z]+)\s+(?:timer|countdown)\b", plain, re.IGNORECASE)
+    if before and before.group("l").lower() not in _NOT_A_LABEL and not before.group("l").isdigit():
+        return before.group("l").capitalize()
+    after = re.search(r"\b(?:timer|countdown)\b.*?\bfor (?:the |my )?(?P<l>[a-z][a-z ]{2,30}?)\s*[.!?]?\s*$", plain,
+                      re.IGNORECASE)
+    if after and not re.search(r"\b(?:timer|a|an)\b", after.group("l")):
+        return after.group("l").strip().capitalize()
+    return "Timer"
 
 
 def _clock_text(raw: str, message: str) -> str:
@@ -179,16 +222,17 @@ async def handle(message: str, now: datetime | None = None) -> str | None:
                 return await _continue(slot, message, now)
         _slot = None                                     # a different request: drop the half-made reminder
 
+    if _STATUS.search(message) and not (_TIMER.search(message) or _ALARM.search(message) or _REMIND.search(message)):
+        from arya.tools.productivity import list_timers
+        policy.note_result("list_timers")
+        status = await list_timers()
+        return "You have no timers, alarms or reminders running." if status.startswith("No active") else status
     if _TIMER.search(message) and not _REMIND.search(message):
-        m = _DUR.search(message)
-        if not m:
+        seconds = duration_seconds(message)
+        if not seconds:
             return "How long should the timer be?"
         from arya.tools.productivity import set_timer
-        seconds = _seconds(m.group("n"), m.group("u"))
-        label = "Timer"
-        lab = re.search(r"\bfor (?:the |my )?(?P<l>[a-z][a-z ]{2,30}?)\s*$", _DUR.sub("", message), re.IGNORECASE)
-        if lab and not re.search(r"\b(?:timer|a|an)\b", lab.group("l")):
-            label = lab.group("l").strip().capitalize()
+        label = _timer_label(message)
         await set_timer(int(seconds), label)
         policy.note_result("set_timer")
         from arya.tools.productivity import _speak_duration

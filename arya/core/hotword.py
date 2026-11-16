@@ -59,6 +59,8 @@ MAX_CAPTURE_S = 15.0
 TRIGGER_COOLDOWN_S = 1.5
 PREROLL_CHUNKS = 5                 # 400 ms kept before a follow-up starts
 MIN_FOLLOWUP_SPEECH_CHUNKS = 3     # ≥240 ms of voiced audio before a follow-up is transcribed
+STALE_SPEECH_S = 8.0               # speech waiting longer than this for Whisper is dropped, not answered late
+_STT_GATE = threading.Semaphore(1)
 
 # Second check: transcribe the audio that triggered the detector and require the name.
 VERIFY = os.getenv("WAKE_VERIFY", "1") != "0"
@@ -297,9 +299,13 @@ class HotwordEngine:
     def _refresh_followup_mode(self) -> None:
         self._followup_active = True
         self._followup_deadline = time.monotonic() + conversation_seconds()
+        # Also by the wall clock: on Windows time.monotonic() (QueryPerformanceCounter) can stand still while
+        # the laptop sleeps — from the log, a conversation opened at 04:41 was still open at 17:29.
+        self._followup_wall_deadline = time.time() + conversation_seconds()
 
     def _followup_mode_enabled(self) -> bool:
-        if self._followup_active and time.monotonic() >= self._followup_deadline:
+        if self._followup_active and (time.monotonic() >= self._followup_deadline
+                                      or time.time() >= getattr(self, "_followup_wall_deadline", float("inf"))):
             self._followup_active = False
             print("WakeWord: conversation timed out — say 'Hey ARYA' to start again")
         return self._followup_active
@@ -340,7 +346,10 @@ class HotwordEngine:
                         chunk = canceller.process(chunk, ref)      # ARYA's own voice removed
                     self._on_chunk(chunk)
                 except Exception as exc:
-                    print(f"WakeWord error: {type(exc).__name__}: {exc}")
+                    try:                                    # the listening loop must outlive its own error report
+                        print(f"WakeWord error: {type(exc).__name__}: {exc}")
+                    except Exception:
+                        pass
 
     def _speech_threshold(self) -> float:
         return max(ENERGY_FLOOR, self._noise_floor * 3.0)
@@ -548,12 +557,19 @@ class HotwordEngine:
 
         command = ""
         if cap["speech"]:
+            # One recognition at a time; speech that waited too long is dropped instead of answered minutes late
+            # (from the log: with Whisper on the CPU, captures piled up and were answered 12 minutes later).
+            if not _STT_GATE.acquire(timeout=STALE_SPEECH_S):
+                print(f"WakeWord: dropped speech that waited over {STALE_SPEECH_S:.0f}s for recognition")
+                return
             try:
                 t0 = time.monotonic()
                 command = _transcribe(np.concatenate(cap["audio"]))
                 print(f"Latency: speech recognised in {time.monotonic() - t0:.2f}s")
             except Exception as exc:
                 print(f"WakeWord: transcription failed ({exc})")
+            finally:
+                _STT_GATE.release()
             command = _strip_wake_words(command)
 
         if not is_wake:

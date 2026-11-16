@@ -25,10 +25,15 @@ SMART_LISTENING_DEFAULT = os.getenv("ARYA_SMART_LISTENING", "1") != "0"
 IGNORED_LIMIT = 3                 # this many ignored in a row ends the conversation
 
 _NAME = re.compile(r"\b(?:arya|aria|ariya|aarya)\b", re.IGNORECASE)
+# Also with a lead-in or a tag: "Okay, go ahead.", "Yes, sir.", "Thank you very much.", "Yeah, thank you
+# sweetheart." (from the log: these went to the model, which judged them side talk).
 _ALWAYS_FOR_ARYA = re.compile(
-    r"^\W*(?:stop|cancel|never ?mind|be quiet|shut up|thanks?|thank you|cheers|bye|goodbye|"
+    r"^\W*(?:(?:ok|okay|yeah|yes|alright|oh|well|so|right)\W+)?"
+    r"(?:stop|cancel|never ?mind|be quiet|shut up|thanks?|thank you|cheers|bye|goodbye|"
     r"that'?s (?:all|it)|yes|yeah|yep|no|nope|repeat that|say (?:that|it) again|what\??|"
-    r"go ahead|go on|continue|carry on|do it|tell me more|more please)\W*$",
+    r"go ahead|go on|continue|carry on|do it|tell me more|more please)"
+    r"(?:\W+(?:sir|ma'?am|dude|bro|buddy|sweetheart|dear|man|very much|so much|a lot|again|please|then|"
+    r"arya|aria))*\W*$",
     re.IGNORECASE,
 )
 
@@ -37,7 +42,13 @@ _OTHER_PERSON = re.compile(
     r"^\W*(?:hey|hi|oi|yo|ok|okay)?\W*(?:mom|mum|mommy|dad|daddy|papa|mama|honey|babe|baby|dear|darling|guys|"
     r"bro|dude|man|sis|buddy|everyone|(?!(?i:arya|aria|ok|okay|yes|yeah|yep|yup|no|nope|so|well|now|hey|hi|"
     r"and|but|then|wait|hmm|hm|um|uh|oh|ah|right|alright|sure|thanks|sorry|actually|also|cool|great|nice|fine|"
-    r"perfect|good|look|listen|please|maybe|anyway|honestly|really|true|exactly|what|why|how|wow)\b)[A-Z][a-z]+)"
+    r"perfect|good|look|listen|please|maybe|anyway|honestly|really|true|exactly|what|why|how|wow|"
+    # Whisper capitalises every sentence's first word: "Plus, …", "Basically, …", "Tomorrow, remind me…"
+    # are not names (from the log: all three were dropped as speech to someone else).
+    r"plus|basically|one|two|three|first|second|third|next|finally|besides|otherwise|however|meanwhile|"
+    r"tomorrow|today|tonight|later|yesterday|obviously|seriously|literally|instead|also|again|still|"
+    r"okay|listen|see|like|well|yo|hello|here|there|this|that|now|honestly|sometimes|usually|"
+    r"morning|evening|afternoon|so|and|or|if|when|because|after|before)\b)[A-Z][a-z]+)"
     r"\s*,",
 )
 # Commands of the kind people give an assistant: answered without asking the model.
@@ -91,7 +102,7 @@ _PROMPT = (
 
 # How Whisper writes "ARYA" in follow-ups ("Area.", "Uh, Aria?", "Hey, Ario.") — only trusted when the name
 # is the whole utterance or opens it, followed by a pause ("Area, play …").
-_LOOSE_NAME = r"(?:a+r+i?y+a+h?|aria+h?|ariya|aarya|ario|aryo|area|harya|arja|ayra)"
+_LOOSE_NAME = r"(?:a+r+i?y+a+h?|aria+h?|ariya|aarya|ario|aryo|area|harya|arja|ayra|ariel|arial)"   # "Hey, Ariel." (log)
 _NAME_ALONE = re.compile(rf"^\W*(?:(?:hey|hi|ok|okay|uh|um|so|yo)\W+)?{_LOOSE_NAME}\W*$", re.IGNORECASE)
 _NAME_FIRST = re.compile(rf"^\W*(?:(?:hey|hi|ok|okay|uh|um|so|yo)\W+)?{_LOOSE_NAME}\s*[,.!?:;]\s*(?=\S)",
                          re.IGNORECASE)
@@ -128,6 +139,14 @@ def quick_verdict(text: str, pending_confirmation: bool = False) -> bool | None:
         from arya.core.llm import quick_status_command
         if quick_status_command(text) is not None:
             return True                   # "battery?", "what time is it"
+    except Exception:
+        pass
+    try:
+        from arya.core.llm import _APP_REQUEST
+        from arya.tools.os_tools import _APP_ALIASES
+        app = _APP_REQUEST.match(text.strip())
+        if app and app.group("app").lower().strip(" .") in _APP_ALIASES:
+            return True                   # "Windows Explorer" — a bare app name (from the log: overridden)
     except Exception:
         pass
     try:

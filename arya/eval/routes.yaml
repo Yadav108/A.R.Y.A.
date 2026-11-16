@@ -31,6 +31,13 @@ routes:
   - {say: "Play Sati Gatha.", route: browser, action: open_url, addressed: true}   # from-log
   - {say: "play sati katha", route: browser, action: open_url}   # from-log
   - {say: "play chess with me", route: model}
+  # 2026-11-16 log review: timers the model claimed or got wrong, toggles that paused the music again
+  - {say: "Just set a timer for 10 minutes.", route: alarms}   # from-log
+  - {say: "set a 1 hours decision timer for the next step", route: alarms}   # from-log
+  - {say: "So set a timer for one and a half hours", route: alarms}
+  - {say: "Is the timer set?", route: alarms}
+  - {say: "how much time is left?", route: alarms}
+  - {say: "resume the song", route: media keys, action: media_key}   # from-log
 
   # Study
   - {say: "start studying Dynamics for an hour", route: study mode, action: pomodoro, addressed: true}

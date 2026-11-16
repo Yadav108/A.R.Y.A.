@@ -27,9 +27,11 @@ _SPOKEN = {
     "mute": "Toggled mute.",
 }
 
-# Common phrasings the model might send instead of the enum value.
+# Common phrasings the model might send instead of the enum value. "play" / "resume" and "pause" are real
+# play and pause (see media_control), not the toggle key — from the log: "resume the song", then "play",
+# then "play the song" each toggled, so the second one paused the music again.
 _ALIASES = {
-    "play": "play_pause", "pause": "play_pause", "resume": "play_pause", "toggle": "play_pause",
+    "resume": "play", "unpause": "play", "continue": "play", "toggle": "play_pause",
     "skip": "next", "next_track": "next", "previous_track": "previous", "back": "previous",
     "louder": "volume_up", "up": "volume_up", "quieter": "volume_down", "down": "volume_down",
     "unmute": "mute",
@@ -43,13 +45,26 @@ def _press(vk: int, times: int = 1) -> None:
 
 
 async def media_control(action: str, steps: int = 5) -> str:
-    from arya.tools.music import forget
-    forget()                                    # you're controlling the music: ARYA won't resume it later
+    from arya.tools.music import forget, paused_by_arya, set_playing
     key = action.strip().lower().replace(" ", "_").replace("-", "_")
     key = _ALIASES.get(key, key)
+    if key in ("play", "pause", "play_music"):
+        play = key != "pause"
+        # "Hey ARYA" paused the music while you talk: that session is the one you mean.
+        app = paused_by_arya()
+        forget()                                # you're controlling the music: ARYA won't resume it later
+        done = await set_playing(play, app)
+        if done == "played":
+            return "Playing."
+        if done == "paused":
+            return "Paused."
+        if done == "already":
+            return "It's already playing." if play else "It's already paused."
+        key = "play_pause"                      # no media controls: fall back to the keyboard's toggle key
+    forget()                                    # you're controlling the music: ARYA won't resume it later
     vk = _VK.get(key)
     if vk is None:
-        return f"Unknown media action '{action}'. Use one of: {', '.join(_VK)}."
+        return f"Unknown media action '{action}'. Use one of: play, pause, {', '.join(_VK)}."
 
     if key in ("volume_up", "volume_down"):
         steps = max(1, min(int(steps), 50))  # each press is 2%

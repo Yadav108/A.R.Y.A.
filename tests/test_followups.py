@@ -94,7 +94,7 @@ def test_any_music(chrome):
     assert chrome["opened"] == ["https://music.youtube.com"]
     chrome["now"] = {"title": "Kon Tujhe", "artist": "Kishore Kumar", "app": "Chrome", "playing": False}
     assert _h("play some music") == "Resuming Kon Tujhe by Kishore Kumar."
-    assert chrome["media"] == ["play_pause"]
+    assert chrome["media"] == ["play"]                       # really play, not the toggle key
 
 
 def test_minimized_past_tense(monkeypatch):

@@ -163,7 +163,7 @@ async def preload_models() -> None:
             command, named = addressee.split_name(command)
             if named and not command:
                 wake_triggered = True                    # just the name: answer like a wake word ("Yes?")
-        if not wake_triggered and command and not named and _smart_listening and not _answers_bare_wake():
+        if not wake_triggered and command and not named and _smart_listening and not _answers_bare_wake(command):
             # A request split by a pause ("… by Kishore Kumar." + "on YouTube music."): judge the pieces together.
             now = time.monotonic()
             joined = (_fragment["text"] + " " + command) if _fragment["text"] and \
@@ -574,14 +574,28 @@ _fragment = {"text": "", "at": 0.0}
 _last_spoke_at = 0.0          # when ARYA last finished speaking (monotonic)
 # After a bare "Hey ARYA" ("Yes?"), the next sentence within this window is the
 # request itself — it skips the "was that for me?" check.
-BARE_WAKE_WINDOW_S = 10.0
+# (Wall clock: monotonic time can stand still while the laptop sleeps. 20 s, and filler like "That's
+# what, um." doesn't use it up — from the log, the real request came 23 s after "Hey ARYA" and was ignored.)
+BARE_WAKE_WINDOW_S = 20.0
 _bare_wake_until = 0.0
 
 
-def _answers_bare_wake() -> bool:
-    """True once for the first follow-up right after a bare wake word."""
+_FILLER_WORDS = addressee._VAGUE | {"that's", "what's", "it's", "i'm", "um", "uh", "er", "erm", "hmm", "mm", "huh",
+                                    "like", "so", "oh", "ah", "i", "a", "an", "uhm", "umm"}
+
+
+def _is_filler(text: str) -> bool:
+    """'That's what, um.' -> True; 'open it' / 'next song' -> False."""
+    words = re.findall(r"[a-z][a-z']*", text.lower().replace("’", "'"))
+    return all(w in _FILLER_WORDS for w in words)
+
+
+def _answers_bare_wake(command: str = "") -> bool:
+    """True once for the first real follow-up right after a bare wake word."""
     global _bare_wake_until
-    if _bare_wake_until and time.monotonic() < _bare_wake_until:
+    if _bare_wake_until and time.time() < _bare_wake_until:
+        if command and _is_filler(command):
+            return False                     # filler: keep waiting for the actual request
         _bare_wake_until = 0.0
         return True
     return False
@@ -656,9 +670,19 @@ async def _broadcast(payload: str | bytes) -> None:
 
 # ── Speech pipeline ───────────────────────────────────────────────────────────
 
+# One sentence is synthesized at a time, in order (asyncio's semaphore wakes waiters first-come), and its
+# 10 s timeout starts when *its* synthesis starts. From the log: a long answer arrived at once, every
+# sentence's task queued on Piper's lock while its own timeout ran, and every sentence timed out.
+_synth_slot: asyncio.Semaphore | None = None
+
+
 async def _synthesize(sentence: str) -> bytes:
+    global _synth_slot
+    if _synth_slot is None:
+        _synth_slot = asyncio.Semaphore(1)
     try:
-        return await asyncio.wait_for(speak_sentence(sentence), timeout=10.0)
+        async with _synth_slot:
+            return await asyncio.wait_for(speak_sentence(sentence), timeout=10.0)
     except asyncio.TimeoutError:
         print(f"TTS timeout: {sentence[:30]}")
     except Exception as exc:
@@ -864,7 +888,7 @@ async def _run_turn(message: str, wake_triggered: bool, announce_transcript: boo
                 # the actual request. Never sent to the LLM or saved to history.
                 global _bare_wake_until
                 await _say(wake_ack())
-                _bare_wake_until = time.monotonic() + BARE_WAKE_WINDOW_S   # the next sentence IS the request
+                _bare_wake_until = time.time() + BARE_WAKE_WINDOW_S   # the next sentence IS the request
                 return
 
             if announce_transcript:
