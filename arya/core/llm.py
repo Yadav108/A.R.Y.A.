@@ -2341,6 +2341,19 @@ async def stream_with_tools(message: str):
     except Exception as exc:
         print(f"Mode auto-switch skipped: {type(exc).__name__}: {exc}")
 
+    try:                                                # intercom: "say … on the laptop", "send this to my phone"
+        from arya.core import intercom as _intercom
+        relayed = _intercom.handle(message, remote=policy.remote_turn.get()) if _intercom.matches(message) else None
+    except Exception as exc:
+        print(f"Intercom skipped: {type(exc).__name__}: {exc}")
+        relayed = None
+    if relayed:
+        print("Instant answer: intercom")
+        save_message("user", message)
+        save_message("assistant", relayed)
+        yield relayed
+        return
+
     try:                                                # "how far is the video?", "delete that upload"
         from arya.core import attachments as _attachments
         uploaded = _attachments.handle(message)

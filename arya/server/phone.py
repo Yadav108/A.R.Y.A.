@@ -199,8 +199,18 @@ def note_event(event: str) -> None:
         return
     if not text:
         return
+    push(text)
+
+
+def push(text: str, kind: str = "nudge", url: str | None = None) -> None:
+    """Put something on the phone's feed: a nudge, a message sent from the laptop ('message', with an optional
+    link) or 'ring' (the phone page beeps and vibrates — find my phone). Any thread."""
+    item = {"id": 0, "at": time.strftime("%H:%M"), "text": text, "kind": kind}
+    if url and re.match(r"^https?://", url, re.IGNORECASE):           # only web links become tappable
+        item["url"] = url
     with _state.lock:
-        _state.feed.append({"id": _state.next_id, "at": time.strftime("%H:%M"), "text": text})
+        item["id"] = _state.next_id
+        _state.feed.append(item)
         _state.next_id += 1
 
 

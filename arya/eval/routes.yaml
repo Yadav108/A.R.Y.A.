@@ -47,6 +47,10 @@ routes:
   - {say: "what's on my list?", route: tasks}
   - {say: "new task: book the lab for Friday", route: tasks}
   - {say: "what is the list of Laplace transform pairs", route: model}
+  # Intercom, find my phone
+  - {say: "send this to my phone", route: intercom, addressed: true}
+  - {say: "ring my phone", route: intercom}
+  - {say: "where is the laptop charger?", route: model}
   # Brainstorm mode
   - {say: "brainstorm mode", route: mode, addressed: true}
   - {say: "save the second idea", route: tasks}

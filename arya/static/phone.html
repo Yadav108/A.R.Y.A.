@@ -106,6 +106,56 @@ function showUnpaired() {
   ["log", "chips", "f", "yesno", "modes"].forEach((id) => { $(id).style.display = "none"; });
   state("not paired", false);
 }
+// From the laptop: "send this to my phone" (text, maybe a link) and "ring my phone" (find my phone).
+function fromLaptop(item) {
+  const d = add("arya", "💻 " + item.text);
+  if (item.url && /^https?:\/\//i.test(item.url)) {
+    d.textContent = "💻 ";
+    const a = document.createElement("a");
+    a.href = item.url; a.textContent = item.text === item.url ? item.url : item.text;
+    a.target = "_blank"; a.rel = "noopener noreferrer"; a.style.color = "var(--accent)";
+    d.appendChild(a);
+  }
+  if (navigator.vibrate) { try { navigator.vibrate(120); } catch (e) {} }
+}
+let ringing = null;
+function ring(item) {
+  stopRing();
+  const n = $("nudge");
+  n.innerHTML = "";
+  n.appendChild(document.createTextNode("🔔 ARYA is ringing your phone "));
+  const b = document.createElement("button"); b.textContent = "Found it"; b.className = "primary";
+  b.addEventListener("click", stopRing); n.appendChild(b);
+  n.style.display = "block";
+  let ctx = null;
+  try { ctx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {}
+  const beep = () => {
+    if (navigator.vibrate) { try { navigator.vibrate([400, 150, 400]); } catch (e) {} }
+    if (!ctx) return;
+    [0, 0.25, 0.5].forEach((t, i) => {
+      const o = ctx.createOscillator(), g = ctx.createGain();
+      o.frequency.value = i === 2 ? 1400 : 1000; g.gain.value = 0.6;
+      o.connect(g); g.connect(ctx.destination);
+      o.start(ctx.currentTime + t); o.stop(ctx.currentTime + t + 0.18);
+    });
+  };
+  beep();
+  const timer = setInterval(beep, 1500);
+  ringing = { timer, ctx, until: setTimeout(stopRing, 30000) };
+}
+function stopRing() {
+  if (!ringing) return;
+  clearInterval(ringing.timer); clearTimeout(ringing.until);
+  try { ringing.ctx && ringing.ctx.close(); } catch (e) {}
+  ringing = null;
+  $("nudge").style.display = "none";
+}
+function onItem(item) {
+  if (item.kind === "ring") ring(item);
+  else if (item.kind === "message") fromLaptop(item);
+  else nudge(item);
+}
+
 function nudge(item) {
   const n = $("nudge");
   n.textContent = item.at + " — " + item.text;
@@ -132,20 +182,22 @@ async function hello() {
     last = r.data.last || 0;
     showMode(r.data.mode);
     state("connected", true);
-    (r.data.recent || []).forEach((it) => add("note", "🔔 " + it.at + " · " + it.text));
+    (r.data.recent || []).filter((it) => it.kind !== "ring")       // an old ring doesn't ring again
+      .forEach((it) => it.kind === "message" ? fromLaptop(it) : add("note", "🔔 " + it.at + " · " + it.text));
   } catch (e) {
     state("laptop not reachable", false);
   }
 }
 
 async function poll() {
-  if (!paired || document.hidden) return;
+  // Also while in the background (the browser slows this down), so "ring my phone" can reach an open page.
+  if (!paired) return;
   try {
     const r = await api("/api/feed?after=" + last);
     if (r.status === 401) return showUnpaired();
     state("connected", true);
     showMode(r.data.mode);
-    for (const it of r.data.items || []) { last = Math.max(last, it.id); nudge(it); }
+    for (const it of r.data.items || []) { last = Math.max(last, it.id); onItem(it); }
   } catch (e) {
     state("laptop not reachable", false);
   }
