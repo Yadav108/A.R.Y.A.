@@ -2533,7 +2533,8 @@ async def stream_with_tools(message: str):
                     print(f"Cloud vision failed: {exc}")
                     reply = "I couldn't reach the cloud to read that screenshot."
             else:
-                reply = "Okay, the screenshot stays on the laptop."
+                reply = ("Okay, the photo stays on the laptop." if pending.args.get("title", "").startswith("Photo:")
+                         else "Okay, the screenshot stays on the laptop.")
             save_message("assistant", reply)
             async for sentence in _clean_stream(_aiter_text(reply)):
                 yield sentence
@@ -2708,12 +2709,14 @@ async def stream_with_tools(message: str):
 
     try:                                                # "explain what's on my screen" (OCR, stays local)
         from arya.tools import screen as _screen
-        on_screen = await _screen.handle(message)
+        from arya.tools import webcam as _webcam             # "what am I holding?": the webcam, only when asked
+        on_screen = (await _webcam.handle(message, remote=policy.remote_turn.get()) if _webcam.matches(message)
+                     else await _screen.handle(message))
     except Exception as exc:
         print(f"Screen reading skipped: {type(exc).__name__}: {exc}")
         on_screen = None
     if on_screen:
-        print("Instant answer: screen")
+        print("Instant answer: " + ("webcam" if _webcam.matches(message) else "screen"))
         reply, artifacts = on_screen
         for kind, payload in artifacts:
             emit_artifact(kind, payload)

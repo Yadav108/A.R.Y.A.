@@ -128,6 +128,12 @@ def _sandbox(rec: Recorder) -> None:
         return types.SimpleNamespace(task=types.SimpleNamespace(cancel=lambda: None))
     productivity._register = register
     screen.capture = lambda: None
+    from arya.tools import webcam
+
+    def fake_grab():                                 # never switch the real camera on
+        rec.add("webcam")
+        raise RuntimeError("busy")
+    webcam.grab = fake_grab
 
     # The model is not under test here: a stub that answers instantly, so a mis-route shows up as "model".
     async def stream_tokens(model, messages, max_tokens=None):
