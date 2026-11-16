@@ -47,6 +47,11 @@ routes:
   - {say: "what's on my list?", route: tasks}
   - {say: "new task: book the lab for Friday", route: tasks}
   - {say: "what is the list of Laplace transform pairs", route: model}
+  # Brainstorm mode
+  - {say: "brainstorm mode", route: mode, addressed: true}
+  - {say: "save the second idea", route: tasks}
+  - {say: "what are my ideas?", route: tasks}
+  - {say: "let's brainstorm names for my robot", route: model}
   # Uploads (PR 4)
   - {say: "what files did I give you?", route: uploads}
   - {say: "how far is the video?", route: uploads}

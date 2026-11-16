@@ -14,3 +14,6 @@ arya/models/tts/
 tests/_tmp_kb/
 arya/eval/results/
 tests/_tmp_files/
+arya/models/wakeword/user_samples_*/
+# Backups of earlier wake-word models
+arya/models/wakeword/*.prev.*

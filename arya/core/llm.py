@@ -2327,6 +2327,10 @@ async def stream_with_tools(message: str):
         save_message("assistant", switched)
         yield switched
         return
+    try:                                                # "let's brainstorm names for…": answered in brainstorm mode
+        await asyncio.to_thread(modes.auto_switch, message)
+    except Exception as exc:
+        print(f"Mode auto-switch skipped: {type(exc).__name__}: {exc}")
 
     try:                                                # "how far is the video?", "delete that upload"
         from arya.core import attachments as _attachments

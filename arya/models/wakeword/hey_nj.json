@@ -1,0 +1,13 @@
+{
+  "threshold": 0.85,
+  "trigger_frames": 2,
+  "heldout_recall": 0.8697916666666666,
+  "heldout_false_triggers_per_hour": 106.49337132597438,
+  "train_positive_windows": 3415,
+  "train_negative_windows": 17993,
+  "user_positive_recordings": 22,
+  "user_negative_recordings": 2,
+  "voices": 49,
+  "trained": "2026-11-16 21:35",
+  "chosen": "0.85 x 2 frames + Whisper check primed with 'Arya, NJ' (tools/eval_wakeword.py): your Hey NJ 14/22, 4 of 144 sound-alike clips (enjoy, and J, ...) woke it, 0 false wakes in ~4 min of everyday speech and your talking; ARYA unchanged at 15/20 with this priming"
+}

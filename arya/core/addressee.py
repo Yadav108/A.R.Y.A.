@@ -24,7 +24,7 @@ import time
 SMART_LISTENING_DEFAULT = os.getenv("ARYA_SMART_LISTENING", "1") != "0"
 IGNORED_LIMIT = 3                 # this many ignored in a row ends the conversation
 
-_NAME = re.compile(r"\b(?:arya|aria|ariya|aarya)\b", re.IGNORECASE)
+_NAME = re.compile(r"\b(?:arya|aria|ariya|aarya|n\.?\s?j\.?|en\s?jay|enjay)(?!\w)", re.IGNORECASE)   # + "NJ"
 # Also with a lead-in or a tag: "Okay, go ahead.", "Yes, sir.", "Thank you very much.", "Yeah, thank you
 # sweetheart." (from the log: these went to the model, which judged them side talk).
 _ALWAYS_FOR_ARYA = re.compile(
@@ -102,7 +102,8 @@ _PROMPT = (
 
 # How Whisper writes "ARYA" in follow-ups ("Area.", "Uh, Aria?", "Hey, Ario.") — only trusted when the name
 # is the whole utterance or opens it, followed by a pause ("Area, play …").
-_LOOSE_NAME = r"(?:a+r+i?y+a+h?|aria+h?|ariya|aarya|ario|aryo|area|harya|arja|ayra|ariel|arial)"   # "Hey, Ariel." (log)
+_LOOSE_NAME = (r"(?:a+r+i?y+a+h?|aria+h?|ariya|aarya|ario|aryo|area|harya|arja|ayra|ariel|arial"   # "Hey, Ariel." (log)
+               r"|n\.?\s?j\.?|en\s?jay|enjay)")                                                     # "NJ"
 _NAME_ALONE = re.compile(rf"^\W*(?:(?:hey|hi|ok|okay|uh|um|so|yo)\W+)?{_LOOSE_NAME}\W*$", re.IGNORECASE)
 _NAME_FIRST = re.compile(rf"^\W*(?:(?:hey|hi|ok|okay|uh|um|so|yo)\W+)?{_LOOSE_NAME}\s*[,.!?:;]\s*(?=\S)",
                          re.IGNORECASE)

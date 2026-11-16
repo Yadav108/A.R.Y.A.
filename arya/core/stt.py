@@ -197,7 +197,16 @@ def transcribe_wake(audio: "np.ndarray") -> str:
     the priming would bias what's heard."""
     if audio is None or len(audio) == 0:
         return ""
-    return _run_with_cpu_fallback(audio.astype("float32", copy=False), prompt="Hey Arya.")
+    return _run_with_cpu_fallback(audio.astype("float32", copy=False), prompt=wake_prompt())
+
+
+def wake_prompt() -> str:
+    """Priming for the wake-word check. With "Hey NJ" trained as well, both names: measured with
+    tools/eval_wakeword.py, "Hey Arya." let Whisper write a real "Hey NJ" as "Enjoy" / "Anjay" (3 of 22 of the
+    user's recordings verified) and "Hey NJ." made it drop the name ("Open Chrome."); "Arya, NJ" verified 14/22
+    with ARYA unchanged at 15/20 and 4 of 144 sound-alike clips getting through."""
+    from arya.core import hotword
+    return "Arya, NJ" if hotword.extra_models() else "Hey Arya."
 
 
 async def transcribe(audio_bytes: bytes) -> str:

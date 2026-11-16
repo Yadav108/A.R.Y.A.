@@ -29,8 +29,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-NAMES = ("default", "study", "work")
-SPOKEN = {"default": "normal", "study": "study", "work": "work"}
+NAMES = ("default", "study", "work", "brainstorm")
+SPOKEN = {"default": "normal", "study": "study", "work": "work", "brainstorm": "brainstorm"}
 
 
 @dataclass(frozen=True)
@@ -100,6 +100,27 @@ MODES: dict[str, Mode] = {
         floors={"notes": "base", "uploads": "base", "work": "base", "core": "base", "course": 0.55},
         nudges=frozenset({"battery", "calendar", "break"}),
         briefing="the time, the weather, today's meetings, open to-dos and unread mail that looks important",
+    ),
+    "brainstorm": Mode(
+        name="brainstorm",
+        persona=(
+            "Mode: brainstorm. You are an expert brainstorming partner. First go wide: give three to five "
+            "short, clearly different ideas, from practical to bold, each in one sentence (say 'First', "
+            "'Second' instead of a list). Build on the user's ideas ('yes, and'), never shoot them down early, "
+            "and end with one provocative question that opens a new angle. When ideas run dry, use a method "
+            "and name it briefly: SCAMPER (substitute, combine, adapt, modify, put to another use, eliminate, "
+            "reverse), first principles, reversing the problem, borrowing from another field, or adding a "
+            "constraint. When they ask to narrow down or pick, switch to converging: two or three criteria, the "
+            "best two or three ideas with one reason each, and the very next step. Mention that they can say "
+            "'save that idea' to keep one.\n"
+        ),
+        capabilities="I'm your brainstorming partner: I throw out varied ideas, build on yours, ask questions "
+                     "that open new angles, use methods like SCAMPER and first principles when we're stuck, and "
+                     "help you narrow down to a next step when you're ready. Say \"save that idea\" to keep one. "
+                     + _COMMON_CAPS,
+        floors={"notes": "base", "uploads": "base", "core": "base", "course": 0.55, "work": 0.50},
+        nudges=frozenset({"battery", "calendar"}),
+        briefing="the time, the weather, today's calendar, reminders and timers, and any to-dos",
     ),
 }
 
@@ -280,6 +301,10 @@ PROTOTYPES = {
              "write an email to my supervisor about the results", "refactor this function", "analyse the "
              "measurement data", "prepare for the group meeting", "why does my script crash", "review my pull "
              "request", "what are the next steps in my project"],
+    "brainstorm": ["give me ideas for a project name", "help me think of ways to market my app", "what are some "
+                   "creative ideas for a birthday gift", "let's come up with possible features for the robot",
+                   "I need fresh ideas for my presentation", "what could we try instead", "think of unusual "
+                   "uses for a drone"],
     "default": ["how was your day", "recommend a movie for tonight", "what should I cook for dinner", "tell me a "
                 "joke", "plan my weekend", "remind me to call my mom", "I'm bored", "what do you think about "
                 "travelling to Italy", "good morning how are you", "let's chat about music"],
@@ -336,24 +361,37 @@ def suggestion(message: str, now: float | None = None) -> str | None:
 def suggestion_question(mode: str) -> str:
     return {"work": "Sounds like work. Want me to switch to work mode?",
             "study": "Sounds like studying. Switch to study mode?",
+            "brainstorm": "Sounds like we're brainstorming. Switch to brainstorm mode?",
             "default": "Shall I switch back to normal mode?"}[mode]
 
 
 # ── Voice ─────────────────────────────────────────────────────────────────────
 
-_MODE_WORD = r"(?P<m>study(?:ing)?|work(?:ing)?|normal|default|everyday|regular|casual|personal)"
+_MODE_WORD = r"(?P<m>study(?:ing)?|work(?:ing)?|brainstorm(?:ing)?|normal|default|everyday|regular|casual|personal)"
 _SWITCH = re.compile(rf"^\W*(?:(?:hey|ok|okay)\W+)?(?:arya\W+)?(?:(?:please|can you|could you|let'?s)\s+)?"
                      rf"(?:(?:switch|go|change|get|put yourself)\s+(?:back\s+)?(?:in)?to\s+|enter\s+|back\s+to\s+|"
                      rf"(?:turn on|start)\s+)?(?:the\s+)?{_MODE_WORD}\s+mode(?:\s+(?:on|please|now))?\W*$", re.IGNORECASE)
 _BACK = re.compile(r"^\W*(?:(?:hey|ok|okay)\W+)?(?:arya\W+)?(?:(?:go|switch|get)\s+)?back\s+to\s+normal(?:\s+mode)?\W*$|"
-                   r"^\W*(?:leave|exit|stop|turn off)\s+(?:the\s+)?(?:study|work)\s+mode\W*$", re.IGNORECASE)
+                   r"^\W*(?:leave|exit|stop|turn off)\s+(?:the\s+)?(?:study|work|brainstorm(?:ing)?)\s+mode\W*$",
+                   re.IGNORECASE)
+# "Let's brainstorm names for my robot" — switch to brainstorm mode and answer it there (not an instant reply).
+_BRAINSTORM_START = re.compile(r"^\W*(?:(?:hey|ok|okay)\W+)?(?:arya\W+)?(?:let'?s|can we|could we|help me|i want to|"
+                               r"i'?d like to)\s+brainstorm\b|\bbrainstorm with me\b", re.IGNORECASE)
+
+
+def auto_switch(message: str) -> bool:
+    """'Let's brainstorm X': into brainstorm mode before the model answers X. True if it switched."""
+    if _BRAINSTORM_START.search(message) and current_name() != "brainstorm":
+        return set_mode("brainstorm", reason="let's brainstorm")
+    return False
 # "what mode are you in?" — not "what mode of vibration…"
 _WHICH = re.compile(r"\b(?:what|which)\s+mode\s+are\s+you\b|\bwhat(?:'s| is)\s+your\s+(?:current\s+)?mode\b|"
                     r"\bwhich mode is (?:on|active)\b", re.IGNORECASE)
 _ADD_DIR = re.compile(r"\badd\s+(?P<f>.+?)\s+to\s+(?:the\s+)?work\s+(?:mode|folders?)\b", re.IGNORECASE)
 _LIST_DIRS = re.compile(r"\b(?:which|what)\s+folders?\b.*\bwork\b|\bwork\s+folders?\b\W*$", re.IGNORECASE)
 _CMD = re.compile(rf"{_SWITCH.pattern}|{_BACK.pattern}", re.IGNORECASE)
-_NORMALISE = {"studying": "study", "working": "work", "normal": "default", "everyday": "default",
+_NORMALISE = {"studying": "study", "working": "work", "brainstorming": "brainstorm", "normal": "default",
+              "everyday": "default",
               "regular": "default", "casual": "default", "personal": "default"}
 
 
@@ -369,6 +407,8 @@ def _switched_reply(name: str) -> str:
         return "Work mode. Short and technical from here." + extra
     if name == "study":
         return "Study mode. I'm your tutor again; say \"start studying\" and a course for a session."
+    if name == "brainstorm":
+        return "Brainstorm mode. No bad ideas yet. What are we thinking about?"
     tail = " Your study session keeps running." if session.current() is not None else ""
     return "Back to normal. What's up?" + tail
 

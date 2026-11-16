@@ -41,7 +41,8 @@ SILENCE_FRAMES     = 15            # ~450 ms of quiet ends the utterance
 PREROLL_FRAMES     = 8             # ~240 ms pre-roll so the start of "ARYA" isn't clipped
 
 # Only keep unambiguous spellings — short variants like "ria"/"ara" cause false negatives
-WAKE_VARIANTS = {"arya", "aria", "r.a.", "arja", "ariya", "ahria", "ar ya"}
+WAKE_VARIANTS = {"arya", "aria", "r.a.", "arja", "ariya", "ahria", "ar ya",
+                 "nj", "n.j.", "n.j", "n j", "en jay", "enjay"}            # "Hey NJ", the second wake word
 # Hands-free conversation: after a wake word, replies need no wake word until
 # this long after the last exchange ("that's all" / "bye" end it sooner).
 try:

@@ -118,7 +118,7 @@
   }
   .segmented button[aria-pressed="true"] { background: rgba(255, 255, 255, 0.1); color: var(--text); }
   .segmented button:disabled { opacity: 0.4; cursor: not-allowed; }
-.segmented.segmented-3 { grid-template-columns: 1fr 1fr 1fr; }
+.segmented.segmented-3 { grid-template-columns: repeat(4, 1fr); }
   .seg-note { color: var(--dim); font-size: 12px; margin: 8px 2px 0; }
 
   dl.kv { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 7px 12px; font-size: 12.5px; }
@@ -386,6 +386,7 @@
           <button id="amDefault" data-amode="default" aria-pressed="true">Normal</button>
           <button id="amStudy" data-amode="study" aria-pressed="false">Study</button>
           <button id="amWork" data-amode="work" aria-pressed="false">Work</button>
+          <button id="amIdeas" data-amode="brainstorm" aria-pressed="false">Ideas</button>
         </div>
         <p class="seg-note" id="amNote">Your everyday assistant.</p>
       </div>
@@ -874,6 +875,7 @@
     default: "Your everyday assistant.",
     study: "Tutor for your courses: course material first, cards and pomodoros.",
     work: "Short and technical: your work folders and tasks first.",
+    brainstorm: "Lots of ideas first, then narrow down. Say “save that idea”.",
   };
   function applyAssistantMode(m) {
     if (!AMODE_NOTES[m]) return;
