@@ -1769,7 +1769,8 @@ def split_multi_part(message: str) -> list[str]:
     parts = [p for p in parts if p]
     if not 2 <= len(parts) <= MAX_TOOL_STEPS:
         return [message]
-    if not all(_keyword_needs_tool(p) or quick_media_command(p) for p in parts):
+    from arya.tools import browser
+    if not all(_keyword_needs_tool(p) or quick_media_command(p) or browser.matches(p) for p in parts):
         return [message]
     return parts
 
@@ -1789,7 +1790,17 @@ async def _multi_part_pipeline(message: str, parts: list[str], messages: list[di
     messages = list(messages)
     results: list[tuple[str, str | None]] = []
     question = None
+    from arya.tools import browser
     for i, part in enumerate(parts):
+        if browser.matches(part):
+            # "…and play Sati Gatha", "…and close this tab": ARYA's own browser commands, exactly as when
+            # said alone (from the log: the model turned "play romantic song" into a play/pause key press).
+            done = await browser.handle(part)
+            if done:
+                print(f"Browser command (part {i + 1}/{len(parts)}): {part!r}")
+                results.append((part, done))
+                messages.append({"role": "system", "content": f"Done for '{part}': {done}"})
+                continue
         quick = quick_media_command(part)
         status_tool = quick_status_command(part)
         if quick is not None:
