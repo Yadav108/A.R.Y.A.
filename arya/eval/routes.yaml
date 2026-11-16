@@ -51,6 +51,10 @@ routes:
   - {say: "send this to my phone", route: intercom, addressed: true}
   - {say: "ring my phone", route: intercom}
   - {say: "where is the laptop charger?", route: model}
+  # 2026-11-17: "it cannot minimize any open app and cannot switch between chrome tabs"
+  - {say: "minimize window explorer", route: window control, action: window}   # from-log
+  - {say: "Can you restore the tab?", route: browser, action: keys}   # from-log (was window control)
+  - {say: "switch to \"claude\" tab opened in chrome under JCNS group", route: browser, action: keys}   # from-log
   # Brainstorm mode
   - {say: "brainstorm mode", route: mode, addressed: true}
   - {say: "save the second idea", route: tasks}

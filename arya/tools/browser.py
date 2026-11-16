@@ -91,6 +91,52 @@ def _press(*keys: int) -> None:
         win32api.keybd_event(k, 0, _KEYUP, 0)
 
 
+def _type(text: str) -> None:
+    """Type text as keyboard input (Unicode, so any language works)."""
+    import ctypes
+    from ctypes import wintypes
+
+    KEYEVENTF_UNICODE, INPUT_KEYBOARD = 0x0004, 1
+
+    class KEYBDINPUT(ctypes.Structure):
+        _fields_ = [("wVk", wintypes.WORD), ("wScan", wintypes.WORD), ("dwFlags", wintypes.DWORD),
+                    ("time", wintypes.DWORD), ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong))]
+
+    class INPUT(ctypes.Structure):
+        class _U(ctypes.Union):
+            _fields_ = [("ki", KEYBDINPUT), ("pad", ctypes.c_byte * 32)]
+        _anonymous_ = ("u",)
+        _fields_ = [("type", wintypes.DWORD), ("u", _U)]
+
+    for ch in text:
+        for flags in (KEYEVENTF_UNICODE, KEYEVENTF_UNICODE | _KEYUP):
+            inp = INPUT(type=INPUT_KEYBOARD)
+            inp.ki = KEYBDINPUT(0, ord(ch), flags, 0, None)
+            ctypes.windll.user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
+
+
+def _switch_to_named_tab(query: str) -> str:
+    """Chrome's own tab search (Ctrl+Shift+A): type the name, Enter — then read which tab is showing."""
+    import win32gui
+
+    hwnd = _chrome_window()
+    if hwnd is None:
+        return "Chrome isn't open."
+    if not _focus(hwnd):
+        return "I couldn't bring Chrome to the front, so I didn't press anything."
+    _press(VK_CONTROL, VK_SHIFT, ord("A"))
+    time.sleep(0.45)                                    # the search box needs a moment to open
+    _type(query)
+    time.sleep(0.35)
+    _press(0x0D)                                        # Enter: the best match
+    time.sleep(0.35)
+    title = re.sub(r"\s+-\s+Google Chrome$", "", win32gui.GetWindowText(_chrome_window() or hwnd))
+    words = [w for w in re.findall(r"\w+", query.lower()) if len(w) > 2]
+    if words and not any(w in title.lower() for w in words):
+        return f"I searched your tabs for {query}; Chrome is showing “{title}” now. If that's not it, say the tab's title."
+    return f"Switched to “{title}”."
+
+
 def _in_chrome(*keys: int) -> str | None:
     """Press a shortcut in Chrome. Returns an error sentence, or None when done."""
     hwnd = _chrome_window()
@@ -142,6 +188,14 @@ _PREV = re.compile(rf"\b(?:previous|prev|left)\s+{_TAB}\b|\bswitch\s+(?:to\s+the
 _GOTO = re.compile(rf"\b(?:go|switch|jump)\s+to\s+(?:the\s+)?(?:{_TAB}\s+(?P<n>\d|one|two|three|four|five|six|"
                    rf"seven|eight)|(?P<o>first|second|third|fourth|fifth|sixth|seventh|eighth)\s+{_TAB}|"
                    rf"(?P<last>last)\s+{_TAB})\b", re.IGNORECASE)
+# "switch to the Claude tab", "go to my Gmail tab", "switch to 'claude' tab opened in chrome under JCNS group"
+# (from the log, 2026-11-16 19:17: only positions — next / previous / tab 3 — were understood)
+_NAMED_TAB = re.compile(r"^\W*(?:arya\W+)?(?:(?:can you|could you|please)\s+)?(?:switch|go|jump|take me|move)\s+"
+                        r"(?:back\s+)?(?:to|over to)\s+(?:the\s+|my\s+)?[\"“'‘]?(?P<q>.+?)[\"”'’]?\s+tab\b.*$|"
+                        r"^\W*(?:arya\W+)?(?:please\s+)?(?:show|find)\s+(?:me\s+)?(?:the\s+|my\s+)?[\"“'‘]?(?P<q2>.+?)"
+                        r"[\"”'’]?\s+tab\W*$", re.IGNORECASE)
+_NOT_A_NAME = re.compile(r"^(?:next|previous|prev|last|first|second|third|fourth|fifth|sixth|seventh|eighth|new|"
+                         r"other|closed|last closed|left|right|\d+)$", re.IGNORECASE)
 _ENGINE = r"(?P<eng>google|youtube music|youtube|the web|the internet|online)"
 _SEARCH = re.compile(rf"^\W*(?:arya\W+)?(?:(?:can you|could you|please)\s+)?(?:search|look up|look for|find)\s+"
                      rf"(?:on\s+|in\s+)?{_ENGINE}\s+(?:for\s+)?(?P<q>.+?)\W*$|"
@@ -210,9 +264,20 @@ def _bare_song(message: str):
     return None if quick_media_command(message) else m
 
 
+def named_tab(message: str) -> str | None:
+    """'switch to the Claude tab' -> 'Claude'; None for positions ('the next tab', 'the second tab')."""
+    m = _NAMED_TAB.match(message)
+    if not m:
+        return None
+    q = (m.group("q") or m.group("q2") or "").strip(" \"“”'‘’.")
+    if not q or _NOT_A_NAME.match(q) or len(q) > 60:
+        return None
+    return q
+
+
 def matches(message: str) -> bool:
     """Would handle() act on this (without doing it)? For splitting multi-part requests."""
-    return bool(_OPEN_AND_PLAY.match(message) or _PLAY.search(message) or _PLAY_SONG.match(message)
+    return bool(named_tab(message) or _OPEN_AND_PLAY.match(message) or _PLAY.search(message) or _PLAY_SONG.match(message)
                 or _bare_song(message) or _ANY_MUSIC.match(message) or _OPEN_SITE.match(message)
                 or _SEARCH.search(message) or _REOPEN.search(message) or _CLOSE.search(message)
                 or _NEW.search(message) or _GOTO.search(message) or _NEXT.search(message) or _PREV.search(message))
@@ -314,6 +379,13 @@ async def handle(message: str) -> str | None:
             return f"I couldn't open {_site(eng)}."
         policy.note_result("open_url")
         return f"Searching {_site(eng)} for {query}."
+
+    named = named_tab(message)
+    if named:
+        reply = await asyncio.to_thread(_switch_to_named_tab, named)
+        if not reply.startswith(("Chrome isn't", "I couldn't")):
+            policy.note_result("open_url")
+        return reply
 
     shortcut, reply = None, None
     if _REOPEN.search(message):

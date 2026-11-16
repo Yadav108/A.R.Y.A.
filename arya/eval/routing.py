@@ -57,6 +57,7 @@ def _sandbox(rec: Recorder) -> None:
     browser._chrome_window = lambda: 1
     browser._focus = lambda hwnd: True
     browser._press = lambda *keys: rec.add("keys")
+    browser._type = lambda text: None                  # typing into Chrome's tab search: never for real
 
     async def first_video(q):
         return "VIDEOID0000"
