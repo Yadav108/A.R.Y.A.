@@ -90,9 +90,64 @@ _DONE = re.compile(r"^\W*(?:arya\W+)?(?:please\s+)?(?:mark|tick off|check off|cr
 _REMOVE = re.compile(rf"^\W*(?:arya\W+)?(?:please\s+)?(?:remove|delete)\s+(?P<t>.+?)\s+from\s+{_LIST}\W*$", re.IGNORECASE)
 
 
+# Brainstorm mode: "save that idea", "save the second idea", "add a podcast about robots to my ideas"
+_SAVE_IDEA = re.compile(r"^\W*(?:arya\W+)?(?:please\s+)?(?:save|keep|note|remember)\s+(?:that|this|the\s+"
+                        r"(?P<ord>first|second|third|fourth|fifth|last)|it)\s+(?:one|idea)\b(?:\s*[:,-]\s*(?P<t>.+?))?"
+                        r"\W*$|^\W*(?:arya\W+)?(?:add|put)\s+(?P<t2>.+?)\s+(?:to|on)\s+(?:my|the)\s+ideas?(?:\s+list)?\W*$",
+                        re.IGNORECASE)
+_SHOW_IDEAS = re.compile(r"\bwhat(?:'s| is| are)\s+(?:on\s+)?my\s+ideas?(?:\s+list)?\b|^\W*(?:show|read|list)\s+"
+                         r"(?:me\s+)?my\s+ideas\W*$", re.IGNORECASE)
+_ORDINAL = {"first": 0, "second": 1, "third": 2, "fourth": 3, "fifth": 4}
+
+
+def _idea_from_last_answer(ordinal: str | None) -> str | None:
+    """The idea ARYA just said: 'First, …' / 'Second, …' sentences of its last answer."""
+    from arya.memory.database import get_history
+    last = next((m["content"] for m in reversed(get_history(limit=6)) if m["role"] == "assistant"), "")
+    from arya.core.llm import split_sentences
+    sentences = [s.strip() for s in split_sentences(last) if s.strip()]
+    ideas = [s for s in sentences if re.match(r"^(?:first|second|third|fourth|fifth|another|or)\b", s, re.IGNORECASE)]
+    ideas = ideas or [s for s in sentences if not s.endswith("?")]
+    if not ideas:
+        return None
+    if ordinal == "last":
+        pick = ideas[-1]
+    elif ordinal:
+        if _ORDINAL[ordinal] >= len(ideas):
+            return None
+        pick = ideas[_ORDINAL[ordinal]]
+    elif len(ideas) == 1:
+        pick = ideas[0]
+    else:
+        return None                                        # "that idea" after several: ask which one
+    return re.sub(r"^(?:first|second|third|fourth|fifth|another|or)\W+(?:idea\W+)?", "", pick,
+                  flags=re.IGNORECASE).strip().rstrip(".")
+
+
+def ideas_handle(message: str) -> str | None:
+    from arya.core import policy
+    m = _SAVE_IDEA.match(message)
+    if m:
+        text = (m.group("t") or m.group("t2") or "").strip(" '\"“”.,")
+        if not text:
+            text = _idea_from_last_answer(m.group("ord").lower() if m.group("ord") else None) or ""
+        if not text:
+            return "Which one should I save — the first, the second, or another?"
+        add(text[:300], "ideas")
+        policy.note_result("save_note")
+        return f"Saved to your ideas: {text[:120]}."
+    if _SHOW_IDEAS.search(message):
+        rows = open_tasks("ideas")
+        if not rows:
+            return "Your ideas list is empty. In brainstorm mode, say \"save that idea\"."
+        return "Your ideas: " + "; ".join(r["text"] for r in rows[-MAX_OPEN_LISTED:]) + "."
+    return None
+
+
 def matches(message: str) -> bool:
     """A to-do command (no side effects) — smart listening counts it as said to ARYA."""
-    return bool(_ADD.match(message) or _SHOW.search(message) or _REMOVE.match(message))
+    return bool(_ADD.match(message) or _SHOW.search(message) or _REMOVE.match(message) or _SAVE_IDEA.match(message)
+                or _SHOW_IDEAS.search(message))
 
 
 def _which(m: re.Match | None, mode: str) -> str:
@@ -108,6 +163,9 @@ def _which(m: re.Match | None, mode: str) -> str:
 def handle(message: str, mode: str = "default") -> str | None:
     from arya.core import policy
 
+    idea = ideas_handle(message)
+    if idea:
+        return idea
     m = _ADD.match(message)
     if m:
         text = (m.group("t") or m.group("t2") or "").strip(" '\"“”.,")

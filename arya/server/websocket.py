@@ -335,7 +335,7 @@ async def api_assistant_mode(request: Request) -> JSONResponse:
     body = await request.json()
     mode = str(body.get("mode", "")).lower()
     if mode not in modes.MODES:
-        return JSONResponse({"error": "mode must be default, study or work"}, status_code=400)
+        return JSONResponse({"error": "mode must be default, study, work or brainstorm"}, status_code=400)
     modes.set_mode(mode, reason="app")
     return JSONResponse({"ok": True, "mode": mode})
 

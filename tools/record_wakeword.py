@@ -78,9 +78,26 @@ def countdown(msg: str) -> None:
     print("  ● REC", flush=True)
 
 
+# "--word nj": your "Hey NJ" for the second wake word (tools/train_wakeword.py --word nj)
+NJ_PROMPTS = (["Hey NJ"] * 10 + ["NJ"] * 4 + ["Okay NJ"] * 2 + ["NJ?  (as a question)"] * 2
+              + ["Hey NJ  (from a step further away)"] * 2 + ["NJ, open Chrome"] * 2 + ["Hey NJ, what time is it"] * 2)
+NJ_READ_ALOUD = (
+    "Read this aloud at a normal pace, then keep chatting about your day until the timer ends:\n\n"
+    "  \"Enjoy the weekend! The engine of the robot needs a new driver. Angie and Jay are coming at six.\n"
+    "   In July the DJ played until midnight. I'm engaged in a long project and my energy is low.\n"
+    "   Orange juice or tea? And then, and then the injury report came in.\"\n"
+)
+
+
 def main() -> None:
+    global OUT, READ_ALOUD
     plain = "--plain" in sys.argv[1:]
-    prompts = PLAIN_PROMPTS if plain else POSITIVE_PROMPTS
+    word = sys.argv[sys.argv.index("--word") + 1].lower() if "--word" in sys.argv else "arya"
+    if word == "nj":
+        OUT = ROOT / "arya" / "models" / "wakeword" / "user_samples_nj"
+        READ_ALOUD = NJ_READ_ALOUD
+    prompts = NJ_PROMPTS if word == "nj" else PLAIN_PROMPTS if plain else POSITIVE_PROMPTS
+    retrain = ".venv\\Scripts\\python.exe tools\\train_wakeword.py" + (" --word nj" if word == "nj" else "")
     print(f"Microphone: {sd.query_devices(kind='input')['name']}")
     print("Speak at your normal distance from the mic, in your normal voice.\n")
     stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -100,7 +117,7 @@ def main() -> None:
         sys.exit(1)
     if plain:                                  # the negatives from the first session are still there
         print(f"\nDone — {saved} plain \"ARYA\" samples saved to {OUT.relative_to(ROOT)}")
-        print("Now retrain:  .venv\\Scripts\\python.exe tools\\train_wakeword.py")
+        print(f"Now retrain:  {retrain}")
         return
 
     print("\n" + READ_ALOUD)
@@ -111,7 +128,7 @@ def main() -> None:
     save(OUT / "negative" / f"{stamp}_room.wav", record(15))
 
     print(f"\nDone — {saved} wake-word samples + 55 s of negatives saved to {OUT.relative_to(ROOT)}")
-    print("Now retrain:  .venv\\Scripts\\python.exe tools\\train_wakeword.py")
+    print(f"Now train:  {retrain}")
 
 
 if __name__ == "__main__":

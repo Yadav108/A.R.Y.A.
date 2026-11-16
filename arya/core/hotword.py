@@ -71,6 +71,7 @@ VERIFY_TIMEOUT_S = 8.0
 _VERIFY_PATTERN = re.compile(
     r"(?<!\w)(?:"
     r"a+r+i?y+a+h?|ari+a+h?|ar+ia|aar?iya|ariya|arja|area|are\s?ya|ayra|harya"   # not "Aryan"
+    r"|n\.?\s?j\.?|en\s?jay|enjay|enjae|n\s?jay"                                   # "Hey NJ" (second wake word)
     r")(?!\w)",
     re.IGNORECASE,
 )
@@ -113,6 +114,45 @@ def _is_filler(text: str) -> bool:
     return re.sub(r"[^\w\s'-]", "", text).strip().lower() in _FILLER
 
 
+def extra_models() -> list[Path]:
+    """Other trained wake words next to hey_arya.npz (e.g. hey_nj.npz); backups (*.prev.npz) don't count."""
+    if os.getenv("WAKE_EXTRA_WORDS", "1") == "0":
+        return []
+    return sorted(p for p in MODEL_DIR.glob("hey_*.npz") if p.name != MODEL_FILE.name and ".prev" not in p.name)
+
+
+class _Head:
+    """One wake word's classifier on the shared openWakeWord speech features."""
+
+    def __init__(self, path: Path, main: bool = False) -> None:
+        params = np.load(path)
+        self.word = path.stem.removeprefix("hey_")
+        self.W1 = params["W1"].astype(np.float32)
+        self.b1 = params["b1"].astype(np.float32)
+        self.W2 = params["W2"].astype(np.float32)
+        self.b2 = params["b2"].astype(np.float32)
+        self.n_frames = int(params["n_frames"])
+        thr = float(params["threshold"])
+        self.threshold = float(os.getenv("WAKE_THRESHOLD", thr)) if main else thr
+        # A real "Hey ARYA" scores high for several 80 ms frames in a row; one-frame blips are ignored.
+        frames = int(params["trigger_frames"]) if "trigger_frames" in params.files else 1
+        self.trigger_frames = int(os.getenv("WAKE_TRIGGER_FRAMES", frames)) if main else frames
+        t = min(max(self.threshold, 1e-4), 1 - 1e-4)
+        self._logit_threshold = float(np.log(t / (1 - t)))
+
+    def logit(self, features) -> float:
+        x = features.get_features(self.n_frames).reshape(1, -1)
+        h = np.maximum(0.0, x @ self.W1 + self.b1)
+        return float((h @ self.W2 + self.b2).ravel()[0])
+
+    def probability(self, features) -> float:
+        return 1.0 / (1.0 + np.exp(-self.logit(features)))
+
+    def relative(self, features) -> float:
+        """On a scale where this word's own threshold is 0.5 (so different words can be compared)."""
+        return 1.0 / (1.0 + np.exp(-(self.logit(features) - self._logit_threshold)))
+
+
 class HotwordDetector:
     """Streaming scorer: feed 80 ms chunks, get P(wake word just ended)."""
 
@@ -124,25 +164,32 @@ class HotwordDetector:
             embedding_model_path=str(EMBEDDING_FILE),
             inference_framework="onnx",
         )
-        params = np.load(MODEL_FILE)
-        self.W1 = params["W1"].astype(np.float32)
-        self.b1 = params["b1"].astype(np.float32)
-        self.W2 = params["W2"].astype(np.float32)
-        self.b2 = params["b2"].astype(np.float32)
-        self.n_frames = int(params["n_frames"])
-        self.threshold = float(os.getenv("WAKE_THRESHOLD", float(params["threshold"])))
-        # A real "Hey ARYA" scores high for several 80 ms frames in a row;
-        # one-frame blips on other speech are ignored.
-        default_frames = int(params["trigger_frames"]) if "trigger_frames" in params.files else 1
-        self.trigger_frames = int(os.getenv("WAKE_TRIGGER_FRAMES", default_frames))
+        # "Hey ARYA" plus any other trained wake word ("Hey NJ": hey_nj.npz) — one small head each on the
+        # same speech features, so a second word costs almost nothing.
+        self.heads = [_Head(MODEL_FILE, main=True)] + [_Head(p) for p in extra_models()]
+        main = self.heads[0]
+        self.W1, self.b1, self.W2, self.b2, self.n_frames = main.W1, main.b1, main.W2, main.b2, main.n_frames
+        if len(self.heads) == 1:
+            self.threshold = main.threshold
+            self.trigger_frames = main.trigger_frames
+        else:
+            # Several words: each score is put on a common scale where its own threshold is 0.5.
+            self.threshold = 0.5
+            self.trigger_frames = min(h.trigger_frames for h in self.heads)
+        self.last_word = main.word
 
     def score(self, chunk: np.ndarray) -> float:
         pcm = (np.clip(chunk, -1.0, 1.0) * 32767).astype(np.int16)
         self.features(pcm)
-        x = self.features.get_features(self.n_frames).reshape(1, -1)
-        h = np.maximum(0.0, x @ self.W1 + self.b1)
-        z = float((h @ self.W2 + self.b2).ravel()[0])
-        return 1.0 / (1.0 + np.exp(-z))
+        if len(self.heads) == 1:
+            return self.heads[0].probability(self.features)
+        best, word = 0.0, self.heads[0].word
+        for h in self.heads:
+            s = h.relative(self.features)
+            if s > best:
+                best, word = s, h.word
+        self.last_word = word
+        return best
 
     def reset(self) -> None:
         self.features.reset()
@@ -333,7 +380,8 @@ class HotwordEngine:
                 pass  # worker fell behind — drop audio rather than block the driver
 
         with sd.InputStream(samplerate=SR, channels=1, dtype="float32", blocksize=CHUNK, callback=on_audio):
-            print(f"WakeWord: listening for 'Hey ARYA' (dedicated detector, threshold "
+            words = " / ".join(f"'Hey {h.word.upper()}'" for h in self._detector.heads)
+            print(f"WakeWord: listening for {words} (dedicated detector, threshold "
                   f"{self._detector.threshold:.2f} x{self._detector.trigger_frames}, "
                   f"verify {'on' if VERIFY else 'off'}, conversation {conversation_seconds() / 60:.0f} min)")
             while self._running:
@@ -378,7 +426,9 @@ class HotwordEngine:
         if self._hot_run >= needed and now >= self._cooldown_until:
             self._hot_run = 0
             self._cooldown_until = now + TRIGGER_COOLDOWN_S
-            print(f"WakeWord: detector fired (score {score:.2f}{', while speaking' if ducked else ''})")
+            word = getattr(self._detector, "last_word", "arya")
+            print(f"WakeWord: detector fired (score {score:.2f}{', while speaking' if ducked else ''}"
+                  f"{'' if word == 'arya' else f', {word}'})")
             # (a "Hey ARYA" takes over from a stop burst being captured)
             cap = {"kind": "wake", "audio": [], "start": now, "speech": False, "silence": 0, "voiced": 0,
                    "ducked": ducked, "verified": threading.Event(), "ok": not VERIFY, "aborted": False}

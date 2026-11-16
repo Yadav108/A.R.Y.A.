@@ -78,6 +78,26 @@ SENTENCES = [
 ]
 NEG_VOICES_PER_TEXT = 6
 
+# ── Which wake word: "--word nj" trains "Hey NJ" (hey_nj.npz) next to "Hey ARYA" ────────────────────
+WORD = sys.argv[sys.argv.index("--word") + 1].lower() if "--word" in sys.argv else "arya"
+if WORD == "nj":
+    # Spelled so the synthetic voices say the letters (plain "NJ" can come out as "New Jersey").
+    POS_TEXTS = ["Hey N.J.", "N.J.", "Hey en jay", "En jay", "Okay en jay", "Hi en jay", "Hey N J", "N J"]
+    CONFUSABLES = [
+        "enjoy", "enjoy it", "engage", "energy", "engine", "Angie", "hey Angie", "and jay", "and yeah",
+        "in July", "AJ", "hey AJ", "DJ", "hey DJ", "TJ", "hey TJ", "MJ", "hey Jay", "Jay", "ninja",
+        "end game", "orange", "Benji", "hey Benji", "New Jersey", "and J", "NG", "NBA", "PDF", "MRI",
+        "hey Siri", "Alexa", "okay Google", "hey there", "hey", "okay", "hey Arya", "N", "J", "Anja",
+        "enjoyed", "injury", "Angela", "angel", "and then", "and I", "hey Anne", "hey Ian",
+    ]
+    SENTENCES = SENTENCES + [
+        "Enjoy your meal.", "I really enjoyed the lecture.", "The engine needs an oil change.",
+        "Orange juice please.", "Angie is coming over later.", "The DJ played all night.",
+        "We engage the clutch first.", "My energy is low today.", "In July we go on holiday.",
+        "And then, and then he left.", "She plays like a ninja.", "We flew into New Jersey.",
+    ]
+USER_DIR = MODEL_DIR / ("user_samples" if WORD == "arya" else f"user_samples_{WORD}")
+
 # Broad everyday speech so the detector learns what "not the wake word" sounds
 # like in general (every 5th one is held out for evaluation).
 EVERYDAY = [
@@ -396,7 +416,7 @@ def main() -> None:
     rebuild = os.getenv("WAKE_REBUILD_FEATURES") == "1"
 
     def stage(name, build):
-        f = CACHE / f"features_v3_{name}.npz"
+        f = CACHE / (f"features_v3_{name}.npz" if WORD == "arya" else f"features_v3_{WORD}_{name}.npz")
         if f.exists() and not rebuild:
             print(f"  {name}: cached")
             return dict(np.load(f))
@@ -511,7 +531,7 @@ def main() -> None:
         best = max(results, key=lambda r: (r[2], -r[3]))
 
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
-    out = MODEL_DIR / "hey_arya.npz"
+    out = MODEL_DIR / f"hey_{WORD}.npz"
     np.savez(out, **params, threshold=np.float32(best[0]), trigger_frames=np.int32(best[1]),
              n_frames=np.int32(N_FRAMES))
     meta = {
@@ -521,7 +541,7 @@ def main() -> None:
         "user_positive_recordings": len(user_pos), "user_negative_recordings": len(user_neg),
         "voices": len(voices), "trained": time.strftime("%Y-%m-%d %H:%M"),
     }
-    (MODEL_DIR / "hey_arya.json").write_text(json.dumps(meta, indent=2))
+    (MODEL_DIR / f"hey_{WORD}.json").write_text(json.dumps(meta, indent=2))
     print(f"\nsaved {out.relative_to(ROOT)}  threshold={best[0]}  frames={best[1]}  "
           f"recall={best[2]:.1%}  false triggers={best[3]:.1f}/h")
 

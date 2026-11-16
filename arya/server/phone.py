@@ -380,7 +380,7 @@ async def mode(request: Request) -> JSONResponse:
         body = {}
     name = str(body.get("mode", "") if isinstance(body, dict) else "").lower()
     if name not in modes.MODES:
-        return JSONResponse({"error": "mode must be default, study or work"}, status_code=400)
+        return JSONResponse({"error": "mode must be default, study, work or brainstorm"}, status_code=400)
     modes.set_mode(name, reason="phone")
     return JSONResponse({"ok": True, "mode": name})
 
