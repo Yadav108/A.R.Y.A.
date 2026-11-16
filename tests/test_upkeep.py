@@ -58,6 +58,59 @@ def test_a_hang_is_restarted():
     assert hung.killed and len(started) == 2 and code == 0
 
 
+def _timed_run(children):
+    """Like _run, but also returns the fake time each child was started at."""
+    starts, t = [], [0.0]
+
+    def spawn(cmd, cwd=None):
+        starts.append(t[0])
+        return children.pop(0)
+
+    def sleep(s):
+        t[0] += s
+    code = S.supervise([], spawn=spawn, check=lambda port: True, sleep=sleep, clock=lambda: t[0], port=8000)
+    return code, starts
+
+
+def test_server_that_died_at_startup_is_restarted_within_seconds():
+    """2026-11-16: startup failed for lack of memory; the empty window waited for the 3-minute health check."""
+    code, starts = _timed_run([FakeChild([None, None, S.SERVER_STOPPED]), FakeChild([None, 0])])
+    assert code == 0 and len(starts) == 2
+    # two polls (4 s) + the failed-start pause (30 s), not 3+ minutes of health checks
+    assert starts[1] == 2 * S.POLL_S + S.FAILED_START_BACKOFF_S
+
+
+def test_a_late_crash_restarts_quickly():
+    code, starts = _timed_run([FakeChild([None] * 100 + [1]), FakeChild([0])])
+    assert starts[1] == 100 * S.POLL_S + S.BACKOFF_S
+
+
+def test_child_is_told_it_is_supervised(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(S.subprocess, "Popen", lambda cmd, cwd=None, env=None: seen.update(env=env) or "child")
+    assert S._spawn(["x"]) == "child"
+    assert seen["env"][S.ENV_FLAG] == "1"
+
+
+def test_desktop_app_exits_for_the_watchdog_only_when_supervised(monkeypatch):
+    from arya.desktop import app
+    timers = []
+
+    class FakeTimer:
+        def __init__(self, delay, fn, args=()):
+            timers.append((delay, fn, args))
+
+        def start(self):
+            pass
+    monkeypatch.setattr(app.threading, "Timer", FakeTimer)
+    monkeypatch.delenv(S.ENV_FLAG, raising=False)
+    app.DesktopApp._exit_for_watchdog(None)
+    assert timers == []                                       # run directly: keep the "couldn't start" window
+    monkeypatch.setenv(S.ENV_FLAG, "1")
+    app.DesktopApp._exit_for_watchdog(None)
+    assert timers == [(3.0, app.os._exit, (S.SERVER_STOPPED,))]
+
+
 def test_gives_up_after_too_many_crashes():
     code, started = _run([FakeChild([1]) for _ in range(10)])
     assert code == 1 and len(started) == S.MAX_RESTARTS + 1

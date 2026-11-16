@@ -414,6 +414,22 @@ class DesktopApp:
         finally:
             if not self.quitting:
                 self.events.put("__FAILED__")
+                self._exit_for_watchdog()
+
+    def _exit_for_watchdog(self) -> None:
+        """Under the watchdog, a window without its server is useless: leave so it restarts ARYA now
+        (2026-11-16: startup failed for lack of memory, and the empty window waited for the 3-minute
+        health check). The 3 s let the 'couldn't start' notice show and the log flush."""
+        from arya.desktop import supervisor
+
+        if os.getenv(supervisor.ENV_FLAG) != "1":
+            return
+        print("ARYA server stopped — exiting so the watchdog starts ARYA again")
+        try:
+            sys.stdout.flush()
+        except Exception:
+            pass
+        threading.Timer(3.0, os._exit, args=(supervisor.SERVER_STOPPED,)).start()
 
     # ── window (main thread) ──
     def _create_window(self):
