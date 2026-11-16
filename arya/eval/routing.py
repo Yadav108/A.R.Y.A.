@@ -49,6 +49,8 @@ def _sandbox(rec: Recorder) -> None:
     from arya.tools import tasks
     modes.use_memory("default")                      # mode switches stay in memory; your saved mode is untouched
     tasks.DB_OVERRIDE = tmp / "tasks.db"             # to-dos go to a scratch database
+    from arya.core import activity
+    activity.DB_OVERRIDE = tmp / "activity.db"       # "remind me when I'm back" too
     agenda.ICS_DIR = tmp / "calendar"
     file_agent._undo_file = lambda: tmp / "tidy-undo.json"
     for key in ("ARYA_MAIL_HOST", "ARYA_MAIL_USER", "ARYA_MAIL_PASSWORD", "ARYA_FOCUS_MUSIC_URL"):

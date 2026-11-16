@@ -203,6 +203,9 @@ async def handle(message: str, now: datetime | None = None) -> str | None:
     from arya.core import policy
 
     now = now or datetime.now()
+    from arya.core import activity
+    if activity._BACK_REMIND.match(message):             # "remind me … when I'm back": not a clock time
+        return activity.handle(message, remote=policy.remote_turn.get())
     if awaiting():                                       # the answer to "At what time?" / "about what?"
         slot = _slot
         if _CANCEL.match(message):
@@ -226,7 +229,12 @@ async def handle(message: str, now: datetime | None = None) -> str | None:
         from arya.tools.productivity import list_timers
         policy.note_result("list_timers")
         status = await list_timers()
-        return "You have no timers, alarms or reminders running." if status.startswith("No active") else status
+        back = [r["text"] for r in activity.back_reminders()]
+        back_text = (" When you're back at the laptop: " + "; ".join(back) + ".") if back else ""
+        if status.startswith("No active"):
+            return ("You have no timers or clock reminders." + back_text) if back else \
+                "You have no timers, alarms or reminders running."
+        return status + back_text
     if _TIMER.search(message) and not _REMIND.search(message):
         seconds = duration_seconds(message)
         if not seconds:

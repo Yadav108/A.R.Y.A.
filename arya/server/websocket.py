@@ -224,6 +224,9 @@ async def preload_models() -> None:
     from arya.tools import remote                    # "put the laptop to sleep in 10 minutes": warned aloud first
     remote.set_announcer(announce)
 
+    from arya.core import activity                   # time at the laptop, "remind me when I'm back", evening wrap-up
+    asyncio.create_task(activity.run(announce, busy=_voice_lock.locked))
+
     from arya.core import quiet                      # meeting mode, and quiet during Teams / Zoom calls
     asyncio.create_task(quiet.run(lambda text: emit_status("NOTIFY:" + text)))
 
@@ -440,6 +443,15 @@ async def api_photo(request: Request) -> JSONResponse:
     _llm.emit_artifact("VISUAL", {"type": "image", "id": info["image_id"], "caption": info["title"]})
     log_event("photo_added", chars=info["chars"])
     return JSONResponse(info)
+
+
+@app.get("/api/stats")
+async def api_stats(request: Request) -> JSONResponse:
+    """The week panel in the app: time at the laptop by mode, study, cards, to-dos done, streak."""
+    if not _authorised(request):
+        return _deny()
+    from arya.core import activity
+    return JSONResponse(await asyncio.to_thread(activity.week_stats))
 
 
 @app.post("/api/upload")
