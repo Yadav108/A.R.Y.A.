@@ -37,6 +37,7 @@
              border:1px solid var(--line); border-radius:12px; padding:9px 12px; max-height:120px; }
   textarea:focus { outline:2px solid var(--accent); outline-offset:-1px; }
   #unpaired { display:none; padding:40px 24px; text-align:center; color:var(--muted); }
+  #cam, #clip { padding:7px 10px; flex:none; }
   #modes { display:flex; gap:6px; padding:8px 16px 0; }
   #modes button { flex:1; padding:6px 0; font-size:14px; }
   #modes button[aria-pressed="true"] { background:var(--me); border-color:var(--me); color:#fff; }
@@ -61,6 +62,10 @@
   <button data-say="Pause the music">Pause music</button>
 </div>
 <form id="f" autocomplete="off">
+  <button type="button" id="cam" aria-label="Take a photo" title="Take a photo">📷</button>
+  <button type="button" id="clip" aria-label="Send a file" title="Send a document, photo, audio or video">📎</button>
+  <input type="file" id="camIn" accept="image/*" capture="environment" hidden>
+  <input type="file" id="fileIn" hidden accept=".pdf,.docx,.pptx,.txt,.md,.png,.jpg,.jpeg,.webp,.gif,.bmp,.mp3,.m4a,.wav,.ogg,.flac,.aac,.mp4,.mkv,.webm,.mov,.avi,.wmv,image/*,audio/*,video/*">
   <textarea id="t" rows="1" maxlength="1000" placeholder="Ask ARYA…" enterkeyhint="send"></textarea>
   <button class="primary" id="send" type="submit">Send</button>
 </form>
@@ -172,6 +177,48 @@ $("f").addEventListener("submit", (e) => { e.preventDefault(); const t = $("t");
 $("t").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("f").requestSubmit(); } });
 $("t").addEventListener("input", (e) => { e.target.style.height = ""; e.target.style.height = e.target.scrollHeight + "px"; });
 document.querySelectorAll("[data-say]").forEach((b) => b.addEventListener("click", () => send(b.dataset.say)));
+// ── Sending a photo or file TO ARYA (the phone never reads the laptop's files) ──
+const KINDS = {
+  document: [".pdf", ".docx", ".pptx", ".txt", ".md"],
+  photo: [".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"],
+  recording: [".mp3", ".m4a", ".wav", ".ogg", ".flac", ".aac", ".mp4", ".mkv", ".webm", ".mov", ".avi", ".wmv"],
+};
+const MAX_MB = { document: 50, photo: 15, recording: 400 };
+function kindOf(name) {
+  const ext = (name.match(/\.[^.]+$/) || [""])[0].toLowerCase();
+  return Object.keys(KINDS).find((k) => KINDS[k].includes(ext)) || null;
+}
+function upload(file) {
+  if (!file || busy) return;
+  let name = file.name || "photo.jpg";
+  if (!/\.[^.]+$/.test(name) && file.type.startsWith("image/")) name += ".jpg";
+  const kind = kindOf(name);
+  if (!kind) { add("sys", "I can take PDFs, Word, PowerPoint, text, photos, audio and video."); return; }
+  if (file.size > MAX_MB[kind] * 1024 * 1024) { add("sys", `That file is larger than ${MAX_MB[kind]} MB.`); return; }
+  const note = add("me", (kind === "photo" ? "📷 " : "📎 ") + name);
+  const status = add("sys", "Sending…");
+  const xhr = new XMLHttpRequest();
+  xhr.open("POST", "/api/upload?name=" + encodeURIComponent(name));
+  xhr.setRequestHeader("X-ARYA", "1");
+  xhr.upload.onprogress = (e) => { if (e.lengthComputable) status.textContent = `Sending… ${Math.round(100 * e.loaded / e.total)}%`; };
+  xhr.onload = () => {
+    let info = {};
+    try { info = JSON.parse(xhr.responseText); } catch (e) {}
+    if (xhr.status === 401) { status.remove(); note.remove(); return showUnpaired(); }
+    if (xhr.status !== 200) { status.textContent = info.error || "Couldn't read that file."; return; }
+    status.remove();
+    if (info.kind === "photo") send(info.chars >= 80 ? "Explain the photo I just added." : "What's in the photo I just added?");
+    else if (info.kind === "document") send("Summarize the document I just added.");
+    else if (info.kind === "recording") add("sys", `Transcribing ${info.title} (${info.minutes} min). I'll tell you here when it's ready.`);
+  };
+  xhr.onerror = () => { status.textContent = "I can't reach the laptop. Is it awake and on the same Wi-Fi?"; };
+  xhr.send(file);
+}
+$("cam").addEventListener("click", () => $("camIn").click());
+$("clip").addEventListener("click", () => $("fileIn").click());
+$("camIn").addEventListener("change", (e) => { upload(e.target.files[0]); e.target.value = ""; });
+$("fileIn").addEventListener("change", (e) => { upload(e.target.files[0]); e.target.value = ""; });
+
 document.querySelectorAll("[data-mode]").forEach((b) => b.addEventListener("click", async () => {
   try {
     const r = await api("/api/mode", { mode: b.dataset.mode });
