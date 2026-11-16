@@ -1005,7 +1005,7 @@ async def _dispatch(message: str, wake_triggered: bool = False, announce_transcr
         wake_engine.end_conversation()
         _resume_music()
         if announce_transcript:
-            await _send_all(f"TRANSCRIPT:{message}")
+            await _send_all(f"TRANSCRIPT:{_as_heard(message)}")
         await _send_all("ARYA_DONE")
         return
 
@@ -1030,7 +1030,7 @@ async def _run_turn(message: str, wake_triggered: bool, announce_transcript: boo
                 return
 
             if announce_transcript:
-                await _send_all(f"TRANSCRIPT:{message}")
+                await _send_all(f"TRANSCRIPT:{_as_heard(message)}")
 
             closing = None if policy.has_pending() else _classify_closing(message)
             if closing in ("end", "thanks"):
@@ -1089,6 +1089,12 @@ async def speak_on_laptop(text: str, sound: bytes, shown: str) -> None:
         finally:
             wake_engine.set_speaking(False)
             await _send_all("ARYA_DONE")
+
+
+def _as_heard(message: str) -> str:
+    """The transcript shown in the app: what you said ('Kal ek bajhe mujhe yaad dilana'), not ARYA's English."""
+    from arya.core import language
+    return language.said(message) or message
 
 
 async def _maybe_suggest_mode(message: str) -> None:

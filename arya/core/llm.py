@@ -92,6 +92,12 @@ if ARYA_MODE not in ("offline", "cloud"):
 
 # True while serving a request the user explicitly sent to the cloud.
 _cloud_turn: ContextVar[bool] = ContextVar("_cloud_turn", default=False)
+_turn_language: ContextVar[str] = ContextVar("_turn_language", default="en")     # "hinglish" (arya/core/language.py)
+
+
+def _language_rule() -> str:
+    from arya.core import language
+    return language.prompt_rule(_turn_language.get())
 
 # "Ask the cloud, explain …" / "Use the cloud to …" / "… — ask the cloud."
 _CLOUD_PREFIX = re.compile(
@@ -221,6 +227,7 @@ def _system_prompt(with_tools: bool = False) -> str:
         # The clock comes after the fixed rules: everything before it is identical between turns,
         # so the local model reuses its cached reading of it instead of re-reading the whole prompt.
         + f"Current local date and time: {now}. Home city: {city}.\n"
+        + _language_rule()                     # Hinglish for this turn (after the clock: the cached part stays the same)
         + (
             "Only call tools when the user asks for an action or live data. "
             "You may chain several tool calls to finish a multi-part request. "
@@ -2297,6 +2304,7 @@ def _cloud_system_prompt() -> str:
     return (
         "You are a voice assistant. Today is " + now + ". Your reply is spoken aloud: answer in one to "
         "four short sentences, no markdown, lists or emojis, numbers said the way a person would."
+        + _language_rule()
     )
 
 
@@ -2309,7 +2317,15 @@ async def stream_with_tools(message: str):
 
     pending = policy.take_pending()
     policy.begin_turn(message)
-    from arya.core import modes
+    from arya.core import language, modes
+    _turn_language.set(language.turn_language(message))                # Hinglish request -> Hinglish answer
+    switched_language = language.handle(message) if language.matches(message) else None
+    if switched_language:
+        print("Instant answer: language")
+        save_message("user", message)
+        save_message("assistant", switched_language)
+        yield switched_language
+        return
     if pending is not None and pending.tool == "switch_mode":       # "Sounds like work — switch?" → yes / no
         answer = policy.parse_yes_no(message)
         if answer is not None:
@@ -3051,6 +3067,10 @@ async def _clean_stream(inner):
         last = None
         async for sentence in inner:
             sentence = plain_text(latex_to_text(_guard_claim(sentence)))   # ζ, ωₙ² on screen; no LaTeX/markdown
+            if _turn_language.get() == "hinglish":
+                from arya.core import language
+                if language.has_devanagari(sentence):              # the English voice can't read Devanagari
+                    sentence = language.romanize(sentence)
             if sentence == _NOT_DONE and last == _NOT_DONE:
                 continue            # say it once, not once per sentence
             last = sentence
