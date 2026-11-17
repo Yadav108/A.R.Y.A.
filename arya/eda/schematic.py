@@ -1,0 +1,268 @@
+"""
+circuit.json -> KiCad schematic (roadmap K2). One sheet per block (Power, MCU, USB …) under the project's root
+sheet; parts are KiCad's real library symbols, and every pin is connected by a label at its end instead of a
+drawn wire — electrically exact (kicad-cli's netlist matches circuit.json), tidy enough to read, and easy to
+turn into wires in KiCad if you like.
+
+  power nets (GND, +3V3 …)       -> KiCad power symbols (global)
+  nets shared between blocks    -> global labels
+  nets inside one block         -> local labels
+  "NC" pins                      -> no-connect flags
+  a supply only a connector feeds -> a PWR_FLAG, so ERC knows it's powered
+
+Your edits win: ARYA remembers a fingerprint of each sheet it wrote. A sheet you changed in KiCad since then is
+never overwritten — it's reported as kept, and the new version is written next to it as <block>.arya.kicad_sch.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+import uuid
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+
+from arya.eda import kicad
+from arya.eda import symbols as S
+from arya.eda.circuit import NC, Circuit, is_power_net
+
+GRID = 2.54
+STATE = ".arya-generated.json"
+
+
+def _u() -> str:
+    return str(uuid.uuid4())
+
+
+def _snap(v: float) -> float:
+    return round(round(v / GRID) * GRID, 2)
+
+
+def _font(extra: str = "") -> str:
+    return f"(effects (font (size 1.27 1.27)){(' ' + extra) if extra else ''})"
+
+
+def block_file(block: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", block.lower()).strip("-") + ".kicad_sch"
+
+
+@dataclass
+class Sheet:
+    name: str
+    file: str
+    uuid: str = field(default_factory=_u)
+    parts: list = field(default_factory=list)
+
+
+def _extent(sym: S.Symbol, unit: int) -> tuple[float, float]:
+    pins = [p for p in sym.pins if p.unit in (0, unit)]
+    if not pins:
+        return 5.08, 5.08
+    return max(abs(p.x) for p in pins) + 2.54, max(abs(p.y) for p in pins) + 2.54
+
+
+_LABEL_ANGLE = {0: 180, 180: 0, 90: 270, 270: 90}        # point away from the part
+STUB = 5.08                                               # a short wire from each pin, the label at its end
+# Which way is "away from the part" for a pin (its symbol angle), in sheet coordinates (y grows downwards).
+_OUT = {0: (-1, 0), 180: (1, 0), 90: (0, 1), 270: (0, -1)}
+# Power symbols drawn pointing away: supply arrows point up at 0°, ground hangs down at 0° (rotation is CCW).
+_SUPPLY_ROT = {(-1, 0): 90, (1, 0): 270, (0, 1): 180, (0, -1): 0}
+_GROUND_ROT = {(-1, 0): 270, (1, 0): 90, (0, 1): 0, (0, -1): 180}
+
+
+def _wire(x1: float, y1: float, x2: float, y2: float) -> str:
+    return f'(wire (pts (xy {x1} {y1}) (xy {x2} {y2})) (stroke (width 0) (type default)) (uuid "{_u()}"))'
+
+
+def _label(kind: str, net: str, x: float, y: float, pin_angle: int) -> str:
+    angle = _LABEL_ANGLE.get(pin_angle % 360, 0)
+    justify = "right" if angle in (180, 270) else "left"
+    if kind == "global":
+        return (f'(global_label {S.q(net)} (shape bidirectional) (at {x} {y} {angle}) (fields_autoplaced yes) '
+                f'{_font(f"(justify {justify})")} (uuid "{_u()}"))')
+    return f'(label {S.q(net)} (at {x} {y} {angle}) (fields_autoplaced yes) {_font(f"(justify {justify} bottom)")} (uuid "{_u()}"))'
+
+
+def _instance(lib_id: str, ref: str, value: str, footprint: str, x: float, y: float, unit: int, pin_numbers: list[str],
+              project: str, path: str, angle: int = 0, hidden_ref: bool = False, datasheet: str = "",
+              ref_at: tuple[float, float] | None = None, value_at: tuple[float, float] | None = None,
+              justify: str = "") -> str:
+    pins = " ".join(f'(pin {S.q(n)} (uuid "{_u()}"))' for n in pin_numbers)
+    rx, ry = ref_at or (x, _snap(y - 3.81))
+    vx, vy = value_at or (x, _snap(y + 3.81))
+    shown = _font(f"(justify {justify})" if justify else "")
+    return (f'(symbol (lib_id {S.q(lib_id)}) (at {x} {y} {angle}) (unit {unit}) (exclude_from_sim no) (in_bom '
+            f'{"no" if hidden_ref else "yes"}) (on_board {"no" if hidden_ref else "yes"}) (dnp no) (uuid "{_u()}") '
+            f'(property "Reference" {S.q(ref)} (at {rx} {ry} 0) {_font("hide") if hidden_ref else shown}) '
+            f'(property "Value" {S.q(value)} (at {vx} {vy} 0) {shown}) '
+            f'(property "Footprint" {S.q(footprint)} (at {x} {y} 0) {_font("hide")}) '
+            f'(property "Datasheet" {S.q(datasheet)} (at {x} {y} 0) {_font("hide")}) '
+            f'{pins} (instances (project {S.q(project)} (path {S.q(path)} (reference {S.q(ref)}) (unit {unit})))))')
+
+
+def _sheet_text(body: list[str], lib_symbols: dict[str, list], sheet_uuid: str, title: str) -> str:
+    return (f'(kicad_sch (version 20250114) (generator "arya") (generator_version "9.0") (uuid "{sheet_uuid}")\n'
+            f'  (paper "A3")\n  (title_block (title {S.q(title)}) (date "{datetime.now():%Y-%m-%d}") '
+            f'(comment 1 "Generated by ARYA from circuit.json — labels instead of wires"))\n'
+            f'  (lib_symbols {" ".join(S.dump(s) for s in lib_symbols.values())})\n  '
+            + "\n  ".join(body) + "\n)\n")
+
+
+@dataclass
+class Result:
+    written: list[str] = field(default_factory=list)
+    kept: list[str] = field(default_factory=list)       # sheets you edited: not overwritten
+
+
+def _fingerprint(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else ""
+
+
+def _read_state(p: kicad.Project) -> dict:
+    try:
+        return json.loads((p.folder / STATE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def generate(p: kicad.Project, c: Circuit) -> Result:
+    """Write the root sheet and one sheet per block. Assumes validate() found no errors."""
+    state = _read_state(p)
+    owned = state.get("sheets", {})
+    root_uuid = state.get("root_uuid") or _u()
+    project = p.name
+    result = Result()
+
+    nets_by_block: dict[str, set[str]] = {}
+    for b, parts in c.blocks.items():
+        nets_by_block[b] = {n for part in parts for n in part.pins.values() if n != NC}
+    shared = {n for b, ns in nets_by_block.items() for n in ns
+              if sum(n in other for other in nets_by_block.values()) > 1}
+    driven = set()                                          # nets with a power output somewhere
+    for part in c.parts:
+        sym = S.load(part.lib, part.name)
+        for key, net in part.pins.items():
+            if any(pin.etype == "power_out" for pin in sym.pins_for(key)):
+                driven.add(net)
+    flagged: set[str] = set()
+
+    sheets: list[Sheet] = []
+    for b, parts in c.blocks.items():
+        sheet = Sheet(b, block_file(b), uuid=owned.get(block_file(b), {}).get("uuid") or _u())
+        sheets.append(sheet)
+        path = f"/{root_uuid}/{sheet.uuid}"
+        lib_symbols: dict[str, list] = {}
+        body: list[str] = []
+        x0, y0, x, y, row_h = 40.64, 50.8, 40.64, 50.8, 0.0
+        body.append(f'(text {S.q(b)} (exclude_from_sim no) (at 25.4 30.48 0) (effects (font (size 3 3) bold) (justify left)) (uuid "{_u()}"))')
+        pwr_n = 0
+        flags: list[str] = []
+        for part in parts:
+            sym = S.load(part.lib, part.name)
+            lib_symbols.setdefault(sym.lib_id, sym.sexpr)
+            nets = {}
+            for key, net in part.pins.items():
+                for pin in sym.pins_for(key):
+                    nets[pin.number] = net
+            for unit in range(1, sym.units + 1):
+                upins = [pn for pn in sym.pins if pn.unit in (0, unit)]
+                side = [pn for pn in upins if pn.angle % 180 == 0]
+                label_room = max((len(nets.get(pn.number, "")) * 1.3 for pn in side), default=0) + STUB + 2.54
+                w = max((abs(pn.x) for pn in upins), default=2.54) + (label_room if side else 6.35)
+                h = max((abs(pn.y) for pn in upins), default=2.54) + STUB + 7.62
+                if x + 2 * w > 390:                          # next row
+                    x, y, row_h = x0, _snap(y + row_h + 12.7), 0.0
+                cx, cy = _snap(x + w), _snap(y + h)
+                top = max((pn.y for pn in upins), default=0)
+                if side:                                     # an IC: name and value above it, clear of its pins
+                    top_y = cy - top - (STUB + 2.54 if any(pn.angle == 270 for pn in upins) else 2.54)
+                    left = _snap(cx - max((abs(pn.x) for pn in side), default=2.54) + 2.54)
+                    fields = dict(ref_at=(left, _snap(top_y - 2.54)), value_at=(left, _snap(top_y)), justify="left")
+                else:                                        # R, C, LED upright: name and value to the right
+                    fields = dict(ref_at=(round(cx + 2.54, 2), round(cy - 1.27, 2)),
+                                  value_at=(round(cx + 2.54, 2), round(cy + 1.27, 2)), justify="left")
+                body.append(_instance(sym.lib_id, part.ref, part.value, part.footprint, cx, cy, unit,
+                                      sorted({pn.number for pn in upins}, key=lambda s: (len(s), s)), project, path,
+                                      datasheet=sym.props.get("Datasheet", "") if sym.props.get("Datasheet") != "~" else "",
+                                      **fields))
+                for pn in upins:
+                    if pn.unit == 0 and unit > 1:
+                        continue                            # shared pins: connected once, on unit 1
+                    px, py = round(cx + pn.x, 2), round(cy - pn.y, 2)
+                    net = nets.get(pn.number)
+                    if net is None or net == NC:
+                        body.append(f'(no_connect (at {px} {py}) (uuid "{_u()}"))')
+                        continue
+                    out = _OUT.get(pn.angle % 360, (1, 0))
+                    ex, ey = round(px + out[0] * STUB, 2), round(py + out[1] * STUB, 2)
+                    body.append(_wire(px, py, ex, ey))
+                    if is_power_net(net):
+                        psym = S.load("power", net)
+                        lib_symbols.setdefault(psym.lib_id, psym.sexpr)
+                        pwr_n += 1
+                        ground = bool(re.match(r"(?i)gnd|vss|earth", net))
+                        rot = (_GROUND_ROT if ground else _SUPPLY_ROT)[out]
+                        body.append(_instance(psym.lib_id, f"#PWR{len(sheets)}{pwr_n:03d}", net, "", ex, ey, 1,
+                                              [psym.pins[0].number], project, path, angle=rot, hidden_ref=True,
+                                              value_at=(ex + out[0] * 5.08, ey + out[1] * 5.08 + (2.54 if out[1] == 0 else 0))))
+                        if net not in driven and net not in flagged:
+                            flagged.add(net)                 # no regulator output drives it: it comes from outside
+                            flags.append(net)
+                    else:
+                        body.append(_label("global" if net in shared else "local", net, ex, ey, pn.angle))
+                x = _snap(cx + w)
+                row_h = max(row_h, 2 * h)
+        for i, net in enumerate(flags):                     # a row of "this supply is powered" flags, bottom left
+            fx, fy = _snap(25.4 + i * 15.24), 254.0
+            psym, fsym = S.load("power", net), S.load("power", "PWR_FLAG")
+            lib_symbols.setdefault(psym.lib_id, psym.sexpr)
+            lib_symbols.setdefault(fsym.lib_id, fsym.sexpr)
+            pwr_n += 2
+            body.append(_instance(psym.lib_id, f"#PWR{len(sheets)}{pwr_n - 1:03d}", net, "", fx, fy, 1,
+                                  [psym.pins[0].number], project, path, hidden_ref=True))
+            body.append(_instance(fsym.lib_id, f"#FLG{len(sheets)}{pwr_n:03d}", "PWR_FLAG", "", fx, fy, 1,
+                                  [fsym.pins[0].number], project, path, angle=180, hidden_ref=True))
+        text = _sheet_text(body, lib_symbols, sheet.uuid, f"{p.title} — {b}")
+        target = p.folder / sheet.file
+        known = owned.get(sheet.file, {}).get("sha")
+        if target.exists() and known and _fingerprint(target) != known:
+            alt = p.folder / sheet.file.replace(".kicad_sch", ".arya.kicad_sch")
+            alt.write_text(text, encoding="utf-8")
+            result.kept.append(b)
+            continue
+        if target.exists() and not known:
+            alt = p.folder / sheet.file.replace(".kicad_sch", ".arya.kicad_sch")
+            alt.write_text(text, encoding="utf-8")
+            result.kept.append(b)
+            continue
+        target.write_text(text, encoding="utf-8")
+        owned[sheet.file] = {"uuid": sheet.uuid, "sha": _fingerprint(target)}
+        result.written.append(b)
+
+    # The root sheet: one sheet symbol per block.
+    body, sx, sy = [], 25.4, 38.1
+    for i, sheet in enumerate(sheets):
+        w, h = 50.8, 25.4
+        body.append(
+            f'(sheet (at {sx} {sy}) (size {w} {h}) (exclude_from_sim no) (in_bom yes) (on_board yes) (dnp no) '
+            f'(fields_autoplaced yes) (stroke (width 0.1524) (type solid)) (fill (color 0 0 0 0.0000)) '
+            f'(uuid "{sheet.uuid}") '
+            f'(property "Sheetname" {S.q(sheet.name)} (at {sx} {_snap(sy - 0.7)} 0) {_font("(justify left bottom)")}) '
+            f'(property "Sheetfile" {S.q(sheet.file)} (at {sx} {round(sy + h + 0.6, 2)} 0) {_font("(justify left top)")}) '
+            f'(instances (project {S.q(project)} (path "/{root_uuid}" (page "{i + 2}")))))')
+        sx += 63.5
+        if sx > 330:
+            sx, sy = 25.4, sy + 38.1
+    root_text = (f'(kicad_sch (version 20250114) (generator "arya") (generator_version "9.0") (uuid "{root_uuid}")\n'
+                 f'  (paper "A4")\n  (title_block (title {S.q(p.title.title())}) (date "{datetime.now():%Y-%m-%d}"))\n'
+                 '  (lib_symbols)\n  ' + "\n  ".join(body) + '\n  (sheet_instances (path "/" (page "1")))\n)\n')
+    known_root = state.get("root_sha")
+    if p.sch.exists() and known_root and _fingerprint(p.sch) != known_root and not kicad.schematic_is_empty(p):
+        result.kept.append("(root sheet)")
+    else:
+        p.sch.write_text(root_text, encoding="utf-8")
+        state["root_sha"] = _fingerprint(p.sch)
+    state.update(root_uuid=root_uuid, sheets=owned)
+    (p.folder / STATE).write_text(json.dumps(state, indent=2), encoding="utf-8")
+    return result
