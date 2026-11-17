@@ -23,7 +23,8 @@ class AryaService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Notifier.channels(this)
-        val note = Notifier.connection(this, "Connecting…")
+        // Started again (app opened, notification tapped): show the real state, not "Connecting…" again.
+        val note = Notifier.connection(this, currentStatus)
         ServiceCompat.startForeground(this, Notifier.CONNECTION_ID, note,
             if (Build.VERSION.SDK_INT >= 34) ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING else 0)
         if (!running) {
@@ -40,6 +41,7 @@ class AryaService : Service() {
     }
 
     private fun status(text: String) {
+        currentStatus = text
         try {
             NotificationManagerCompat.from(this).notify(Notifier.CONNECTION_ID, Notifier.connection(this, text))
         } catch (e: SecurityException) { /* notifications not allowed */ }
@@ -55,11 +57,14 @@ class AryaService : Service() {
             if (!prefs.paired || urls.isEmpty()) { stopSelf(); return }
             val base = urls[index % urls.size]
             try {
-                val r = Api.waitFor(base, prefs.key, prefs.lastId)
                 if (!connected) {
+                    // A quick hello first: the long wait below can take 50 s to answer when nothing happens, and
+                    // the status line would say "Connecting…" all that time although the laptop is reachable.
+                    Api.hello(base, prefs.key)
                     status("Connected to your laptop" + if (base.contains("://100.")) " (Tailscale)" else " (home Wi-Fi)")
                     connected = true
                 }
+                val r = Api.waitFor(base, prefs.key, prefs.lastId)
                 backoff = 2_000L
                 val items = r.optJSONArray("items")
                 val kinds = NOTIFY
@@ -91,6 +96,7 @@ class AryaService : Service() {
     }
 
     companion object {
+        @Volatile var currentStatus = "Connecting…"
         val NOTIFY = setOf("reminder", "timer", "alarm", "calendar", "meeting", "briefing", "wrapup", "ring", "message")
 
         fun start(ctx: Context) {

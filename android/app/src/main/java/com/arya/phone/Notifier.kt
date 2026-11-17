@@ -17,7 +17,7 @@ import org.json.JSONObject
  *  daily (briefing, wrap-up), messages (sent from the laptop, find my phone), connection (the quiet, permanent
  *  "connected" line Android requires for a background service). */
 object Notifier {
-    const val CH_REMINDERS = "reminders"
+    const val CH_REMINDERS = "reminders_v2"
     const val CH_CALENDAR = "calendar"
     const val CH_DAILY = "daily"
     const val CH_MESSAGES = "messages"
@@ -28,13 +28,14 @@ object Notifier {
 
     fun channels(ctx: Context) {
         val nm = ctx.getSystemService(NotificationManager::class.java)
-        val alarmSound = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+        // v1 had the alarm sound on the channel, and some phones (realme UI) make new channels silent anyway.
+        // The sound is now played by the app (playAlarm), so the channel only shows and vibrates.
+        nm.deleteNotificationChannel("reminders")
         val reminders = NotificationChannel(CH_REMINDERS, "Reminders, timers, alarms",
             NotificationManager.IMPORTANCE_HIGH).apply {
             enableVibration(true)
             vibrationPattern = longArrayOf(0, 400, 200, 400, 200, 400)
-            setSound(alarmSound, AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ALARM)
-                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build())
+            setSound(null, null)
         }
         nm.createNotificationChannels(listOf(
             reminders,
@@ -87,17 +88,36 @@ object Notifier {
             android.content.pm.PackageManager.PERMISSION_GRANTED) {
             NotificationManagerCompat.from(ctx).notify((id % Int.MAX_VALUE).toInt(), b.build())
         }
-        if (kind == "ring") ring(ctx)
+        when (kind) {
+            "ring" -> playAlarm(ctx, 10_000, respectSilent = false)       // find my phone: always audible
+            in SNOOZABLE -> playAlarm(ctx, 8_000, respectSilent = true)
+        }
     }
 
-    /** Find my phone: the alarm sound for 10 seconds, even on silent-ish settings. */
-    private fun ring(ctx: Context) {
+    @Volatile private var playing: android.media.Ringtone? = null
+
+    /** The phone's alarm tone for a few seconds, at alarm volume. A reminder respects the phone's mode: silent ->
+     *  no sound, vibrate -> the notification's vibration only. Snooze / Done stop it at once. */
+    private fun playAlarm(ctx: Context, millis: Long, respectSilent: Boolean) {
+        if (respectSilent) {
+            val audio = ctx.getSystemService(android.media.AudioManager::class.java)
+            if (audio.ringerMode != android.media.AudioManager.RINGER_MODE_NORMAL) return
+        }
         try {
-            val r = RingtoneManager.getRingtone(ctx, RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM))
-            r.audioAttributes = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ALARM).build()
+            stopSound()
+            val r = RingtoneManager.getRingtone(ctx, RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+                ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)) ?: return
+            r.audioAttributes = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ALARM)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build()
             r.play()
-            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ r.stop() }, 10_000)
+            playing = r
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ if (playing === r) stopSound() }, millis)
         } catch (e: Exception) { /* no ringtone available */ }
+    }
+
+    fun stopSound() {
+        try { playing?.stop() } catch (e: Exception) { }
+        playing = null
     }
 
     fun connection(ctx: Context, text: String) = NotificationCompat.Builder(ctx, CH_CONNECTION)

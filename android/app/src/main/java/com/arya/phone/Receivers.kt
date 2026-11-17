@@ -13,6 +13,7 @@ class ActionReceiver : BroadcastReceiver() {
         val action = intent.getStringExtra("action") ?: return
         val prefs = Prefs(context)
         val pending = goAsync()
+        Notifier.stopSound()
         Notifier.cancel(context, id)
         thread {
             var reply = "Couldn't reach the laptop"
