@@ -202,6 +202,9 @@ def quick_verdict(text: str, pending_confirmation: bool = False) -> bool | None:
         if (modes.matches(text) or tasks.matches(text) or intercom.matches(text) or worldclock.matches(text)
                 or quiet.matches(text) or remote.matches(text) or activity.matches(text)
                 or capture.matches(text) or webcam.matches(text)):
+            return True
+        from arya.eda import projects as eda
+        if eda.matches(text):
             return True                   # "work mode", "what's on my list?"
     except Exception:
         pass

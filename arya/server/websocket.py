@@ -230,6 +230,9 @@ async def preload_models() -> None:
     from arya.core import quiet                      # meeting mode, and quiet during Teams / Zoom calls
     asyncio.create_task(quiet.run(lambda text: emit_status("NOTIFY:" + text)))
 
+    from arya.eda import projects as eda             # KiCad: checks each time you save, speaks only about new errors
+    asyncio.create_task(eda.run(announce, busy=_voice_lock.locked))
+
     from arya.core import capture                    # "record a voice note" … "stop recording" (the mic is the engine's)
     capture.set_engine(wake_engine)
     capture.set_announcer(announce)
