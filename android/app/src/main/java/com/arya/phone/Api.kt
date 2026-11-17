@@ -38,6 +38,25 @@ object Api {
     fun waitFor(base: String, key: String, after: Long): JSONObject =
         call(request(base, "/api/wait?after=$after&timeout=50", key).get().build())
 
+    /** One spoken request: the WAV up, then ARYA's answer as it happens — one JSON object per line
+     *  ({"type": "heard" | "say" | "done", …}), handed to [onEvent] on this (background) thread. */
+    fun voice(base: String, key: String, wav: ByteArray, onEvent: (JSONObject) -> Unit) {
+        val req = request(base, "/api/voice", key)
+            .post(wav.toRequestBody("audio/wav".toMediaType())).build()
+        client.newCall(req).execute().use { r ->
+            if (r.code == 401) throw Unpaired()
+            if (!r.isSuccessful) {
+                val msg = try { JSONObject(r.body?.string() ?: "{}").optString("error") } catch (e: Exception) { "" }
+                throw java.io.IOException(msg.ifEmpty { "HTTP ${r.code}" })
+            }
+            val source = r.body!!.source()
+            while (true) {
+                val line = source.readUtf8Line() ?: break
+                if (line.isNotBlank()) onEvent(JSONObject(line))
+            }
+        }
+    }
+
     fun action(base: String, key: String, id: Long, action: String, minutes: Int = 10): JSONObject {
         val body = JSONObject().put("id", id).put("action", action).put("minutes", minutes).toString()
         return call(request(base, "/api/action", key)

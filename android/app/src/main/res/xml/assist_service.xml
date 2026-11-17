@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ARYA as Android's digital assistant: the assistant gesture opens the Talk screen (after unlocking — ARYA can
+     read your calendar and mail, so it isn't offered over the lock screen). -->
+<voice-interaction-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:recognitionService="com.arya.phone.AssistRecognitionService"
+    android:sessionService="com.arya.phone.AssistSessionService"
+    android:supportsAssist="true"
+    android:supportsLaunchVoiceAssistFromKeyguard="false" />

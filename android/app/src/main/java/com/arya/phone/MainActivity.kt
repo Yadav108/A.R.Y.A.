@@ -168,7 +168,22 @@ class MainActivity : Activity() {
             }
         }
         web = w
-        setContentView(w)
+        // 🎙 Talk: the voice screen, floating over the page's top-right corner.
+        val d = resources.displayMetrics.density
+        val talk = Button(this).apply {
+            text = "🎙 Talk"
+            setTextColor(Color.WHITE)
+            background = android.graphics.drawable.GradientDrawable().apply {
+                cornerRadius = 24 * d; setColor(Color.parseColor("#3B6FE0"))
+            }
+            setOnClickListener { startActivity(Intent(this@MainActivity, TalkActivity::class.java)) }
+        }
+        val frame = android.widget.FrameLayout(this)
+        frame.addView(w)
+        frame.addView(talk, android.widget.FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.END
+        ).apply { setMargins(0, (10 * d).toInt(), (10 * d).toInt(), 0) })
+        setContentView(frame)
         // The pairing link logs the page in (it trades the key for a cookie); afterwards the plain address.
         w.loadUrl(if (firstTime && prefs.pairingUrl.isNotEmpty()) prefs.pairingUrl else prefs.urls.first())
     }

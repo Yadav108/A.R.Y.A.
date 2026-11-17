@@ -253,6 +253,7 @@ async def preload_models() -> None:
     from arya.server import phone                    # your phone on home Wi-Fi (only when turned on, Private networks)
     phone.set_turn_handler(phone_turn)
     phone.set_upload_handler(receive_upload)         # photos and files sent from the phone
+    phone.set_voice_handler(phone_voice_turn)        # talking to ARYA in the phone app: heard, then spoken replies
     add_status_listener(phone.note_event)
     asyncio.create_task(phone.run())
 
@@ -1123,6 +1124,57 @@ async def _maybe_suggest_mode(message: str) -> None:
         print(f"Mode: suggesting {target}")
         policy.offer("switch_mode", {"mode": target}, question)
         await _say(question)
+
+
+PHONE_SPOKEN_SENTENCES = MAX_SPOKEN_SENTENCES or 6        # more than this: the rest is text on the phone
+
+
+async def phone_voice_turn(audio) -> AsyncIterator[dict]:
+    """You spoke into the ARYA app (arya/server/phone.py /api/voice): 16 kHz mono float32 audio in; out, as they
+    happen: {"type": "heard"}, then one {"type": "say"} per sentence with ARYA's voice (base64 WAV), then
+    {"type": "done"}. The same Whisper and the same voice as on the laptop, nothing spoken on the laptop; files,
+    clipboard and commands stay blocked for the phone (policy.REMOTE_BLOCKED)."""
+    import base64
+
+    from arya.core import stt
+    started = time.monotonic()
+    text = (await asyncio.to_thread(stt.transcribe_array, audio)).strip()
+    print(f"Phone voice: heard {text[:60]!r} ({time.monotonic() - started:.1f} s)")
+    yield {"type": "heard", "text": text}
+    if not re.search(r"\w", text):
+        yield {"type": "done", "error": "I didn't catch that.", "confirm": False}
+        return
+    refusal = policy.remote_refusal(text)
+    if refusal:
+        audio_out = await _synthesize(refusal)
+        yield {"type": "say", "text": refusal, "audio": base64.b64encode(audio_out).decode() if audio_out else ""}
+        yield {"type": "done", "confirm": False}
+        return
+    spoken = 0
+    async with _voice_lock:
+        flag = policy.remote_turn.set(True)
+        try:
+            async for sentence in stream_with_tools(text):
+                sentence = sentence.strip()
+                if not sentence:
+                    continue
+                item = {"type": "say", "text": sentence, "audio": ""}
+                if spoken < PHONE_SPOKEN_SENTENCES:
+                    audio_out = await _synthesize(sentence)
+                    if audio_out:
+                        item["audio"] = base64.b64encode(audio_out).decode()
+                        item["mime"] = "audio/mpeg" if audio_out[:3] == b"ID3" or audio_out[:2] == b"\xff\xfb" \
+                            else "audio/wav"
+                        spoken += 1
+                        if spoken == 1:
+                            print(f"Phone voice: first sentence after {time.monotonic() - started:.1f} s")
+                yield item
+        except Exception as exc:
+            print(f"Phone voice pipeline error: {exc}")
+            yield {"type": "say", "text": _error_message(exc), "audio": ""}
+        finally:
+            policy.remote_turn.reset(flag)
+    yield {"type": "done", "confirm": policy.has_pending()}
 
 
 async def phone_turn(message: str) -> dict:
