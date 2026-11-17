@@ -50,6 +50,7 @@ _APP_ALIASES: dict[str, str] = {
     "explorer": "explorer.exe",
     "file explorer": "explorer.exe",
     "windows explorer": "explorer.exe",
+    "window explorer": "explorer.exe",           # as Whisper often writes it
     "files": "explorer.exe",
     "word": "WINWORD.EXE",
     "microsoft word": "WINWORD.EXE",
