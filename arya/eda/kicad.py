@@ -171,10 +171,18 @@ def create(spoken: str) -> Project:
 
 def _new_board(path: Path) -> None:
     """An empty board written by KiCad's own Python, so it's exactly what KiCad expects."""
+    import time
     py = kicad_bin() / "python.exe"
     script = "import pcbnew, sys\nb = pcbnew.BOARD()\npcbnew.SaveBoard(sys.argv[1], b)\n"
-    subprocess.run([str(py), "-I", "-c", script, str(path)], check=True, capture_output=True,
-                   timeout=CLI_TIMEOUT_S, creationflags=_NO_WINDOW)
+    for attempt in (1, 2):                         # KiCad's Python can fail to start when memory is tight
+        r = subprocess.run([str(py), "-I", "-c", script, str(path)], capture_output=True, text=True,
+                           timeout=CLI_TIMEOUT_S, creationflags=_NO_WINDOW)
+        if r.returncode == 0 and path.exists():
+            return
+        if attempt == 1:
+            time.sleep(3)
+    raise RuntimeError(f"KiCad couldn't create the board (exit {r.returncode & 0xFFFFFFFF:#x}: "
+                       f"{(r.stderr or r.stdout).strip()[-160:]})")
 
 
 # ── Checks ────────────────────────────────────────────────────────────────────

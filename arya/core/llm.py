@@ -2556,6 +2556,17 @@ async def stream_with_tools(message: str):
                 yield sentence
             return
         pending = None
+    if pending is not None and pending.tool == "eda_cloud":          # "use the cloud for this board project?"
+        answer = policy.parse_yes_no(message)
+        if answer is not None:
+            log_event("cloud_design_accepted" if answer else "cloud_design_declined", source="kicad")
+            from arya.eda import projects as _eda
+            reply = _eda.answer_consent(pending.args, answer)
+            save_message("user", message)
+            save_message("assistant", reply)
+            yield reply
+            return
+        pending = None
     if pending is not None and pending.tool == "screen_vision":
         answer = policy.parse_yes_no(message)
         if answer is not None:

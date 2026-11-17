@@ -63,6 +63,10 @@ routes:
   - {say: "list my board projects", route: kicad}
   - {say: "back to the drawing board", route: model}
   - {say: "what's a PCB?", route: model}
+  # KiCad design (K2)
+  - {say: "design the circuit", route: kicad, addressed: true}
+  - {say: "check the circuit", route: kicad, addressed: true}
+  - {say: "draw the circuit for an RC low-pass filter", route: model}   # a study diagram, not a KiCad design
   # Field limits (log 2026-11-16/17)
   - {say: "Hurry up, pause the music.", route: media keys, action: media_key, addressed: true}   # from-log
   - {say: "open window explorer.", route: open app, action: open_app, addressed: true}         # from-log

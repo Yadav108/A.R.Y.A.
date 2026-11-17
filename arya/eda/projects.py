@@ -89,11 +89,47 @@ _LOG = re.compile(r"^\W*(?:add\s+to|note\s+in|put\s+in|write\s+in|log\s+in)\s+(?
                   r"^\W*open\s+question\s*[:,-]\s*(?P<q>.+?)\s*$", re.IGNORECASE)
 _LIST = re.compile(r"\b(?:list|what\s+are|show\s+me|which\s+are)\s+(?:all\s+)?(?:of\s+)?my\s+(?:kicad|board|pcb|electronics|"
                    r"hardware)\s+projects\b", re.IGNORECASE)
+_DESIGN = re.compile(r"^\W*(?:please\s+)?(?:(?:can|could)\s+you\s+)?(?:design|draft)\s+(?:me\s+)?(?:the\s+|a\s+|my\s+)?"
+                     r"(?:circuit|schematic|board)(?:\s+from\s+scratch)?(?:\s*(?:for|:|,|-)\s*(?P<what>.+?))?\W*$",
+                     re.IGNORECASE)
+_GENERATE = re.compile(r"^\W*(?:please\s+)?(?:re)?(?:generate|draw|redraw|update)\s+the\s+schematic(?:\s+from\s+(?:the\s+)?"
+                       r"circuit(?:\s+file)?)?\W*$", re.IGNORECASE)
+_VALIDATE = re.compile(r"^\W*(?:please\s+)?(?:check|validate)\s+the\s+circuit(?:\s+file)?\W*$", re.IGNORECASE)
 _THIS = {"", "the", "my", "this", "our", "current", "same"}
+_announce = None                     # set by run(): ARYA's voice, for "the draft is ready"
 
 
 def matches(message: str) -> bool:
-    return any(r.search(message) for r in (_NEW, _OPEN, _CONTINUE, _CHECK, _EXPORT, _LOG, _LIST))
+    return any(r.search(message) for r in (_NEW, _OPEN, _CONTINUE, _CHECK, _EXPORT, _LOG, _LIST, _DESIGN, _GENERATE,
+                                           _VALIDATE))
+
+
+async def _say(text: str) -> None:
+    if _announce is not None:
+        await _announce(text)
+    else:
+        print(f"KiCad: {text}")
+
+
+def start_design(p: kicad.Project, request: str) -> str:
+    from arya.eda import designer
+    asyncio.get_running_loop().create_task(designer.run(p, request, _say))
+    return (f"Designing the {p.title} circuit with the cloud model. A draft usually takes one to three minutes; "
+            "I'll tell you when it's ready.")
+
+
+def answer_consent(args: dict, yes: bool) -> str:
+    """The user's yes/no to "use the cloud for this project?" (called from llm.py's pending-answer handling)."""
+    from arya.eda import designer
+    p = kicad.Project(args["project"], kicad.projects_dir() / args["project"])
+    if not yes:
+        return "Okay, nothing goes to the cloud. Draw it in KiCad and I'll check it for you as you save."
+    designer.set_cloud_ok(p, True)
+    return start_design(p, args.get("request", ""))
+
+
+def _circuit_file(p: kicad.Project):
+    return p.folder / "circuit.json"
 
 
 def _pick(spoken: str | None) -> kicad.Project | None:
@@ -137,6 +173,48 @@ async def handle(message: str, remote: bool = False) -> str | None:
         where = {"Log": "the design log", "Decisions": "the decisions", "Requirements": "the requirements",
                  "Open questions": "the open questions"}[section]
         return f"Added to {where} of {p.title}."
+    m = _DESIGN.match(message)
+    if m:
+        p = active()
+        if p is None:
+            return "Create a project first: say \"new board project called\" and a name, then the requirements."
+        what = (m.group("what") or "").strip()
+        if not what and not kicad._sections(p).get("Requirements"):
+            return (f"Tell me what the {p.title} board must do first, like \"requirement: USB-C powered, ESP32, "
+                    "two buttons\", or say \"design the circuit for\" and describe it.")
+        from arya.core import router
+        from arya.eda import designer
+        if not router.cloud_available():
+            return ("Designing a circuit needs the cloud model, and no cloud key is set up. You can still draw it in "
+                    "KiCad; I'll check it every time you save.")
+        if what:
+            await asyncio.to_thread(kicad.add_to_design, p, "Requirements", what.rstrip("."))
+        if designer.cloud_ok(p):
+            return start_design(p, what)
+        from arya.core import policy
+        return policy.offer("eda_cloud", {"project": p.name, "request": what},
+                            designer.CONSENT_QUESTION.format(title=p.title))
+    if _GENERATE.match(message) or _VALIDATE.match(message):
+        p = active()
+        if p is None or not _circuit_file(p).exists():
+            return "There's no circuit file yet. Say \"design the circuit\" first."
+        from arya.eda import circuit as C
+        from arya.eda import schematic as G
+        try:
+            c = C.Circuit.load(_circuit_file(p))
+        except (ValueError, OSError) as exc:
+            return f"I can't read circuit.json ({type(exc).__name__}). Is it valid JSON?"
+        problems = await asyncio.to_thread(C.validate, c)
+        errs = C.errors(problems)
+        if _VALIDATE.match(message) or errs:
+            if not problems:
+                return f"The {p.title} circuit file checks out: {len(c.parts)} parts, no problems."
+            head = f"{len(errs)} error{'s' * (len(errs) != 1)} and {len(problems) - len(errs)} note{'s' * (len(problems) - len(errs) != 1)}"
+            return f"The circuit file has {head}. First: {(errs or problems)[0]}." + (" Not drawn." if errs else "")
+        gen = await asyncio.to_thread(G.generate, p, c)
+        report = await asyncio.to_thread(kicad.erc, p)
+        kept = f" Kept your edited {', '.join(gen.kept)}." if gen.kept else ""
+        return f"Redrew the {p.title} schematic from the circuit file.{kept} " + kicad.summary(report)
     if _LIST.search(message):
         all_ = kicad.projects()
         if not all_:
@@ -252,6 +330,8 @@ def check_saved(p: kicad.Project, now: float | None = None) -> str | None:
 
 async def run(announce, busy=lambda: False) -> None:
     """Watch the active project while ARYA runs."""
+    global _announce
+    _announce = announce
     if not kicad.available():
         return
     while True:
