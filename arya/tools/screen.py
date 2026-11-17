@@ -200,6 +200,8 @@ async def answer(question: str, text: str, title: str) -> tuple[str, list]:
     import arya.core.llm as llm
     from arya.core.speech_math import latex_to_text
 
+    from arya.core.guard import clean               # a web page on screen can carry instructions aimed at an AI
+    text = clean(text, "the screen")
     passages = await llm.knowledge_for(f"{question} {text[:400]}")
     system = (llm._system_prompt() +
               f"\n\nThe user is looking at a window titled \"{title}\". Its text, read by OCR (may contain "
