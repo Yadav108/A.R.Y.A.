@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ARYA runs on your laptop at a Tailscale address (100.x.y.z, encrypted end to end by WireGuard) or, at home,
+     a Wi-Fi address (192.168.x.x). Neither has a web certificate, so plain HTTP is allowed. The pairing key is
+     still required for every request. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

@@ -324,6 +324,15 @@ def handle(message: str, now: datetime | None = None) -> str | None:
 
 # ── The loop ─────────────────────────────────────────────────────────────────
 
+def _to_phone(kind: str, title: str, text: str) -> None:
+    """The ARYA phone app notifies for these (arya/server/phone.py)."""
+    try:
+        from arya.server import phone
+        phone.push_event(kind, title, text)
+    except Exception as exc:
+        print(f"Nudges: phone push skipped ({type(exc).__name__})")
+
+
 async def run(say, busy) -> None:
     """Started by the server. `say(text)` speaks; `busy()` is True while ARYA is talking or answering."""
     if os.getenv("ARYA_NUDGES", "1") == "0":
@@ -354,12 +363,16 @@ async def run(say, busy) -> None:
                 await asyncio.to_thread(_save, nudger)
                 from arya.core.llm import get_daily_briefing
                 print("Nudge: morning briefing")
-                await say("Good morning. " + await get_daily_briefing())
+                briefing = "Good morning. " + await get_daily_briefing()
+                _to_phone("briefing", "Good morning", briefing)
+                await say(briefing)
                 continue
             text = nudger.check(sensors)
             if text:
                 print(f"Nudge: {text}")
                 await asyncio.to_thread(_save, nudger)
+                if text.startswith("Heads-up:"):                    # a calendar event soon: the phone rings too
+                    _to_phone("calendar", "Coming up", text)
                 await say(text)
         except Exception as exc:
             print(f"Nudge check failed: {type(exc).__name__}: {exc}")

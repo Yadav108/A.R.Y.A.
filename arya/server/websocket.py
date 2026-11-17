@@ -228,7 +228,11 @@ async def preload_models() -> None:
     asyncio.create_task(activity.run(announce, busy=_voice_lock.locked))
 
     from arya.core import quiet                      # meeting mode, and quiet during Teams / Zoom calls
-    asyncio.create_task(quiet.run(lambda text: emit_status("NOTIFY:" + text)))
+    def meeting_notice(text: str) -> None:           # "looks like you're in a call" / "call over": app + phone
+        from arya.server import phone as _phone
+        _phone.push_event("meeting", "Meeting mode", text)
+        emit_status("NOTIFY:" + text)
+    asyncio.create_task(quiet.run(meeting_notice))
 
     from arya.eda import projects as eda             # KiCad: checks each time you save, speaks only about new errors
     asyncio.create_task(eda.run(announce, busy=_voice_lock.locked))

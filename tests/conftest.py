@@ -41,6 +41,16 @@ def _study_mode():
     yield
 
 
+@pytest.fixture(autouse=True)
+def _phone_feed(tmp_path, monkeypatch):
+    """Every test gets an empty phone feed and a scratch events file: a reminder firing in a test must never
+    land in the user's real phone_events.jsonl, nor in another test's feed."""
+    from arya.server import phone
+    monkeypatch.setattr(phone, "EVENTS_FILE", tmp_path / "phone_events.jsonl")
+    monkeypatch.setattr(phone, "_state", phone._State())
+    yield
+
+
 @pytest.fixture(scope="session")
 def bg_loop():
     """An event loop running in a background thread (for code that posts coroutines from threads)."""

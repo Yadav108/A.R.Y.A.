@@ -54,7 +54,7 @@ COOKIE = "arya_phone"
 CHECK_EVERY_S = 120
 MAX_TEXT = 1000
 TURN_TIMEOUT_S = 150
-FEED_SIZE = 50
+FEED_SIZE = 200                   # events kept (memory and disk): what an app offline for a day catches up on
 PAIR_FAILS_ALLOWED = 10           # wrong keys per device per 10 minutes before it has to wait
 STATIC = Path(__file__).resolve().parents[1] / "static" / "phone.html"
 
@@ -154,6 +154,8 @@ class _State:
     next_id: int = 1
     fails: dict = field(default_factory=dict)             # client ip -> deque of failure times
     lock: threading.Lock = field(default_factory=threading.Lock)
+    loaded: bool = False                                  # events read back from disk
+    servers: dict = field(default_factory=dict)           # ip -> (uvicorn server, task): home Wi-Fi and Tailscale
 
 
 _state = _State()
@@ -202,21 +204,107 @@ def note_event(event: str) -> None:
     push(text)
 
 
-def push(text: str, kind: str = "nudge", url: str | None = None) -> None:
+# What the ARYA phone app turns into Android notifications (everything else is only shown in the feed).
+NOTIFY_KINDS = {"reminder", "timer", "alarm", "calendar", "meeting", "briefing", "wrapup", "ring", "message"}
+EVENTS_FILE = security.DATA_DIR / "phone_events.jsonl"
+DEDUPE_S = 15                     # a reminder pushed typed is not pushed again as its generic "NOTIFY" copy
+
+
+def push(text: str, kind: str = "nudge", url: str | None = None, title: str | None = None,
+         ref: dict | None = None) -> dict | None:
     """Put something on the phone's feed: a nudge, a message sent from the laptop ('message', with an optional
-    link) or 'ring' (the phone page beeps and vibrates — find my phone). Any thread."""
-    item = {"id": 0, "at": time.strftime("%H:%M"), "text": text, "kind": kind}
-    if url and re.match(r"^https?://", url, re.IGNORECASE):           # only web links become tappable
-        item["url"] = url
+    link), 'ring' (find my phone), or a typed event the app notifies about (NOTIFY_KINDS: reminder, timer, alarm,
+    calendar, meeting, briefing, wrapup). Events are numbered (ids keep growing across restarts) and kept on disk,
+    so the app catches up on what it missed while it was offline. Any thread."""
+    _load_feed()
+    now = time.time()
     with _state.lock:
-        item["id"] = _state.next_id
+        if kind == "nudge" and any(i["text"] == text and i["kind"] != "nudge" and now - i.get("ts", 0) < DEDUPE_S
+                                   for i in list(_state.feed)[-10:]):
+            return None                                # already sent as a typed event
+        item = {"id": max(_state.next_id, int(now * 1000)), "at": time.strftime("%H:%M"), "ts": round(now, 3),
+                "text": text, "kind": kind}
+        if title:
+            item["title"] = title
+        if ref:
+            item["ref"] = ref
+        if url and re.match(r"^https?://", url, re.IGNORECASE):       # only web links become tappable
+            item["url"] = url
         _state.feed.append(item)
-        _state.next_id += 1
+        _state.next_id = item["id"] + 1
+        try:
+            EVENTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+            with EVENTS_FILE.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(item, ensure_ascii=False) + "\n")
+        except OSError:
+            pass
+    _wake_waiters_threadsafe()
+    return item
+
+
+def push_event(kind: str, title: str, text: str, ref: dict | None = None) -> None:
+    """A typed event for the phone app (reminders, timers, calendar, briefing …). Never raises."""
+    try:
+        push(text, kind=kind, title=title, ref=ref)
+    except Exception as exc:
+        print(f"Phone: couldn't queue {kind} ({type(exc).__name__})")
+
+
+def _load_feed() -> None:
+    """Once per run: the last events from disk (the file is trimmed to FEED_SIZE lines here)."""
+    if _state.loaded:
+        return
+    with _state.lock:
+        if _state.loaded:
+            return
+        _state.loaded = True
+        try:
+            lines = EVENTS_FILE.read_text(encoding="utf-8").splitlines()[-FEED_SIZE:]
+        except OSError:
+            return
+        for line in lines:
+            try:
+                item = json.loads(line)
+            except ValueError:
+                continue
+            _state.feed.append(item)
+            _state.next_id = max(_state.next_id, int(item.get("id", 0)) + 1)
+        try:
+            EVENTS_FILE.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+        except OSError:
+            pass
 
 
 def feed_after(after: int) -> list[dict]:
+    _load_feed()
     with _state.lock:
         return [item for item in _state.feed if item["id"] > after]
+
+
+def last_id() -> int:
+    _load_feed()
+    with _state.lock:
+        return _state.feed[-1]["id"] if _state.feed else 0
+
+
+# Long-polling (/api/wait): the app's background service waits here; a new event answers at once.
+_waiters: set = set()
+
+
+def _wake_waiters() -> None:
+    for fut in list(_waiters):
+        if not fut.done():
+            fut.set_result(True)
+
+
+def _wake_waiters_threadsafe() -> None:
+    try:
+        asyncio.get_running_loop()
+        _wake_waiters()                                # we're on the server's loop
+    except RuntimeError:
+        if _loop is not None:
+            with contextlib.suppress(RuntimeError):
+                _loop.call_soon_threadsafe(_wake_waiters)
 
 
 def recheck() -> None:
@@ -245,12 +333,28 @@ _HEADERS = {
 }
 
 
+TAILNET = ipaddress.ip_network("100.64.0.0/10")         # Tailscale's addresses (Python doesn't call them private)
+
+
+def tailscale_ip() -> str | None:
+    """The laptop's Tailscale address (100.x.y.z) when Tailscale is running and signed in, else None."""
+    try:
+        import psutil
+        for name, addrs in psutil.net_if_addrs().items():
+            for a in addrs:
+                if a.family == socket.AF_INET and ipaddress.ip_address(a.address) in TAILNET:
+                    return a.address
+    except Exception:
+        pass
+    return None
+
+
 def client_ok(host: str | None) -> bool:
     try:
         a = ipaddress.ip_address(host or "")
     except ValueError:
         return False
-    return a.is_private or a.is_loopback
+    return a.is_private or a.is_loopback or (a.version == 4 and a in TAILNET)
 
 
 def host_ok(host_header: str | None) -> bool:
@@ -273,6 +377,10 @@ async def _guard(request: Request, call_next):
 
 
 def _paired(request: Request) -> bool:
+    """The phone page (cookie) or the ARYA app (Authorization: Bearer <key>, from the same pairing QR code)."""
+    auth = request.headers.get("authorization", "")
+    if auth.lower().startswith("bearer "):
+        return token_ok(auth[7:].strip())
     return token_ok(request.cookies.get(COOKIE))
 
 
@@ -322,11 +430,73 @@ async def pair(request: Request) -> JSONResponse:
 async def hello(request: Request) -> JSONResponse:
     if not _paired(request):
         return JSONResponse({"paired": False}, status_code=401)
-    with _state.lock:
-        last = _state.next_id - 1
     from arya.core import modes
-    return JSONResponse({"paired": True, "last": last, "recent": feed_after(max(0, last - 5)),
-                         "mode": modes.current_name()})
+    with _state.lock:
+        recent = list(_state.feed)[-5:]
+    return JSONResponse({"paired": True, "last": last_id(), "recent": recent, "mode": modes.current_name(),
+                         "addresses": sorted(_state.servers), "notify_kinds": sorted(NOTIFY_KINDS)})
+
+
+@app.get("/api/wait")
+async def wait(request: Request, after: int = 0, timeout: float = 50.0) -> JSONResponse:
+    """The app's background service: everything after `after`, at once if there is any, else as soon as something
+    arrives (at most `timeout` s, then an empty answer and the app asks again). Missed events are in the answer
+    too, so a phone that was offline catches up."""
+    if not _paired(request):
+        return JSONResponse({"error": "unpaired"}, status_code=401)
+    items = feed_after(after)
+    if not items:
+        fut = asyncio.get_running_loop().create_future()
+        _waiters.add(fut)
+        try:
+            await asyncio.wait_for(fut, timeout=max(1.0, min(timeout, 55.0)))
+        except asyncio.TimeoutError:
+            pass
+        finally:
+            _waiters.discard(fut)
+        items = feed_after(after)
+    return JSONResponse({"items": items, "last": last_id()})
+
+
+SNOOZABLE = {"reminder", "timer", "alarm"}
+
+
+@app.post("/api/action")
+async def action(request: Request) -> JSONResponse:
+    """A notification button in the app: {"id": event id, "action": "snooze" | "done", "minutes": 10}."""
+    from arya.core.audit import log_event
+
+    if not _paired(request):
+        return JSONResponse({"error": "unpaired"}, status_code=401)
+    try:
+        body = await request.json()
+    except ValueError:
+        body = {}
+    body = body if isinstance(body, dict) else {}
+    act = str(body.get("action", ""))
+    try:
+        event_id = int(body.get("id", 0))
+    except (TypeError, ValueError):
+        event_id = 0
+    with _state.lock:
+        item = next((i for i in _state.feed if i["id"] == event_id), None)
+    if item is None:
+        return JSONResponse({"error": "no such event (too old?)"}, status_code=404)
+    log_event("phone_action", action=act, event_kind=item.get("kind"))
+    if act == "done":
+        item["done"] = True
+        return JSONResponse({"ok": True, "reply": "Done."})
+    if act == "snooze" and item.get("kind") in SNOOZABLE:
+        try:
+            minutes = max(1.0, min(24 * 60.0, float(body.get("minutes", 10))))
+        except (TypeError, ValueError):
+            minutes = 10.0
+        label = (item.get("ref") or {}).get("label") or item.get("text", "Reminder")
+        from arya.tools.productivity import set_reminder
+        await set_reminder(label, in_minutes=minutes)
+        item["done"] = True
+        return JSONResponse({"ok": True, "reply": f"Snoozed for {minutes:g} minutes."})
+    return JSONResponse({"error": "action must be snooze (reminders, timers, alarms) or done"}, status_code=400)
 
 
 @app.get("/api/feed")
@@ -430,33 +600,43 @@ async def run() -> None:
     """Started by the main server: keeps the phone server running exactly while it should."""
     global _loop, _wake
     _loop, _wake = asyncio.get_running_loop(), asyncio.Event()
-    server, task = None, None
+    told = ""
     while True:
         try:
             where = await asyncio.to_thread(where_to_listen) if enabled() else None
+            ts = await asyncio.to_thread(tailscale_ip) if enabled() else None
             _state.last = where
-            want = where.ip if where else None
-            if task is not None and (want != _state.listening_on or task.done()):
-                server.should_exit = True
-                with contextlib.suppress(Exception):
-                    await asyncio.wait_for(task, timeout=10)
-                print(f"Phone: stopped listening on {_state.listening_on}")
-                server, task, _state.listening_on, _state.hosts = None, None, None, set()
-            if want and task is None:
+            # Home Wi-Fi only while Windows calls it Private; Tailscale whenever it's up (only your own devices,
+            # signed in to your account, can reach that address — and the key is still needed).
+            want = {ip for ip in ((where.ip if where else None), ts) if ip}
+            for ip in list(_state.servers):
+                server, task = _state.servers[ip]
+                if ip not in want or task.done():
+                    server.should_exit = True
+                    with contextlib.suppress(Exception):
+                        await asyncio.wait_for(task, timeout=10)
+                    del _state.servers[ip]
+                    print(f"Phone: stopped listening on {ip}")
+            for ip in sorted(want - set(_state.servers)):
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 try:
-                    sock.bind((want, PORT))
+                    sock.bind((ip, PORT))
                 except OSError as exc:
                     sock.close()
-                    print(f"Phone: can't listen on {want}:{PORT} ({exc})")
-                else:
-                    _state.hosts = {want}
-                    server = _make_server(want)
-                    task = asyncio.create_task(_serve(server, sock))
-                    _state.listening_on = want
-                    print(f"Phone: listening on http://{want}:{PORT} (network {where.network!r}, Private)")
-            elif enabled() and where and where.why_not and task is None:
-                print(f"Phone: not listening — {where.why_not} network {where.network!r}")
+                    print(f"Phone: can't listen on {ip}:{PORT} ({exc})")
+                    continue
+                server = _make_server(ip)
+                _state.servers[ip] = (server, asyncio.create_task(_serve(server, sock)))
+                how = "Tailscale" if ip == ts else f"network {where.network!r}, Private"
+                print(f"Phone: listening on http://{ip}:{PORT} ({how})")
+            _state.hosts = set(_state.servers)
+            # The address for pairing: Tailscale when there is one (it works at home too, and everywhere else).
+            _state.listening_on = ts if ts in _state.servers else (where.ip if where and where.ip in _state.servers
+                                                                   else None)
+            note = f"{where.why_not} network {where.network!r}" if enabled() and where and where.why_not else ""
+            if note and not _state.servers and note != told:
+                print(f"Phone: not listening — {note}")
+            told = note
         except Exception as exc:
             print(f"Phone: check failed: {type(exc).__name__}: {exc}")
         _wake.clear()
@@ -469,15 +649,20 @@ async def run() -> None:
 def pairing_page() -> str:
     where = where_to_listen()
     _state.last = where
-    if where.ip:
+    ts = tailscale_ip()
+    if where.ip or ts:
         import segno
 
-        url = pairing_url(where.ip)
+        url = pairing_url(ts or where.ip)
         qr = segno.make(url, error="m").svg_inline(scale=7, dark="#111", light="#fff")
-        body = (f"<div class='qr'>{qr}</div><p>Scan this with your phone camera. The phone must be on the same "
-                f"Wi-Fi ({html.escape(where.network or 'this network')}).</p>"
-                f"<p class='small'>Or type <b>http://{where.ip}:{PORT}</b> — but only the QR code pairs the phone. "
-                f"Anyone who sees this code can use ARYA from the phone page until you say \"new phone link\".</p>")
+        reach = ("through <b>Tailscale</b>: it works at home and anywhere else, as long as Tailscale is on on both "
+                 "devices" if ts else f"on the same Wi-Fi ({html.escape(where.network or 'this network')}) only — "
+                 "install Tailscale on both devices to reach ARYA from anywhere")
+        also = (f" At home it also answers on <b>http://{where.ip}:{PORT}</b>." if ts and where.ip else "")
+        body = (f"<div class='qr'>{qr}</div><p>Scan this with the <b>ARYA app</b> (Pair → Scan), or with the "
+                f"phone camera for the browser page. The phone reaches ARYA {reach}.{also}</p>"
+                f"<p class='small'>Only the QR code pairs a phone. Anyone who sees this code can use ARYA from a "
+                f"phone until you say \"new phone link\".</p>")
     elif where.why_not == "public":
         body = (f"<p class='warn'>Windows treats <b>{html.escape(where.network or 'this Wi-Fi')}</b> as a "
                 f"<b>Public</b> network, so ARYA won't listen on it.</p><p>If this is your home Wi-Fi: Settings → "
@@ -551,7 +736,14 @@ def handle(message: str, remote: bool = False) -> str | None:
             return "Phone access is off. Say \"connect my phone\" to turn it on."
         where = _state.last or where_to_listen()
         if _state.listening_on:
-            return f"Yes, your phone can reach me at {_state.listening_on}, port {PORT}, on this Wi-Fi."
+            ts = next((ip for ip in _state.servers if ipaddress.ip_address(ip) in TAILNET), None)
+            if ts:
+                return f"Yes, your phone can reach me from anywhere through Tailscale, at {ts}, port {PORT}."
+            return (f"Yes, your phone can reach me at {_state.listening_on}, port {PORT}, on this Wi-Fi. To reach me "
+                    "from anywhere, install Tailscale on the laptop and the phone.")
+        if tailscale_ip():
+            recheck()
+            return "Phone access is on; I'll be reachable through Tailscale in a moment."
         if where.ip:
             recheck()
             return "Phone access is on; I'll be reachable on this Wi-Fi in a moment."
@@ -566,6 +758,10 @@ def handle(message: str, remote: bool = False) -> str | None:
         set_enabled(True)
         where = where_to_listen()
         open_pairing_page()
+        if tailscale_ip():
+            return ("Phone access is on, through Tailscale, so it works from anywhere. The QR code is on your screen: "
+                    "scan it in the ARYA app. Reminders, timers, calendar heads-ups and the briefing will reach the "
+                    "phone; it still can't touch files or commands.")
         if where.ip:
             return ("Phone access is on. The QR code is on your screen — scan it with your phone camera; the phone needs "
                     "to be on the same Wi-Fi. From the phone you can ask anything and see my reminders, but not "

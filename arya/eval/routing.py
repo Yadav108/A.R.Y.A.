@@ -51,6 +51,9 @@ def _sandbox(rec: Recorder) -> None:
     tasks.DB_OVERRIDE = tmp / "tasks.db"             # to-dos go to a scratch database
     from arya.core import activity
     activity.DB_OVERRIDE = tmp / "activity.db"       # "remind me when I'm back" too
+    from arya.server import phone
+    phone.EVENTS_FILE = tmp / "phone_events.jsonl"   # "ring my phone" must not reach the real phone app
+    phone._state = phone._State()
     from arya.core import capture
     capture.DB_OVERRIDE = tmp / "inbox.db"           # captures and voice notes: a scratch inbox
     from arya.tools import notes as _notes
