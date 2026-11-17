@@ -274,6 +274,8 @@ async def preload_models() -> None:
 
 async def _warm_up_or_keep_trying() -> None:
     """Load the model now; if memory is short, keep trying in the background and say when it's back."""
+    from arya.core.llm_local import trim
+    asyncio.create_task(trim(busy=_voice_lock.locked))   # llama-server's prompt cache grows to GBs: reload when idle
     if await warm_up_local_llm():
         return
     from arya.core.llm_local import keep_trying
