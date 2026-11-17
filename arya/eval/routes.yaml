@@ -67,6 +67,11 @@ routes:
   - {say: "design the circuit", route: kicad, addressed: true}
   - {say: "check the circuit", route: kicad, addressed: true}
   - {say: "draw the circuit for an RC low-pass filter", route: model}   # a study diagram, not a KiCad design
+  # At the bench (K3)
+  - {say: "guide me through assembly", route: kicad, addressed: true}
+  - {say: "start bring-up", route: kicad, addressed: true}
+  - {say: "where does R3 go?", route: kicad, addressed: true}
+  - {say: "next", route: media keys}                                     # no bench session: next track, as before
   # Field limits (log 2026-11-16/17)
   - {say: "Hurry up, pause the music.", route: media keys, action: media_key, addressed: true}   # from-log
   - {say: "open window explorer.", route: open app, action: open_app, addressed: true}         # from-log
