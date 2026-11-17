@@ -230,6 +230,10 @@ async def preload_models() -> None:
     from arya.core import quiet                      # meeting mode, and quiet during Teams / Zoom calls
     asyncio.create_task(quiet.run(lambda text: emit_status("NOTIFY:" + text)))
 
+    from arya.core import capture                    # "record a voice note" … "stop recording" (the mic is the engine's)
+    capture.set_engine(wake_engine)
+    capture.set_announcer(announce)
+
     from arya.core import attachments                # uploads: transcription progress goes to the app
     attachments.set_event_sink(emit_status)
 
@@ -499,7 +503,7 @@ async def receive_upload(request: Request, name: str) -> JSONResponse:
         tmp.unlink(missing_ok=True)
         return JSONResponse({"error": "The file is empty."}, status_code=400)
     try:
-        info = await attachments.accept(tmp, name)
+        info = await attachments.accept(tmp, name, as_note=request.query_params.get("note") == "1")
     except Exception as exc:
         tmp.unlink(missing_ok=True)
         print(f"Upload failed: {type(exc).__name__}: {exc}")
