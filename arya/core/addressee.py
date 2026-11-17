@@ -203,8 +203,9 @@ def quick_verdict(text: str, pending_confirmation: bool = False) -> bool | None:
                 or quiet.matches(text) or remote.matches(text) or activity.matches(text)
                 or capture.matches(text) or webcam.matches(text)):
             return True
+        from arya.eda import bench
         from arya.eda import projects as eda
-        if eda.matches(text):
+        if eda.matches(text) or bench.matches(text):     # incl. "next" / "3.28 volts" during a bench session
             return True                   # "work mode", "what's on my list?"
     except Exception:
         pass

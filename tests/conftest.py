@@ -48,6 +48,9 @@ def _phone_feed(tmp_path, monkeypatch):
     from arya.server import phone
     monkeypatch.setattr(phone, "EVENTS_FILE", tmp_path / "phone_events.jsonl")
     monkeypatch.setattr(phone, "_state", phone._State())
+    # No Tailscale unless a test says so: on a laptop where it's installed, the real address would change
+    # what the phone tests see (it did, once the user installed Tailscale).
+    monkeypatch.setattr(phone, "tailscale_ip", lambda: None)
     yield
 
 

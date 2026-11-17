@@ -2392,9 +2392,11 @@ async def stream_with_tools(message: str):
         return
 
     try:                                                # KiCad: "new board project …", "check the board", design log
+        from arya.eda import bench as _bench                # at the bench: assembly steps, bring-up readings
         from arya.eda import projects as _eda
-        designing = (await _eda.handle(message, remote=policy.remote_turn.get())
-                     if _eda.matches(message) else None)
+        designing = (await _bench.handle(message, remote=policy.remote_turn.get()) if _bench.matches(message)
+                     else await _eda.handle(message, remote=policy.remote_turn.get()) if _eda.matches(message)
+                     else None)
     except Exception as exc:
         print(f"KiCad skipped: {type(exc).__name__}: {exc}")
         designing = None
