@@ -304,7 +304,13 @@ async def tick(say, idle: float, mode: str, now: float) -> None:
         h, m = (int(x) for x in at.split(":"))
         if (h, m) <= (today.hour, today.minute) and today.hour < h + 3:     # not at 2 a.m. for a 21:00 wrap-up
             st["wrapped"] = today.date().isoformat()
-            await say("Here's your day. " + wrap_up(today.date(), today))
+            text = "Here's your day. " + wrap_up(today.date(), today)
+            try:                                                   # the phone app shows it too
+                from arya.server import phone
+                phone.push_event("wrapup", "Your day", text)
+            except Exception:
+                pass
+            await say(text)
 
 
 # ── Voice ─────────────────────────────────────────────────────────────────────

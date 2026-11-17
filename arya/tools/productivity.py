@@ -21,6 +21,15 @@ async def _notify(text: str) -> None:
         await _notify_callback(text)
 
 
+def _to_phone(kind: str, title: str, text: str, label: str) -> None:
+    """The ARYA phone app rings for these (arya/server/phone.py): typed, with the label for "snooze"."""
+    try:
+        from arya.server import phone
+        phone.push_event(kind, title, text, ref={"label": label})
+    except Exception as exc:
+        print(f"Scheduler: phone push skipped ({type(exc).__name__})")
+
+
 # ── Registry of everything scheduled (timers, reminders, pomodoros) ──────────
 
 @dataclass
@@ -116,6 +125,7 @@ async def restore_scheduled() -> str:
         due = datetime.fromtimestamp(r["ends_at"]).strftime("%H:%M")
         what = f"your reminder was due at {due}: {r['label']}" if r["kind"] == "reminder" \
             else f"your timer '{r['label']}' finished at {due}"
+        _to_phone(r["kind"], "Missed while ARYA was off", f"While I was off, {what}.", r["label"])
         await _notify(f"While I was off, {what}.")
     return summary
 
@@ -139,6 +149,7 @@ def _speak_duration(seconds: float) -> str:
 async def _timer_worker(duration_seconds: float, label: str) -> None:
     await asyncio.sleep(duration_seconds)
     print(f"TIMER DONE: {label}")
+    _to_phone("timer", "Timer done", f"Timer done! {label} has finished.", label)
     await _notify(f"Timer done! {label} has finished.")
 
 
@@ -183,6 +194,8 @@ def _parse_clock(at_time: str, now: datetime) -> datetime | None:
 async def _reminder_worker(seconds: float, message: str) -> None:
     await asyncio.sleep(seconds)
     print(f"REMINDER: {message}")
+    alarm = "This is your alarm" in message
+    _to_phone("alarm" if alarm else "reminder", "Alarm" if alarm else "Reminder", f"Reminder: {message}", message)
     await _notify(f"Reminder: {message}")
 
 
