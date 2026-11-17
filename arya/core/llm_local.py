@@ -26,6 +26,12 @@ THINKING_MODEL = re.compile(r"^(?:qwen3|deepseek-r1|magistral|gpt-oss)", re.IGNO
 NUM_CTX = int(os.getenv("OLLAMA_NUM_CTX", "8192"))
 # Keep the model in VRAM between requests — reloading it costs ~40 s cold.
 KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE", "60m")
+# Memory-map the model file instead of copying it into RAM. Ollama turns mmap off by default when the model
+# fits on the GPU; on this laptop that left llama-server with 7.0 GB of committed memory for a 2.3 GB model and
+# the system with 27 MB of free commit — the cause of the out-of-memory failures (pytest dying, KiCad's Python
+# not starting, "paging file too small"). With mmap: 2.9 GB, and 1.7 GB of commit free (measured 2026-11-17).
+# Every request must send the same value, or Ollama reloads the model.
+USE_MMAP = os.getenv("OLLAMA_USE_MMAP", "1") != "0"
 # Spoken answers: low randomness keeps a small model close to the facts and course
 # excerpts it was given (Ollama's default ~0.8 lets it drift, e.g. mixing up damping cases).
 ANSWER_TEMPERATURE = float(os.getenv("OLLAMA_TEMPERATURE", "0.3"))
@@ -112,7 +118,9 @@ def _to_ollama_messages(messages: list[dict]) -> list[dict]:
 
 def _payload(messages: list[dict], stream: bool, tools: list | None,
              temperature: float | None, max_tokens: int | None, fmt: dict | str | None = None) -> dict:
-    options: dict = {"num_ctx": NUM_CTX}
+    import time
+    _last_used["t"] = time.monotonic()                 # for trim(): only reload while nobody's using it
+    options: dict = {"num_ctx": NUM_CTX, "use_mmap": USE_MMAP}
     if temperature is not None:
         options["temperature"] = temperature
     if max_tokens is not None:
@@ -237,6 +245,58 @@ async def warm_up(attempts: int = 2) -> bool:
             if attempt < attempts:
                 await asyncio.sleep(5)
     return False
+
+
+# llama-server (Ollama's runner) keeps a RAM cache of past prompts that may grow to 8 GB (its default
+# --cache-ram; Ollama doesn't expose it). Measured 2026-11-17: 2.9 GB after loading, 6.2 GB after 87 prompts,
+# 7.0 GB after an evening — the out-of-memory failures. When ARYA has been idle a while and it's past
+# TRIM_AT_MB, the model is unloaded and loaded again (a few seconds, while nobody is talking), which empties it.
+# The lasting fix is outside ARYA: the user environment variable LLAMA_ARG_CACHE_RAM=512, then restart Ollama.
+TRIM_AT_MB = int(os.getenv("ARYA_OLLAMA_TRIM_MB", "4500"))
+TRIM_IDLE_S = 10 * 60
+_last_used = {"t": 0.0}
+
+
+def runner_memory_mb() -> int:
+    """Committed memory of Ollama's model runner(s), MB (0 if none or unknown)."""
+    try:
+        import psutil
+    except ImportError:
+        return 0
+    total = 0
+    for p in psutil.process_iter(["name"]):
+        try:
+            if (p.info["name"] or "").lower().startswith(("llama-server", "ollama_llama_server")):
+                total += p.memory_info().private
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    return total // 2**20
+
+
+async def unload() -> None:
+    await _client().post(f"{OLLAMA_HOST}/api/generate", json={"model": OLLAMA_MODEL, "keep_alive": 0})
+
+
+async def trim(busy=lambda: False, every_s: float = 300.0, now=None) -> None:
+    """Started by the server: keep llama-server's prompt cache from eating the laptop's memory."""
+    import asyncio
+    import time
+    now = now or time.monotonic
+    while True:
+        await asyncio.sleep(every_s)
+        try:
+            if busy() or now() - _last_used["t"] < TRIM_IDLE_S:
+                continue
+            mb = runner_memory_mb()
+            if mb < TRIM_AT_MB:
+                continue
+            await unload()
+            await asyncio.sleep(3)
+            ok = await warm_up(attempts=2)
+            print(f"LLM: Ollama's prompt cache had grown to {mb / 1024:.1f} GB — reloaded the model "
+                  f"({runner_memory_mb() / 1024:.1f} GB now{'' if ok else ', reload failed'})")
+        except Exception as exc:
+            print(f"LLM: memory trim skipped ({type(exc).__name__}: {exc})")
 
 
 async def keep_trying(busy=lambda: False, every_s: float = 120.0, on_ready=None) -> None:
