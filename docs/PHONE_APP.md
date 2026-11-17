@@ -25,6 +25,17 @@ Without Tailscale the app still works, on your home Wi-Fi only.
 That's it: a quiet "Connected to your laptop (Tailscale)" line stays in the notification shade; reminders ring
 with **Snooze 10 min** and **Done** buttons.
 
+## Talking to ARYA
+
+* **🎙 Talk** in the app (top right), the **Talk to ARYA** Quick Settings tile (pull down the shade, edit tiles,
+  drag it in), the home-screen **widget**, or long-press the ARYA icon → **Talk**.
+* As your phone's assistant: Settings → Apps → Default apps → **Digital assistant app** → ARYA. Then
+  long-pressing the power button (or your earbuds' assistant gesture) opens ARYA listening, after unlocking.
+* Speak; it sends when you pause. ARYA's answer plays in its own voice as it's written (first words in about two
+  seconds); then it listens for a follow-up. Tap the circle to interrupt ARYA, or to send before the pause.
+* Your voice goes over Tailscale to your laptop only: the laptop's Whisper hears it and Piper speaks the answer.
+  Nothing goes to Google. The phone's limits still apply (no files, clipboard or commands).
+
 ## How it works
 
 * `GET /api/wait?after=<id>` is a long poll: the laptop answers the moment something happens, or after 50 s;
