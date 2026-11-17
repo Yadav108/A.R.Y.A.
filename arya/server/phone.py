@@ -43,7 +43,9 @@ from pathlib import Path
 from typing import Awaitable, Callable
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse, Response
+import io
+
+from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 
 from arya.server import security
 
@@ -177,6 +179,32 @@ def set_upload_handler(handler: Callable) -> None:
     """websocket.py: receive_upload(request, name) — the same checks and processing as the laptop app."""
     global _upload
     _upload = handler
+
+
+_voice: Callable | None = None
+VOICE_MAX_S = 30                  # one spoken request: at most this long
+VOICE_RATE = 16000
+
+
+def set_voice_handler(handler: Callable) -> None:
+    """websocket.py: phone_voice_turn(audio) — an async iterator of {"type": "heard" | "say" | "done", …}."""
+    global _voice
+    _voice = handler
+
+
+def wav_to_array(data: bytes):
+    """The app's recording (WAV, 16 kHz, mono, 16-bit) -> float32 samples. ValueError if it's anything else."""
+    import wave
+
+    import numpy as np
+    try:
+        with wave.open(io.BytesIO(data)) as w:
+            if w.getnchannels() != 1 or w.getsampwidth() != 2 or w.getframerate() != VOICE_RATE:
+                raise ValueError("expected 16 kHz mono 16-bit WAV")
+            frames = w.readframes(min(w.getnframes(), VOICE_MAX_S * VOICE_RATE))
+    except wave.Error as exc:
+        raise ValueError(f"not a WAV file ({exc})") from exc
+    return np.frombuffer(frames, dtype="<i2").astype(np.float32) / 32768.0
 
 
 def note_event(event: str) -> None:
@@ -545,6 +573,41 @@ async def upload(request: Request, name: str = "") -> JSONResponse:
         return JSONResponse({"error": "ARYA is still starting"}, status_code=503)
     log_event("phone_upload", client=request.client.host if request.client else "?")
     return await _upload(request, name)
+
+
+@app.post("/api/voice")
+async def voice(request: Request):
+    """You spoke in the ARYA app: the body is the recording (16 kHz mono WAV, at most 30 s). The answer streams
+    back as lines of JSON (application/x-ndjson), so the phone shows what was heard at once and plays the first
+    sentence while ARYA is still thinking about the next."""
+    from arya.core.audit import log_event
+
+    if not _paired(request):
+        return JSONResponse({"error": "unpaired"}, status_code=401)
+    if _voice is None:
+        return JSONResponse({"error": "ARYA is still starting"}, status_code=503)
+    body = bytearray()
+    limit = VOICE_MAX_S * VOICE_RATE * 2 + 4096
+    async for chunk in request.stream():
+        body += chunk
+        if len(body) > limit:
+            return JSONResponse({"error": f"keep it under {VOICE_MAX_S} seconds"}, status_code=413)
+    try:
+        audio = wav_to_array(bytes(body))
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    if len(audio) < VOICE_RATE // 4:
+        return JSONResponse({"error": "too short"}, status_code=400)
+    log_event("phone_voice", seconds=round(len(audio) / VOICE_RATE, 1))     # never the audio or the words
+
+    async def lines():
+        try:
+            async for event in _voice(audio):
+                yield json.dumps(event, ensure_ascii=False) + "\n"
+        except Exception as exc:
+            print(f"Phone voice: failed ({type(exc).__name__}: {exc})")
+            yield json.dumps({"type": "done", "error": "Something went wrong on the laptop."}) + "\n"
+    return StreamingResponse(lines(), media_type="application/x-ndjson")
 
 
 @app.post("/api/mode")
