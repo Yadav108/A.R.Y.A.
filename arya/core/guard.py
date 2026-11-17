@@ -126,7 +126,9 @@ _SECRET = re.compile(
 # "my password is hunter22", "PIN: 4821", "api key = Xy9…" — but not code ("token = strTok.nextToken",
 # password = "password"): the value has no dots, brackets or quotes and isn't one of the key words itself.
 _PASSWORD = re.compile(r"\b(?P<k>password|passwort|passwd|pwd|pin|passcode|api[\s_-]?key|secret|token)"
+                       # the value has a digit or symbol: "pin is connected" / "token is valid" are plain English
                        r"(?P<sep>\s*(?:\bis\b|:|=)\s*)(?P<v>(?!(?:password|passwort|secret|token|none|null)\b)"
+                       r"(?=[^\s,;]*[\d!@#$%^&*_+\-])"
                        r"[^\s,;.()\[\]{}\"'`]{4,})(?=[\s,;!?]|\.(?:\s|$)|$)", re.IGNORECASE)
 _EMAIL = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
 _IBAN = re.compile(r"\b[A-Z]{2}\d{2}(?:\s?[A-Z0-9]{4}){3,7}(?:\s?[A-Z0-9]{1,4})?\b")

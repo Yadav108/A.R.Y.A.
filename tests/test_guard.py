@@ -121,6 +121,7 @@ def test_redacts(text, kind):
 @pytest.mark.parametrize("text", [
     "x(t) = 0.25 sin(2 pi 50 t) and k = 1000 N/m", "binary 0001 0100 1000", "token = strTok.nextToken();",
     'if password == "password":', "card games are fun", "the year 2026 and 1234 5678", "ISSN 0956-7135",
+    "Every IC pin is connected or NC.", "the token is valid until Friday", "the secret is patience",
     "Pole at s = -2 and zero at s = -10",
 ])
 def test_leaves_ordinary_text(text):
