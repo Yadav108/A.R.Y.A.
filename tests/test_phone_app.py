@@ -13,6 +13,7 @@ from arya.server import phone as P
 
 POST = {"X-ARYA": "1"}
 REAL_CLIENT_OK = P.client_ok                     # before the fixture swaps it for the test client
+REAL_TAILSCALE_IP = P.tailscale_ip               # before conftest turns it off for every test
 
 
 @pytest.fixture(autouse=True)
@@ -129,7 +130,7 @@ def test_tailscale_ip_found(monkeypatch):
         "Tailscale": [types.SimpleNamespace(family=S.AF_INET, address="100.88.1.7")]})
     import sys
     monkeypatch.setitem(sys.modules, "psutil", fake)
-    assert P.tailscale_ip() == "100.88.1.7"
+    assert REAL_TAILSCALE_IP() == "100.88.1.7"
 
 
 def test_pairing_qr_prefers_tailscale(monkeypatch):
