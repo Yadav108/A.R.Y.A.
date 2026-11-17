@@ -147,10 +147,11 @@ _SUMMARY_RULES = (
 async def summarise(mails: list[Mail]) -> str:
     from arya.core.llm_local import chat_local
 
+    from arya.core.guard import clean               # an email can carry instructions aimed at an AI
     block = "\n\n".join(
         f"<<<EMAIL {i}\nFrom: {m.sender}\nSubject: {m.subject}\n"
-        f"Date: {m.when:%a %d %b %H:%M}\n{m.text}\nEMAIL {i}>>>" if m.when else
-        f"<<<EMAIL {i}\nFrom: {m.sender}\nSubject: {m.subject}\n{m.text}\nEMAIL {i}>>>"
+        f"Date: {m.when:%a %d %b %H:%M}\n{clean(m.text, 'an email')}\nEMAIL {i}>>>" if m.when else
+        f"<<<EMAIL {i}\nFrom: {m.sender}\nSubject: {m.subject}\n{clean(m.text, 'an email')}\nEMAIL {i}>>>"
         for i, m in enumerate(mails, 1))
     reply = await chat_local([{"role": "system", "content": _SUMMARY_RULES},
                               {"role": "user", "content": block + "\n\nSummarise these emails for me."}],

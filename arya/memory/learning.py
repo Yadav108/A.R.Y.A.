@@ -256,6 +256,12 @@ def check(item: dict, user_lines: list[str]) -> tuple[bool, str]:
         return False, "sensitive"
     if _TRANSIENT.search(text):
         return False, "passing state or one-off request"
+    from arya.core import guard
+    hits = guard.scan(f"{text}\n{evidence}")
+    if any(h.severity in ("critical", "high") for h in hits):
+        return False, "injected instructions"
+    if hits:                                       # "pretend you are …": kept for the record, never recalled
+        item["untrusted"] = True
     if not evidence_ok(evidence, user_lines):
         return False, "evidence not in the user's words"
     # "she loves hiking" (the sister) must not become "The user enjoys hiking" (from the learning benchmark)
@@ -302,6 +308,13 @@ def store(item: dict, conversation: str, now: float | None = None) -> str:
     text = str(item["text"]).strip().rstrip(".") + "."
     conf = float(item["confidence"])
     v = _vec(text)
+    if item.get("untrusted"):                      # quarantined: never merged into, never recalled
+        with _db() as c:
+            c.execute("INSERT INTO memories (kind, text, evidence, confidence, status, seen, created, last_seen, "
+                      "conversation, embedding) VALUES (?, ?, ?, ?, 'untrusted', 1, ?, ?, ?, ?)",
+                      (item["kind"], text, item.get("evidence"), conf, now, now, conversation, v.tobytes()))
+        print(f"Learning: quarantined {text!r} (looks like an instruction to an AI)")
+        return "untrusted"
     try:                                          # already something you asked ARYA to remember
         from arya.memory import profile
         for r in profile.items():
@@ -379,6 +392,12 @@ async def learn_from(cv: Conversation, mode: str = "default") -> dict:
     """Read one finished conversation: returns counts, for the log and the eval."""
     stats = {"proposed": 0, "kept": 0, "rejected": {}}
     if not _worth_reading(cv):
+        return stats
+    from arya.core import guard
+    if guard.severe("\n".join(t for _r, t in cv.lines)):    # pasted text giving an AI orders: learn nothing here
+        stats["rejected"]["injected instructions"] = 1
+        print("Learning: skipped a conversation that contains instructions aimed at an AI")
+        await asyncio.to_thread(save_episode, cv, "", mode)
         return stats
     data = await propose(transcript(cv))
     user_lines = [t for r, t in cv.lines if r == "user"]

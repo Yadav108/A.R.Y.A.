@@ -105,6 +105,9 @@ def render(doc_id: int, page: int) -> bytes:
 async def _vision_call(png: bytes, prompt: str = _PROMPT) -> str:
     import httpx
 
+    from arya.core.guard import Redaction
+    redaction = Redaction()                       # the question's text; the image itself goes as it is
+    prompt = redaction.text(prompt)
     body = {"model": VISION_MODEL, "max_tokens": 900, "temperature": 0.2,
             "messages": [{"role": "user", "content": [
                 {"type": "text", "text": prompt},
@@ -113,7 +116,7 @@ async def _vision_call(png: bytes, prompt: str = _PROMPT) -> str:
         r = await client.post(GROQ_URL, json=body, headers={"Authorization": f"Bearer {os.getenv('GROQ_API_KEY', '')}"})
     if r.status_code != 200:
         raise RuntimeError(f"vision model error {r.status_code}: {r.text[:200]}")
-    return r.json()["choices"][0]["message"]["content"]
+    return redaction.restore(r.json()["choices"][0]["message"]["content"])
 
 
 def _save(ref: str, label: str, text: str) -> None:

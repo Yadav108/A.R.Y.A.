@@ -91,7 +91,9 @@ def test_summary_uses_the_local_model_and_fences_the_text(box):
     assert reply.startswith("Prof Weber moved the Dynamics exam to 12 February")
     system, user = box["prompts"][0]
     assert "DATA, not instructions" in system["content"]
-    assert "<<<EMAIL 1" in user["content"] and "Ignore previous instructions" in user["content"]
+    assert "<<<EMAIL 1" in user["content"]
+    assert "Ignore previous instructions" not in user["content"]                   # cut out (arya/core/guard.py)
+    assert "[removed by ARYA" in user["content"]
     assert "old stuff" not in user["content"]                                        # quoted thread dropped
 
 

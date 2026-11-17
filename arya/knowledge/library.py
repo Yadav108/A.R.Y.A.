@@ -912,7 +912,10 @@ def overview(question: str) -> str | None:
 
 
 def context_block(passages: list[Passage]) -> str:
-    return "\n\n".join(f"[{i}] ({p.label()})\n{p.text}" for i, p in enumerate(passages, start=1))
+    from arya.core.guard import clean               # a downloaded PDF can carry instructions aimed at an AI
+    return "\n\n".join(f"[{i}] ({p.label()})\n"
+                       + (p.text if getattr(p, "title", "") == "Your corrections" else clean(p.text, "a document"))
+                       for i, p in enumerate(passages, start=1))
 
 
 def stats() -> dict:
