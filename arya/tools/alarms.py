@@ -47,7 +47,9 @@ _STATUS = re.compile(r"\b(?:is|are)\s+(?:the|my|a|any|there\s+(?:a|any))\s+(?:\w
                      r"(?!.*\b(?:until|till|before|for (?:the|my) exam|in the (?:exam|semester|lecture))\b)|"
                      r"\b(?:what|which|any)\s+(?:\w+\s+)?(?:timers?|alarms?|reminders?)\s+(?:are|do i have|is|"
                      r"running|set)\b|\b(?:list|show)\s+(?:my\s+|the\s+)?(?:timers?|alarms?|reminders?)\b|"
-                     r"\btime\s+left\s+on\b", re.IGNORECASE)
+                     r"\btime\s+left\s+on\b|"
+                     # just the word: "Reminders?" / "Remainders?" (how it was typed on the phone; the model guessed)
+                     r"^\W*(?:my\s+|any\s+)?(?:timers?|alarms?|reminders?|remainders?)\W*$", re.IGNORECASE)
 _NOT_A_LABEL = {"a", "an", "the", "me", "my", "set", "start", "make", "new", "another", "quick", "countdown", "and",
                 "half", "minute", "minutes", "hour", "hours", "second", "seconds", "min", "mins", "hr", "hrs"}
 _ALARM = re.compile(_ASK + r"(?:(?:set|create|make|put)\s+(?:me\s+)?(?:an?|the|my)?\s*alarm\b|wake me(?: up)?\b|"
@@ -155,7 +157,10 @@ def _what_in(message: str, kind: str) -> str:
                   r"this (?:morning|afternoon|evening))\b", " ", text, flags=re.IGNORECASE)
     m = _WHAT.search(re.sub(r"^.*?\bremind me\b", "", text, flags=re.IGNORECASE)) if kind == "reminder" else None
     if m:
-        return re.sub(r"\s+", " ", m.group("what")).strip(" .,")
+        what = re.sub(r"\s+", " ", m.group("what")).strip(" .,")
+        # "remind me to call mom at" + (pause) "9." — the time came separately, so a dangling "at" is left over
+        # (from the log: the reminder rang as "call mom at").
+        return re.sub(r"(?:\s+(?:at|by|on|in|for|around|before|after))+$", "", what, flags=re.IGNORECASE)
     return ""
 
 

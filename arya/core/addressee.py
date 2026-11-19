@@ -29,13 +29,19 @@ _NAME = re.compile(r"\b(?:arya|aria|ariya|aarya|n\.?\s?j\.?|en\s?jay|enjay)(?!\w
 # sweetheart." (from the log: these went to the model, which judged them side talk).
 _ALWAYS_FOR_ARYA = re.compile(
     r"^\W*(?:(?:ok|okay|yeah|yes|alright|oh|well|so|right)\W+)?"
+    # A bare "yes" / "yeah" / "no" is only for ARYA while it waits for one (pending_confirmation); otherwise
+    # the model judges it (from the log: "Oh yeah." / "Uh, yeah." from side talk were answered).
     r"(?:stop|cancel|never ?mind|be quiet|shut up|thanks?|thank you|cheers|bye|goodbye|"
-    r"that'?s (?:all|it)|yes|yeah|yep|no|nope|repeat that|say (?:that|it) again|what\??|"
+    r"that'?s (?:all|it)|repeat that|say (?:that|it) again|what\??|how are you(?: doing)?(?: today)?|"
     r"go ahead|go on|continue|carry on|do it|tell me more|more please)"
     r"(?:\W+(?:sir|ma'?am|dude|bro|buddy|sweetheart|dear|man|very much|so much|a lot|again|please|then|"
-    r"arya|aria))*\W*$",
+    r"arya|aria|lol|haha|hahaha))*\W*$",      # "How are you?", "Thanks. LOL." (2026-11-19: rescued by hand)
     re.IGNORECASE,
 )
+
+# "Yes, sir." / "No, ARYA." — a yes/no with a tag said to it is still for ARYA; a bare "Oh yeah." isn't settled.
+_YES_TO_ARYA = re.compile(r"^\W*(?:(?:ok|okay|oh|well)\W+)?(?:yes|yeah|yep|no|nope)\W+(?:sir|ma'?am|arya|aria)\W*$",
+                          re.IGNORECASE)
 
 # "Mom, …", "Sarah, did you…", "hey guys, …" — speech that opens by addressing someone else.
 _OTHER_PERSON = re.compile(
@@ -115,14 +121,16 @@ _MISHEARD_PLAY = re.compile(r"^\W*(?:i'll|i will|ill)\s+(?=play\b)", re.IGNORECA
 # "Hey, enjoy.", "Okay, engine, minimize the window."). Only at the very start, followed by punctuation AND
 # more words: "Enjoy your meal" / "the engine is hot" stay as they are, and a lone "Enjoy!" is not the name
 # (4 of 69 sound-alike clips came out as exactly that). Recognises 11 of the 22; only when "Hey NJ" is set up.
-_MISHEARD_NJ = re.compile(r"^\W*(?:(?:hey|hi|ok|okay)\W+)?(?:enjoy|enjie|anjay|anjie|eun-?jae|ng|engine)\s*[!,.:;]\s+"
+# 2026-11-19 log: "Andrew, you're kidding me", "Uh, Yonjai, brief me.", "ENG, remember …", "Hey, GMT, do you …"
+# (ARYA then called the user Andrew). A comma after the name and more words are still required.
+_NJ_FORMS = r"(?:enjoy|enjie|anjay|anjie|eun-?jae|ng|engine|eng|andrew|yonjai|yonjay|enjai|injay|gmt)"
+_MISHEARD_NJ = re.compile(rf"^\W*(?:(?:hey|hi|ok|okay|uh|um|so)\W+)?{_NJ_FORMS}\s*[!,.:;]\s+"
                           r"(?=\w)", re.IGNORECASE)
 
 
 # From the log (2026-11-16/17): "Hey, engine." / "Hi, NG." (the name alone, after a greeting) and
 # "Enjoy open window explorer." (no pause after it, but a clear command follows).
-_MISHEARD_NJ_ALONE = re.compile(r"^\W*(?:hey|hi|ok|okay)\W+(?:enjoy|enjie|anjay|anjie|eun-?jae|ng|engine)\W*$",
-                                re.IGNORECASE)
+_MISHEARD_NJ_ALONE = re.compile(rf"^\W*(?:hey|hi|ok|okay)\W+{_NJ_FORMS}\W*$", re.IGNORECASE)
 _MISHEARD_NJ_TIGHT = re.compile(r"^\W*(?:(?:hey|hi|ok|okay)\W+)?(?:enjoy|anjay|engine)\s+(?=\w)", re.IGNORECASE)
 
 
@@ -165,8 +173,45 @@ def strip_filler(text: str) -> str:
     return rest if rest and quick_verdict(rest) is True else text
 
 
+def repetitive(text: str) -> bool:
+    """'Cheese. Cheese. Cheese. …', 'I don't know, I don't know, but I don't know …', 'This is a joke.' x4:
+    the same phrase over and over is Whisper looping on background noise or a song, not a request."""
+    words = re.findall(r"[a-z0-9']+", (text or "").lower())
+    if len(words) < 6:
+        return False
+    for n in (1, 2, 3, 4, 5):
+        grams = [" ".join(words[i:i + n]) for i in range(0, len(words) - n + 1)]
+        if not grams:
+            continue
+        top = max(set(grams), key=grams.count)
+        if grams.count(top) >= 4 and grams.count(top) * n >= 0.6 * len(words):
+            return True
+    return False
+
+
+# A short, plain answer right after ARYA asked something real: "Yes, please.", "No.", "The second one."
+_BARE_ANSWER = re.compile(r"^\W*(?:(?:yes|yeah|yep|yup|no|nope|sure|okay|ok)\b(?:\W+(?:please|thanks|thank you|"
+                          r"go ahead|do it|not now|later))?|the\s+(?:first|second|third|last|other)\s+one)\W*$",
+                          re.IGNORECASE)
+
+
+# Offers that end almost every chatty reply: not a question that waits for an answer.
+_GENERIC_QUESTION = re.compile(
+    r"(?:how (?:can|may|could) i (?:help|assist)|what(?:'s| is) on your mind|anything else|what (?:else )?(?:can|"
+    r"shall|should) i do|what brings you|what would you like (?:to|me to) (?:do|explore|discuss|talk)|"
+    r"need (?:help|anything)|just chatting|is there (?:anything|something))[^?]*\?\s*$", re.IGNORECASE)
+
+
+def asks_a_real_question(reply: str) -> bool:
+    """'Shall I play it on YouTube Music?' -> True; 'How can I assist you today?' -> False."""
+    reply = (reply or "").rstrip()
+    return reply.endswith("?") and not _GENERIC_QUESTION.search(reply[-160:])
+
+
 def quick_verdict(text: str, pending_confirmation: bool = False) -> bool | None:
     """True/False when a rule settles it, None when the model should decide."""
+    if repetitive(text):
+        return False
     if pending_confirmation:
         return True                       # ARYA asked a yes/no question — the answer is for it
     if _NAME.search(text):
@@ -174,7 +219,7 @@ def quick_verdict(text: str, pending_confirmation: bool = False) -> bool | None:
     filler = _FILLER.match(text)          # "Hurry up, pause the music." (from the log: ignored)
     if filler and text[filler.end():].strip() and quick_verdict(text[filler.end():]) is True:
         return True
-    if _ALWAYS_FOR_ARYA.match(text.strip()):
+    if _ALWAYS_FOR_ARYA.match(text.strip()) or _YES_TO_ARYA.match(text.strip()):
         return True
     try:
         from arya.core.llm import contextual_media_command, quick_media_command
@@ -225,11 +270,17 @@ def quick_verdict(text: str, pending_confirmation: bool = False) -> bool | None:
 
 
 async def is_addressed(text: str, *, last_reply: str = "", seconds_since_reply: float | None = None,
-                       recent: list[dict] | None = None, pending_confirmation: bool = False) -> tuple[bool, str]:
-    """(addressed?, reason). If the model can't decide: answers in cloud mode, stays quiet offline."""
+                       recent: list[dict] | None = None, pending_confirmation: bool = False,
+                       asked_question: bool = False) -> tuple[bool, str]:
+    """(addressed?, reason). If the model can't decide: answers in cloud mode, stays quiet offline.
+    pending_confirmation: ARYA waits for a yes/no, a song, a time — any answer is for it.
+    asked_question: ARYA's last reply asked something real a moment ago — the model is told, but still
+    judges (from the log: every reply ended in a question, and everyone's chatter in the next 15 s was answered)."""
     verdict = quick_verdict(text, pending_confirmation)
     if verdict is not None:
         return verdict, "rule"
+    if asked_question and _BARE_ANSWER.match(text):
+        return True, "answer to its question"
 
     from arya.core.llm_local import LocalLLMUnavailable, chat_local
 
@@ -240,7 +291,9 @@ async def is_addressed(text: str, *, last_reply: str = "", seconds_since_reply: 
     when = (f"{seconds_since_reply:.0f} seconds ago" if seconds_since_reply is not None else "a while ago")
     context = (
         ("Recent conversation:\n" + "\n".join(lines) + "\n\n" if lines else "")
-        + f"ARYA last spoke {when}" + (f": \"{last_reply[:300]}\"" if last_reply else "") + "\n\n"
+        + f"ARYA last spoke {when}" + (f": \"{last_reply[:300]}\"" if last_reply else "") + "\n"
+        + ("ARYA just asked the user a question; a sentence that answers it is for ARYA.\n" if asked_question else "")
+        + "\n"
         + f"New sentence picked up by the microphone: \"{text}\"\n\nARYA or OTHER?"
     )
     started = time.monotonic()
