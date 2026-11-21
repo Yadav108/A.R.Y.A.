@@ -38,6 +38,18 @@ jobs:
             echo "::warning::No signing key secrets: building a debug-signed APK"
           fi
 
+      # ARYA's offline speech model (Vosk), put into the app at build time — not kept in the repository.
+      - name: Offline speech model
+        env:
+          VOSK_MODEL: vosk-model-small-en-in-0.4
+        run: |
+          curl -sSfL -o model.zip "https://alphacephei.com/vosk/models/$VOSK_MODEL.zip"
+          unzip -q model.zip
+          mkdir -p android/app/src/main/assets
+          rm -rf android/app/src/main/assets/model-en
+          mv "$VOSK_MODEL" android/app/src/main/assets/model-en
+          echo "$VOSK_MODEL" > android/app/src/main/assets/model-en/uuid
+
       - name: Build
         working-directory: android
         env:

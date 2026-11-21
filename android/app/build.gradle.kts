@@ -17,6 +17,8 @@ android {
         targetSdk = 34
         versionCode = (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInt()
         versionName = "1.0.${System.getenv("GITHUB_RUN_NUMBER") ?: "0"}"
+        // Vosk's native speech engine only for phones (64- and 32-bit ARM): keeps the APK smaller.
+        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
     }
 
     signingConfigs {
@@ -51,6 +53,9 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     // Google's code scanner: scans the pairing QR code without the app needing camera permission.
     implementation("com.google.android.gms:play-services-code-scanner:16.1.0")
+    // ARYA's own offline speech recognition (Vosk, Apache-2.0) when the laptop is out of reach (Offline.kt).
+    implementation("com.alphacephei:vosk-android:0.3.47@aar")
+    implementation("net.java.dev.jna:jna:5.13.0@aar")
 
     // Unit tests of the offline parser (PhoneCommandsTest): real org.json instead of Android's stubs.
     testImplementation("junit:junit:4.13.2")

@@ -45,6 +45,8 @@ class TalkActivity : Activity() {
     private var focus: AudioFocusRequest? = null
     @Volatile private var pendingAction: JSONObject? = null       // a phone task that opens another app: runs after
     @Volatile private var leftApp = false                         // ARYA said "Calling Mom." (Actions.kt)
+    @Volatile private var taskDone = false                        // a phone task done here (timer, torch …): close,
+                                                                  // like Google's assistant, instead of listening on
     private var tts: TextToSpeech? = null                         // the phone's own voice, for what only the phone knows
     @Volatile private var offline: Boolean? = null                // laptop out of reach -> phone tasks on the phone alone
     private lateinit var ear: OfflineEar
@@ -112,6 +114,7 @@ class TalkActivity : Activity() {
             if (Actions.leavesApp(a)) leftApp = true
             val problem = Actions.run(this, a)
             if (problem != null) { leftApp = false; say(problem) }
+            else if (!Actions.leavesApp(a) && a.optString("action") != "ask") taskDone = true
         }
         val km = getSystemService(KeyguardManager::class.java)
         if (Actions.leavesApp(a) && km.isKeyguardLocked && Build.VERSION.SDK_INT >= 26) {
@@ -144,6 +147,7 @@ class TalkActivity : Activity() {
 
     private fun offlineTurn(text: String) {
         ui.post { heard.text = "You: $text"; reply.text = "" }
+        taskDone = false
         val cmd = PhoneCommands.parse(text)
         if (cmd == null) {
             say("The laptop is out of reach, so right now I can only do phone tasks: alarms, timers, calls, " +
@@ -154,7 +158,7 @@ class TalkActivity : Activity() {
         when {
             cmd.action == "ask" -> say(cmd.say) { listenOffline(follow = true) }
             Actions.leavesApp(a) -> say(cmd.say) { perform(a) }               // "Calling Mom." then the call
-            else -> { perform(a); say(cmd.say) }
+            else -> { perform(a); say(cmd.say) { if (taskDone) closeSoon() } }
         }
     }
 
@@ -205,7 +209,7 @@ class TalkActivity : Activity() {
             State.SPEAKING -> { player.stop(); releaseFocus(); listen(follow = false) }      // interrupt ARYA
             State.LISTENING -> recorder?.finish()                                            // send now
             State.THINKING -> { }
-            State.IDLE -> listen(follow = false)
+            State.IDLE -> { (orb.tag as? Runnable)?.let { ui.removeCallbacks(it) }; listen(follow = false) }
         }
     }
 
@@ -240,6 +244,7 @@ class TalkActivity : Activity() {
         show(State.THINKING, "Thinking…")
         ui.post { heard.text = ""; reply.text = "" }
         streamDone = false
+        taskDone = false
         lastError = false
         var lastFailure: Exception? = null
         for (base in prefs.urls) {
@@ -296,9 +301,19 @@ class TalkActivity : Activity() {
             if (leftApp || pendingAction != null) return             // gone to the other app, or asking permission
         }
         if (leftApp) return
+        if (taskDone) { closeSoon(); return }                         // "Timer set for 5 minutes." — done
         if (state == State.SPEAKING || state == State.THINKING) {
             if (lastError) show(State.IDLE, "Tap to talk.") else listen(follow = true)
         }
+    }
+
+    /** The task is done: show it a moment, then get out of the way (a tap on the circle keeps the screen). */
+    private fun closeSoon() {
+        taskDone = false
+        show(State.IDLE, "Done. Tap to talk again.")
+        val closing = Runnable { if (state == State.IDLE && !isFinishing) finish() }
+        orb.tag = closing
+        ui.postDelayed(closing, 2500)
     }
 
     private fun takeFocus() {

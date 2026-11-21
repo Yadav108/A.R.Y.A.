@@ -38,6 +38,7 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         prefs = Prefs(this)
         Notifier.channels(this)
+        VoskModel.prepare(this)                    // offline speech model unpacked once, ready before it's needed
         if (prefs.paired) {
             AryaService.start(this)
             showWeb(firstTime = false)
