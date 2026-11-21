@@ -121,13 +121,13 @@ async def run(notify) -> None:
 _SPAN = r"(?:\s+(?:for|till|until|til)\s+(?P<span>.+?))?"
 _START = re.compile(r"^\W*(?:arya\W+)?(?:(?:i'?m|i\s+am|we'?re|we\s+are)\s+(?:in|going\s+into|joining|on|about\s+to\s+"
                     r"join)\s+(?:a\s+|the\s+)?(?:meeting|call|class|lecture|exam|seminar|interview)" + _SPAN +
-                    r"|(?:(?:turn\s+on|start|enable)\s+)?(?:do\s+not\s+disturb|don'?t\s+disturb(?:\s+me)?|meeting\s+mode|"
+                    r"|(?:(?:turn\s+on|start|enable|go\s+(?:in)?to)\s+)?(?:do\s+not\s+disturb(?:\s+mode)?|don'?t\s+disturb(?:\s+me)?|dnd|meeting\s+mode|"
                     r"silent\s+mode|quiet\s+mode)(?:\s+on)?" + _SPAN.replace("span", "span2") +
                     r"|(?:stay|be|keep)\s+(?:quiet|silent)\s+(?:for|till|until)\s+(?P<span3>.+?))\W*$", re.IGNORECASE)
 _END = re.compile(r"^\W*(?:arya\W+)?(?:(?:the\s+)?(?:meeting|call|class|lecture|exam|seminar|interview)(?:'s|\s+is)?\s+"
                   r"(?:over|done|finished|ended)|i'?m\s+back|i\s+am\s+back|(?:end|stop|turn\s+off|exit|leave)\s+(?:the\s+)?"
-                  r"(?:meeting\s+mode|do\s+not\s+disturb|silent\s+mode|quiet\s+mode)|(?:meeting|silent|quiet)\s+mode\s+off|"
-                  r"do\s+not\s+disturb\s+off|you\s+can\s+(?:talk|speak)\s+again)\W*$", re.IGNORECASE)
+                  r"(?:meeting\s+mode|do\s+not\s+disturb(?:\s+mode)?|silent\s+mode|quiet\s+mode)|(?:meeting|silent|quiet)\s+mode\s+off|"
+                  r"do\s+not\s+disturb(?:\s+mode)?\s+off|you\s+can\s+(?:talk|speak)\s+again)\W*$", re.IGNORECASE)
 
 
 def matches(message: str) -> bool:

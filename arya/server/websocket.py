@@ -756,11 +756,13 @@ async def _meant_for_arya(command: str, quiet: bool = False) -> bool:
     last_reply = next((m["content"] for m in reversed(recent) if m["role"] == "assistant"), "")
     since = time.monotonic() - _last_spoke_at if _last_spoke_at else None
     from arya.tools import alarms, browser
-    # ARYA is waiting for an answer: a yes/no, the song or the reminder time it asked for, or any question it asked.
-    expecting = (policy.has_pending() or browser.awaiting_song() or alarms.awaiting()
-                 or (last_reply.rstrip().endswith("?") and since is not None and since < ANSWER_WINDOW_S))
+    # ARYA is waiting for an answer: a yes/no, the song or the reminder time it asked for -> it's for ARYA.
+    expecting = policy.has_pending() or browser.awaiting_song() or alarms.awaiting()
+    # A real question in its last reply a moment ago -> the model is told so but still judges. ("How can I
+    # assist you today?" isn't one: from the log, it ended nearly every reply and let all chatter through.)
+    asked = (addressee.asks_a_real_question(last_reply) and since is not None and since < ANSWER_WINDOW_S)
     ok, why = await addressee.is_addressed(command, last_reply=last_reply, seconds_since_reply=since,
-                                           recent=recent, pending_confirmation=expecting)
+                                           recent=recent, pending_confirmation=expecting, asked_question=asked)
     if ok:
         _ignored_in_a_row = 0
         return True

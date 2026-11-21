@@ -46,8 +46,46 @@ _NOT = re.compile(r"\b(?:screen|display|monitor|window|tab|desktop)\b|\bhow\s+(?
                   r"\bsettings?\b|\bdriver\b|\bnot\s+working\b|\bisn'?t\s+working\b", re.IGNORECASE)
 
 
+# "Delete it." right after a photo means the photo (from the log: the model invented a file to delete instead).
+_FORGET = re.compile(r"^\W*(?:(?:ok|okay|no|yes|yeah|and|now|then)\W+)?(?:please\s+)?(?:delete|remove|discard|"
+                     r"forget|erase|bin|throw\s+away|get\s+rid\s+of)\s+(?:it|that|this|that\s+one|this\s+one|"
+                     r"(?:the|this|that)\s+(?:photo|picture|pic|image|snapshot|selfie))(?:\s+please)?\W*$", re.IGNORECASE)
+
+
+def _photo_in_view() -> bool:
+    from arya.tools import screen
+    return (screen._context.get("kind") == "photo" and bool(screen._context.get("image_id"))
+            and time.monotonic() < screen._context.get("until", 0.0))
+
+
+def forget_request(message: str) -> bool:
+    return bool(_FORGET.match(message or "")) and _photo_in_view()
+
+
+# Asked of ARYA: "Can you take a picture of that?" yes; a bare "take a photo" or "I'll take a photo later" no.
+_TAKE_REQUEST = re.compile(r"^\W*(?:(?:hey|ok|okay|so|now|arya)\W+)*(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?|"
+                           r"please\s+)(?:take|snap|grab|capture)\s+(?:a\s+|me\s+a\s+)?"
+                           r"(?:photo|picture|pic|snapshot|selfie)\b", re.IGNORECASE)
+
+
 def matches(message: str) -> bool:
-    return bool(_ASK.search(message)) and not _NOT.search(message)
+    if forget_request(message):
+        return True
+    # "Can you take a picture of that?" (from the log: no camera mention, so the model answered in words)
+    return (bool(_ASK.search(message) or _TAKE_REQUEST.match(message)) and not _NOT.search(message)
+            and not re.search(r"\bscreen\s?shot\b", message, re.IGNORECASE))
+
+
+def forget_photo() -> str:
+    """Drop the photo in view from memory (it was never on disk unless added to the library)."""
+    from arya.knowledge import visuals
+    from arya.tools import screen
+    image_id = screen._context.get("image_id", "")
+    visuals._images.pop(image_id, None)
+    screen._context.update(text="", title="", image_id="", until=0.0, kind="screen")
+    from arya.core.audit import log_event
+    log_event("photo_forgotten")
+    return "Done, the photo is gone. It was only in memory, never saved to disk."
 
 
 def device_name() -> str:
@@ -109,6 +147,8 @@ async def handle(message: str, remote: bool = False):
     """(reply, artifacts) like screen.handle, or None."""
     if not matches(message):
         return None
+    if forget_request(message):
+        return forget_photo(), []
     if remote:
         return ("For privacy I only switch on the laptop's camera when you ask at the laptop. "
                 "To show me something from here, tap 📷 and use your phone's camera."), []

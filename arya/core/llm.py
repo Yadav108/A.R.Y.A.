@@ -227,6 +227,12 @@ def _system_prompt(with_tools: bool = False) -> str:
         "- Don't add worked numeric examples on your own. When you do give a number, it must come from "
         "a tool result or from excerpts you were given; never calculate it in your head.\n"
         "- Never promise an action you can't do in this turn.\n"
+        # From the log: "NJ" came out as "Andrew, …" / "ENG, …" and ARYA called the user Andrew and RENU.
+        "- The user also calls you NJ. Speech recognition often mishears that name as Enjoy, Engine, ENG, GMT, "
+        "Andrew or similar, so a name at the start of their sentence is what they call YOU, never their own "
+        "name. Don't call the user by any name unless they told you to remember it.\n"
+        "- Never end with a generic offer like 'How can I assist you today?', 'What's on your mind?' or "
+        "'What brings you to me today?'. If nothing needs asking, just stop.\n"
         # The mode's personality (arya/core/modes.py): fixed while the mode is, so the cached prompt still works.
         + modes.current().persona
         + _profile_block()
@@ -642,6 +648,16 @@ async def needs_tool(message: str) -> bool:
     return decision.startswith("YES")
 
 
+def briefing_greeting(hour: int) -> str:
+    if 5 <= hour < 12:
+        return "Good morning"
+    if 12 <= hour < 17:
+        return "Good afternoon"
+    if 17 <= hour < 23:
+        return "Good evening"
+    return "Hi, still up"
+
+
 async def get_daily_briefing() -> str:
     now_text = datetime.now().strftime("%A, %B %d %Y, %I:%M %p")
 
@@ -735,6 +751,8 @@ async def get_daily_briefing() -> str:
                     + (", and in one short clause at the end the study line (next exam, cards due) if given"
                        if mode.name == "default" else "")
                     + ". Mention system status only if something needs attention. "
+                    # From the log: "Good morning!" at 11 PM.
+                    + f"Open with \"{briefing_greeting(datetime.now().hour)}\", not any other greeting. "
                     "Keep it under 5 sentences. No markdown or lists."
                 ),
             },
@@ -1491,7 +1509,9 @@ TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "The file, e.g. 'Downloads/old_setup.exe'"},
+                    "path": {"type": "string",
+                             "description": "The file the user named, with its folder, e.g. 'Downloads/<name>'. "
+                                            "Never guess a file name."},
                 },
                 "required": ["path"],
             },
@@ -1809,6 +1829,14 @@ async def _execute_tool(tool_name: str, args: dict, confirmed: bool = False) -> 
         return (f"Not allowed from the phone: {tool_name.replace('_', ' ')} only works when asked at the laptop. "
                 f"Tell the user that.")
 
+    if not confirmed and _turn_text.get():
+        unnamed = unnamed_file_target(tool_name, args, _turn_text.get())
+        if unnamed:
+            log_event("blocked", tool=tool_name, reason="file not named by the user")
+            print(f"Tool blocked ({tool_name}): '{unnamed}' was never mentioned")
+            return (f"Not done: the user never mentioned a file called '{unnamed}'. Do not guess file names. "
+                    "Ask the user which file they mean.")
+
     cloud = ARYA_MODE == "cloud" or _cloud_turn.get()
     if not confirmed and policy.needs_confirmation(tool_name, args, cloud):
         question = policy.request_confirmation(tool_name, args, cloud)
@@ -1828,6 +1856,8 @@ async def _execute_tool(tool_name: str, args: dict, confirmed: bool = False) -> 
         return f"Tool '{tool_name}' failed: {exc}"
     log_tool(tool_name, args, ok=True, ms=(time.monotonic() - started) * 1000)
     policy.note_result(tool_name)
+    _recent_tool_text.append(str(result)[:4000])          # file names it listed can be referred to later
+    del _recent_tool_text[:-8]
     return str(result)
 
 
@@ -1975,6 +2005,35 @@ async def _multi_part_pipeline(message: str, parts: list[str], messages: list[di
     return reply
 
 
+# What the user and ARYA said this turn and recently, plus recent tool output ("list my downloads" -> "delete the
+# second one"). A file ARYA deletes or moves must have been named somewhere in there.
+_turn_text: ContextVar[str] = ContextVar("_turn_text", default="")
+_recent_tool_text: list[str] = []
+_FILE_TOOLS = {"delete_file": ("path",), "move_file": ("source",)}
+
+
+def _norm(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", text.lower())
+
+
+def unnamed_file_target(tool_name: str, args: dict, said: str) -> str | None:
+    """The file a delete/move would touch when nobody mentioned it, else None. From the log: "Delete it." right
+    after a webcam photo; the retry without history made the model invent 'Downloads/old_setup.exe'."""
+    keys = _FILE_TOOLS.get(tool_name)
+    if not keys:
+        return None
+    corpus = _norm(said + " " + " ".join(_recent_tool_text))
+    for key in keys:
+        path = str(args.get(key) or "").strip()
+        if not path:
+            continue
+        name = re.split(r"[\\/]", path.rstrip("\\/"))[-1]
+        stem = name.rsplit(".", 1)[0] if "." in name else name
+        if not (_norm(name) and _norm(name) in corpus) and not (len(_norm(stem)) >= 3 and _norm(stem) in corpus):
+            return name
+    return None
+
+
 async def _tool_pipeline(
     message: str,
     history: list[dict] | None = None,
@@ -1985,6 +2044,7 @@ async def _tool_pipeline(
     until it can answer. Only call when a tool is confirmed needed."""
     if history is None:
         history = get_history(limit=10)
+    _turn_text.set(message + " " + " ".join(str(item.get("content", "")) for item in history))
     if mem_context is None:
         recent_contents = {item["content"] for item in history}
         mem_context = await _get_semantic_context(message, recent_contents)
