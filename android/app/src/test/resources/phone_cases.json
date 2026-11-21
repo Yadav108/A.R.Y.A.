@@ -1,0 +1,41 @@
+{
+  "_about": "Phone tasks, one list for both parsers: the laptop's (arya/server/phone_actions.py, tests/test_phone_actions.py) and the phone's own offline one (PhoneCommands.kt, PhoneCommandsTest.kt). 'want' lists the fields that must match; 'none' must not become a phone task.",
+  "tasks": [
+    {"say": "set an alarm for 6:45", "want": {"action": "alarm", "hour": 6, "minute": 45}},
+    {"say": "wake me up at 7", "want": {"action": "alarm", "hour": 7, "minute": 0}},
+    {"say": "alarm at 7:30 pm", "want": {"action": "alarm", "hour": 19, "minute": 30}},
+    {"say": "set a timer for 10 minutes", "want": {"action": "timer", "seconds": 600}},
+    {"say": "pasta timer 8 minutes", "want": {"action": "timer", "seconds": 480, "label": "Pasta"}},
+    {"say": "10 minute timer", "want": {"action": "timer", "seconds": 600}},
+    {"say": "set a timer for an hour and a half", "want": {"action": "timer", "seconds": 5400}},
+    {"say": "call Mom", "want": {"action": "call", "who": "Mom", "app": "phone"}},
+    {"say": "Call Mom.", "want": {"action": "call", "who": "Mom"}},
+    {"say": "call 0176 1234567", "want": {"action": "call", "who": "0176 1234567"}},
+    {"say": "call Anna on WhatsApp", "want": {"action": "call", "who": "Anna", "app": "whatsapp"}},
+    {"say": "text Anna I am running late", "want": {"action": "sms", "who": "Anna", "text": "I am running late", "app": "sms"}},
+    {"say": "send a message to Ben saying see you at 8", "want": {"action": "sms", "who": "Ben", "text": "see you at 8"}},
+    {"say": "WhatsApp Mom I reached home", "want": {"action": "sms", "who": "Mom", "text": "I reached home", "app": "whatsapp"}},
+    {"say": "text Anna Schmidt see you soon", "want": {"action": "sms", "who": "Anna Schmidt", "text": "see you soon"}},
+    {"say": "navigate to the main station", "want": {"action": "navigate", "to": "the main station"}},
+    {"say": "how do I get to the university", "want": {"action": "navigate", "to": "the university"}},
+    {"say": "take me home", "want": {"action": "navigate", "to": "home"}},
+    {"say": "turn on the flashlight", "want": {"action": "torch", "on": true}},
+    {"say": "torch off", "want": {"action": "torch", "on": false}},
+    {"say": "take a selfie", "want": {"action": "camera", "selfie": true, "video": false}},
+    {"say": "record a video", "want": {"action": "camera", "video": true}},
+    {"say": "turn on wifi", "want": {"action": "settings", "what": "wifi", "state": "on"}},
+    {"say": "turn bluetooth off", "want": {"action": "settings", "what": "bluetooth", "state": "off"}},
+    {"say": "volume up", "want": {"action": "volume", "dir": "up"}},
+    {"say": "put the phone on vibrate", "want": {"action": "volume", "dir": "vibrate"}},
+    {"say": "play Kesariya", "want": {"action": "play", "query": "Kesariya", "app": "youtube music"}},
+    {"say": "play lofi beats on Spotify", "want": {"action": "play", "query": "lofi beats", "app": "spotify"}},
+    {"say": "open WhatsApp", "want": {"action": "open_app", "app": "WhatsApp"}},
+    {"say": "NJ, launch Spotify", "want": {"action": "open_app", "app": "Spotify"}}
+  ],
+  "none": [
+    "what time is it", "call me Aryan", "call it a day", "remind me at 7 to call mom", "what is a timer in electronics",
+    "open a new tab", "open the Gmail tab", "call an Uber", "text me later", "I have to call Mom later",
+    "open YouTube on the laptop", "set an alarm on the laptop for 7", "play it", "play the music", "message",
+    "explain the Coriolis acceleration", "how does a flashlight work in detail, explain the circuit please"
+  ]
+}

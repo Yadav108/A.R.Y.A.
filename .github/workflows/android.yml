@@ -44,7 +44,7 @@ jobs:
           ARYA_KEYSTORE_PASSWORD: ${{ secrets.ARYA_KEYSTORE_PASSWORD }}
           ARYA_KEY_ALIAS: ${{ secrets.ARYA_KEY_ALIAS }}
           ARYA_KEY_PASSWORD: ${{ secrets.ARYA_KEY_PASSWORD }}
-        run: gradle --no-daemon assembleRelease
+        run: gradle --no-daemon testReleaseUnitTest assembleRelease     # the offline parser's tests, then the APK
 
       - uses: actions/upload-artifact@v4
         with:
