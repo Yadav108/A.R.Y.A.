@@ -17,3 +17,5 @@ tests/_tmp_files/
 arya/models/wakeword/user_samples_*/
 # Backups of earlier wake-word models
 arya/models/wakeword/*.prev.*
+# Vosk offline speech model: downloaded by the Android build, not committed
+android/app/src/main/assets/model-en/
