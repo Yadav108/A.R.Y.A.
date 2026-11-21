@@ -1203,6 +1203,31 @@ async def phone_voice_turn(audio) -> AsyncIterator[dict]:
     if not re.search(r"\w", text):
         yield {"type": "done", "error": "I didn't catch that.", "confirm": False}
         return
+    # Phone tasks run on the phone (arya/server/phone_actions.py): alarms, timers, calls, messages, maps, apps,
+    # torch, camera, settings, volume, music — the app carries them out; the laptop only understands the request.
+    from arya.server import phone_actions
+    action = phone_actions.parse(text)
+    if action is not None:
+        say = action.pop("say", "")
+        print(f"Phone voice: phone action {action.get('action')}")
+        from arya.core import addressee
+        addressee.set_origin("phone")
+        try:
+            from arya.core.llm import save_message
+            save_message("user", text)
+            if say:
+                save_message("assistant", say)
+        finally:
+            addressee.set_origin("typed")
+        from arya.core.audit import log_event
+        log_event("phone_action", action=action.get("action"))      # never names, numbers or message text
+        yield {"type": "action", **action}
+        if say:
+            audio_out = await _synthesize(say)
+            yield {"type": "say", "text": say, "audio": base64.b64encode(audio_out).decode() if audio_out else "",
+                   "mime": "audio/wav"}
+        yield {"type": "done", "confirm": False, "listen": action.get("action") == "ask"}
+        return
     refusal = policy.remote_refusal(text)
     if refusal:
         audio_out = await _synthesize(refusal)

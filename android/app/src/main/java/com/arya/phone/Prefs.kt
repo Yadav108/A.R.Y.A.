@@ -24,6 +24,11 @@ class Prefs(context: Context) {
         get() = p.getString("pairing_url", "")!!
         set(v) = p.edit().putString("pairing_url", v).apply()
 
+    /** Contacts / calling permission asked once (for "call Mom"); after a "no" ARYA explains instead of asking. */
+    var askedPeople: Boolean
+        get() = p.getBoolean("asked_people", false)
+        set(v) = p.edit().putBoolean("asked_people", v).apply()
+
     val paired: Boolean get() = key.isNotEmpty() && urls.isNotEmpty()
 
     fun forget() = p.edit().clear().apply()
