@@ -248,6 +248,9 @@ def quick_verdict(text: str, pending_confirmation: bool = False) -> bool | None:
                 or quiet.matches(text) or remote.matches(text) or activity.matches(text)
                 or capture.matches(text) or webcam.matches(text)):
             return True
+        from arya.tools import browser
+        if browser.tab_command(text):     # "switch tab", "second tab", "the Gmail tab" (2026-11-21: went to the model)
+            return True
         from arya.eda import bench
         from arya.eda import projects as eda
         if eda.matches(text) or bench.matches(text):     # incl. "next" / "3.28 volts" during a bench session

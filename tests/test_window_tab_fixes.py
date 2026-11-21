@@ -76,6 +76,8 @@ def test_switch_uses_chrome_tab_search(monkeypatch):
     monkeypatch.setattr(B, "_press", lambda *k: keys.append(k))
     monkeypatch.setattr(B, "_type", lambda text: typed.append(text))
     monkeypatch.setattr(B.time, "sleep", lambda s: None)
+    monkeypatch.setattr(B, "_foreground", lambda: 99)            # the tab-search popup is open
+    monkeypatch.setattr(B, "_wait_for", lambda test, seconds: 99)
     import win32gui
     monkeypatch.setattr(win32gui, "GetWindowText", lambda h: "Claude - Google Chrome")
     assert B._switch_to_named_tab("claude") == "Switched to “Claude”."

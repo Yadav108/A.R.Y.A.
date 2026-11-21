@@ -115,6 +115,35 @@ def _type(text: str) -> None:
             ctypes.windll.user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
 
 
+TAB_SEARCH_WAIT_S = 2.0
+
+
+def _is_chrome(hwnd: int) -> bool:
+    try:
+        import psutil
+        import win32process
+        return psutil.Process(win32process.GetWindowThreadProcessId(hwnd)[1]).name().lower() == "chrome.exe"
+    except Exception:
+        return False
+
+
+def _foreground() -> int:
+    import win32gui
+    return win32gui.GetForegroundWindow()
+
+
+def _wait_for(test, seconds: float) -> int | None:
+    """Poll the foreground window until test(hwnd) holds; that window, or None after `seconds`."""
+    end = time.monotonic() + seconds
+    while True:
+        f = _foreground()
+        if f and test(f):
+            return f
+        if time.monotonic() >= end:
+            return None
+        time.sleep(0.03)
+
+
 def _switch_to_named_tab(query: str) -> str:
     """Chrome's own tab search (Ctrl+Shift+A): type the name, Enter — then read which tab is showing."""
     import win32gui
@@ -125,11 +154,22 @@ def _switch_to_named_tab(query: str) -> str:
     if not _focus(hwnd):
         return "I couldn't bring Chrome to the front, so I didn't press anything."
     _press(VK_CONTROL, VK_SHIFT, ord("A"))
-    time.sleep(0.45)                                    # the search box needs a moment to open
+    # Type only into the tab-search popup itself. (2026-11-21: with a fixed 0.45 s wait the popup sometimes
+    # wasn't open yet, and the tab name + Enter went into the page in front — a chat.)
+    popup = _wait_for(lambda f: f != hwnd and _is_chrome(f), TAB_SEARCH_WAIT_S)
+    if popup is None:
+        return "Chrome's tab search didn't open, so I didn't type anything. Try again, or say the tab's position."
     _type(query)
-    time.sleep(0.35)
+    time.sleep(0.5)                                     # results filter as you type
+    if _foreground() != popup:
+        return "The tab search closed before I could pick a tab, so I didn't press Enter."
     _press(0x0D)                                        # Enter: the best match
-    time.sleep(0.35)
+    if _wait_for(lambda f: f == hwnd, 1.0) is None and _foreground() == popup:
+        # No tab matched: Enter does nothing and the popup stays open — and the next Ctrl+Shift+A would close it
+        # instead of opening it (2026-11-21, live: every second named switch failed). Close it.
+        _press(0x1B)
+        return f"I couldn't find a tab matching {query}. Say part of its title, or its position like \"tab 2\"."
+    time.sleep(0.15)                                    # the title follows the switch
     title = re.sub(r"\s+-\s+Google Chrome$", "", win32gui.GetWindowText(_chrome_window() or hwnd))
     words = [w for w in re.findall(r"\w+", query.lower()) if len(w) > 2]
     if words and not any(w in title.lower() for w in words):
@@ -181,21 +221,42 @@ _CLOSE = re.compile(rf"\bclose\s+(?:this|the|that|my|current|the current)?\s*{_T
 _REOPEN = re.compile(rf"\b(?:reopen|re-open|restore|bring back|undo closing)\s+(?:the\s+|that\s+|my\s+)?"
                      rf"(?:last\s+|closed\s+|last closed\s+)?{_TAB}\b|\bopen (?:the )?(?:last )?closed {_TAB}\b",
                      re.IGNORECASE)
-_NEXT = re.compile(rf"\b(?:next|following)\s+{_TAB}\b|\bswitch\s+(?:to\s+the\s+)?(?:next\s+)?{_TAB}\b",
-                   re.IGNORECASE)
-_PREV = re.compile(rf"\b(?:previous|prev|left)\s+{_TAB}\b|\bswitch\s+(?:to\s+the\s+)?previous\s+{_TAB}\b",
-                   re.IGNORECASE)
+# 2026-11-21 check: "switch tabs", "change the tab", "tab to the right", "switch to the other tab",
+# "go back a tab", "second tab", "last tab" went to the model, which can't press keys.
+_NEXT = re.compile(rf"\b(?:next|following)\s+{_TAB}\b|\bswitch\s+(?:to\s+the\s+)?(?:next\s+)?{_TAB}\b|"
+                   rf"\b(?:switch|change)\s+(?:the\s+)?{_TAB}s?\b|\b{_TAB}\s+(?:to\s+the\s+)?right\b|"
+                   rf"\b(?:switch|go|move)\s+(?:back\s+)?to\s+the\s+other\s+{_TAB}\b|"
+                   rf"\b(?:go|move)\s+(?:forward|ahead)\s+(?:a|one)\s+{_TAB}\b", re.IGNORECASE)
+_PREV = re.compile(rf"\b(?:previous|prev|left)\s+{_TAB}\b|\bswitch\s+(?:to\s+the\s+)?previous\s+{_TAB}\b|"
+                   rf"\b{_TAB}\s+(?:to\s+the\s+)?left\b|\b(?:go|move)\s+back\s+(?:a|one)\s+{_TAB}\b|"
+                   rf"\bback\s+one\s+{_TAB}\b", re.IGNORECASE)
 _GOTO = re.compile(rf"\b(?:go|switch|jump)\s+to\s+(?:the\s+)?(?:{_TAB}\s+(?P<n>\d|one|two|three|four|five|six|"
                    rf"seven|eight)|(?P<o>first|second|third|fourth|fifth|sixth|seventh|eighth)\s+{_TAB}|"
-                   rf"(?P<last>last)\s+{_TAB})\b", re.IGNORECASE)
+                   rf"(?P<last>last)\s+{_TAB})\b|"
+                   # just the position: "second tab", "last tab", "tab 2"
+                   rf"^\W*(?:the\s+)?(?:{_TAB}\s+(?P<n2>\d|one|two|three|four|five|six|seven|eight)|"
+                   rf"(?P<o2>first|second|third|fourth|fifth|sixth|seventh|eighth)\s+{_TAB}|"
+                   rf"(?P<last2>last)\s+{_TAB})(?:\s+please)?\W*$", re.IGNORECASE)
+# "go back to the last tab I was on": Chrome has no key for the tab used before (tab search's order isn't
+# reliable either — tried live), so ARYA says what works instead of guessing.
+_RECENT = re.compile(rf"\b(?:tab\s+i\s+(?:was\s+(?:on|in|using)|had\s+open|used)(?:\s+before)?|"
+                     rf"(?:last|previously)\s+used\s+{_TAB})\b", re.IGNORECASE)
 # "switch to the Claude tab", "go to my Gmail tab", "switch to 'claude' tab opened in chrome under JCNS group"
 # (from the log, 2026-11-16 19:17: only positions — next / previous / tab 3 — were understood)
 _NAMED_TAB = re.compile(r"^\W*(?:arya\W+)?(?:(?:can you|could you|please)\s+)?(?:switch|go|jump|take me|move)\s+"
+                        # "go to the tab with the PDF" (2026-11-21: searched the tabs for "the")
+                        r"(?:back\s+)?(?:to|over to)\s+the\s+tab\s+(?:with|that\s+has|showing|for|about|of)\s+"
+                        r"(?:the\s+|my\s+|a\s+)?(?P<q3>.+?)\W*$|"
+                        # "open the Gmail tab": switch to it (opening a new one is "open a new tab")
+                        r"^\W*(?:arya\W+)?(?:(?:can you|could you|please)\s+)?open\s+(?:the|my)\s+[\"“'‘]?(?P<q4>.+?)"
+                        r"[\"”'’]?\s+tab\W*$|"
+                        r"^\W*(?:arya\W+)?(?:(?:can you|could you|please)\s+)?(?:switch|go|jump|take me|move)\s+"
                         r"(?:back\s+)?(?:to|over to)\s+(?:the\s+|my\s+)?[\"“'‘]?(?P<q>.+?)[\"”'’]?\s+tab\b.*$|"
                         r"^\W*(?:arya\W+)?(?:please\s+)?(?:show|find)\s+(?:me\s+)?(?:the\s+|my\s+)?[\"“'‘]?(?P<q2>.+?)"
                         r"[\"”'’]?\s+tab\W*$", re.IGNORECASE)
 _NOT_A_NAME = re.compile(r"^(?:next|previous|prev|last|first|second|third|fourth|fifth|sixth|seventh|eighth|new|"
-                         r"other|closed|last closed|left|right|\d+)$", re.IGNORECASE)
+                         r"other|closed|last closed|left|right|\d+|the|a|an|this|that|my|it|current|"
+                         r"empty|blank|previously used|last used)$", re.IGNORECASE)
 _ENGINE = r"(?P<eng>google|youtube music|youtube|the web|the internet|online)"
 _SEARCH = re.compile(rf"^\W*(?:arya\W+)?(?:(?:can you|could you|please)\s+)?(?:search|look up|look for|find)\s+"
                      rf"(?:on\s+|in\s+)?{_ENGINE}\s+(?:for\s+)?(?P<q>.+?)\W*$|"
@@ -269,7 +330,7 @@ def named_tab(message: str) -> str | None:
     m = _NAMED_TAB.match(message)
     if not m:
         return None
-    q = (m.group("q") or m.group("q2") or "").strip(" \"“”'‘’.")
+    q = (m.group("q") or m.group("q2") or m.group("q3") or m.group("q4") or "").strip(" \"“”'‘’.")
     if not q or _NOT_A_NAME.match(q) or len(q) > 60:
         return None
     return q
@@ -280,7 +341,13 @@ def matches(message: str) -> bool:
     return bool(named_tab(message) or _OPEN_AND_PLAY.match(message) or _PLAY.search(message) or _PLAY_SONG.match(message)
                 or _bare_song(message) or _ANY_MUSIC.match(message) or _OPEN_SITE.match(message)
                 or _SEARCH.search(message) or _REOPEN.search(message) or _CLOSE.search(message)
-                or _NEW.search(message) or _GOTO.search(message) or _NEXT.search(message) or _PREV.search(message))
+                or _NEW.search(message) or tab_command(message))
+
+
+def tab_command(message: str) -> bool:
+    """A Chrome tab command — for ARYA's "is this for me?" rules ("switch tab", "second tab", "the Gmail tab")."""
+    return bool(named_tab(message) or _GOTO.search(message) or _NEXT.search(message) or _PREV.search(message)
+                or _RECENT.search(message) or _CLOSE.search(message) or _REOPEN.search(message))
 
 
 def awaiting_song() -> bool:
@@ -394,11 +461,14 @@ async def handle(message: str) -> str | None:
         shortcut, reply = (VK_CONTROL, ord("W")), "Closed the tab."
     elif _NEW.search(message):
         shortcut, reply = (VK_CONTROL, ord("T")), "New tab open."
+    elif _RECENT.search(message):
+        return ("Chrome has no shortcut for the tab you used before. Tell me its name, like \"switch to the "
+                "Gmail tab\", or say \"previous tab\".")
     elif (g := _GOTO.search(message)):
-        if g.group("last"):
+        if g.group("last") or g.group("last2"):
             shortcut, reply = (VK_CONTROL, ord("9")), "Switched to the last tab."
         else:
-            raw = (g.group("n") or g.group("o")).lower()
+            raw = (g.group("n") or g.group("o") or g.group("n2") or g.group("o2")).lower()
             n = _ORD.get(raw) or int(raw)
             shortcut, reply = (VK_CONTROL, ord(str(n))), f"Switched to tab {n}."
     elif _NEXT.search(message):
