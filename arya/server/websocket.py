@@ -880,7 +880,10 @@ def spoken_limit(message: str) -> int:
 
     if MAX_SPOKEN_SENTENCES <= 0:
         return 0
-    return max(MAX_SPOKEN_SENTENCES, DETAIL_SPOKEN_SENTENCES) if wants_detail(message) else MAX_SPOKEN_SENTENCES
+    if wants_detail(message):
+        return max(MAX_SPOKEN_SENTENCES, DETAIL_SPOKEN_SENTENCES)
+    from arya.core import bandit                       # brief / full for this answer (learned from your reactions)
+    return bandit.spoken_limit(MAX_SPOKEN_SENTENCES)
 
 
 FIRST_CHUNK_MIN_WORDS = 12   # a first sentence longer than this is voiced in two parts
@@ -900,7 +903,7 @@ def split_first_for_voice(sentence: str) -> list[str]:
     return [sentence]
 
 
-async def _speak_stream(sentences: AsyncIterator[str], max_spoken: int = 0, started: float | None = None) -> None:
+async def _speak_stream(sentences: AsyncIterator[str], max_spoken=0, started: float | None = None) -> None:
     """Text goes to the UI the moment each sentence exists, its TTS starts
     immediately, and audio plays in order as soon as it is ready — so ARYA
     starts talking after the *first* sentence, not after the whole reply.
@@ -913,13 +916,16 @@ async def _speak_stream(sentences: AsyncIterator[str], max_spoken: int = 0, star
 
     async def produce() -> None:
         spoken, cut = 0, False
+        limit = None
         try:
             async for sentence in sentences:
                 marks.setdefault("text", time.monotonic())
+                if limit is None:                      # a function: decided once the turn has started (bandit)
+                    limit = max_spoken() if callable(max_spoken) else max_spoken
                 await _send_all(sentence)
                 if silent:
                     continue
-                if max_spoken and spoken >= max_spoken:
+                if limit and spoken >= limit:
                     if not cut and re.search(r"\w", sentence):
                         cut = True
                         await queue.put((REST_ON_SCREEN, asyncio.create_task(_synthesize(REST_ON_SCREEN))))
@@ -1019,6 +1025,11 @@ def _error_message(exc: Exception) -> str:
 async def interrupt() -> None:
     """Silence ARYA and cancel the in-flight turn (barge-in)."""
     if _current_turn is not None and not _current_turn.done():
+        try:                                     # you talked over the answer: a lesson for its length / question
+            from arya.core import bandit
+            bandit.note_interrupted()
+        except Exception:
+            pass
         speaker.stop()
         _current_turn.cancel()
         try:
@@ -1041,6 +1052,12 @@ async def _dispatch(message: str, wake_triggered: bool = False, announce_transcr
                     origin: tuple[str, float | None] = ("typed", None)) -> None:
     """Cancel whatever ARYA is doing, then start the new turn."""
     global _current_turn
+    if not policy.has_pending() and _classify_closing(message) == "stop":
+        try:                                     # "stop" during or right after an answer: the strongest lesson
+            from arya.core import bandit
+            bandit.note_stopped()
+        except Exception:
+            pass
     await interrupt()
 
     # While ARYA waits for "yes"/"no" on an action, "stop"/"cancel"/"no thanks"
@@ -1091,7 +1108,7 @@ async def _run_turn(message: str, wake_triggered: bool, announce_transcript: boo
             print(f"Processing: {message[:60]}")
             addressee.set_origin(*origin)
             try:
-                await _speak_stream(stream_with_tools(message), max_spoken=spoken_limit(message),
+                await _speak_stream(stream_with_tools(message), max_spoken=lambda: spoken_limit(message),
                                     started=time.monotonic())
                 print("Response complete")
                 await _maybe_suggest_mode(message)

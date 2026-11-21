@@ -28,6 +28,7 @@ os.environ["ARYA_DATA_DIR"] = str(_DATA)
 os.environ["ARYA_KNOWLEDGE_DB"] = str(_DATA / "knowledge.db")
 os.environ["ARYA_DB_PATH"] = str(_DATA / "arya.db")
 os.environ.setdefault("ARYA_MODE", "offline")
+os.environ["ARYA_BANDITS"] = "0"            # answers don't vary by learned style in tests (tests/test_bandit.py turns it on)
 
 KB_TMP = ROOT / "tests" / "_tmp_kb"
 

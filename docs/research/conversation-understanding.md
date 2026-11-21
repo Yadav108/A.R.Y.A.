@@ -128,6 +128,47 @@ The learning benchmark (`--learning`) has three new cases: lyrics answered, a ch
 next to a real fact, and a sure follow-up that must still be learned. Result: 17/17 cases,
 0 forbidden memories, recall 100 %.
 
+## Reinforcement learning from your reactions (v1)
+
+**Why a bandit, not RLHF.** Fine-tuning the 3B model with PPO or DPO isn't feasible on a 4 GB GPU with
+5.9 GB of RAM, and explicit feedback is rare. In 351 logged turns there were 5 "stop"s and 6
+interruptions. So ARYA learns its *own decisions* with **contextual Thompson sampling**: Bayesian,
+sample-efficient, and exploring safely, because every option is a reasonable behaviour.
+
+**Decisions (arms).** These apply only to free answers by the model, never to commands or tools.
+- `length`: brief / normal (today's behaviour, the prior favourite) / full. This changes both the
+  instruction for this reply and how many sentences are spoken.
+- `follow_up`: ask one specific question / don't end with a question.
+
+The **context** is the mode plus the kind of message: question, explanation request, or chat.
+
+**Reward** comes from your next move:
+
+| your next move | effect |
+|---|---|
+| "stop" or talking over the answer | low |
+| "tell me more" | low for length, high for the question |
+| "no, I meant …" | low |
+| thanks, or a new request | high |
+| you answer ARYA's question | high for asking |
+| silence for 10 minutes | mildly high |
+
+Each decision is logged with its propensity (the probability it had). With a 10 % exploration
+floor, fixed policies can be evaluated off-policy (SNIPS) in `python -m arya.research.bandit_report`.
+Benchmarks and tests run with `ARYA_BANDITS=0`, so they neither learn nor vary.
+
+**Checks.**
+- **Actuators** (`python -m arya.research.bandit_actuators`, 8 prompts against the real model):
+  - Length: brief 1.4, normal 2.4, full 3.4 sentences. "Full" first gave 2.6 until its instruction
+    explicitly overrode the one-to-three rule.
+  - Follow-up: "ask" ends with a question 88 % of the time, "no_ask" 12 %.
+- **Learning** (`tests/test_bandit.py`): a simulated user with hidden preferences per context.
+  After 400 turns the policy picks the preferred option in at least 75 of the last 100, for every
+  context (10 % stay random on purpose).
+
+**Limits.** The rewards are hand-designed (reward model v0). Next step: check them against
+outcomes once a few hundred decisions are logged, then fit them.
+
 ## Next problems (planned)
 
 4. **Intent routing accuracy.** Extend the routing benchmark from the log's misroutes, and mine

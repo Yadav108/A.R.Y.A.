@@ -108,6 +108,14 @@ def _language_rule() -> str:
     from arya.core import language
     return language.prompt_rule(_turn_language.get())
 
+
+def _style_rule() -> str:
+    try:
+        from arya.core import bandit
+        return bandit.prompt_rule()
+    except Exception:
+        return ""
+
 # "Ask the cloud, explain …" / "Use the cloud to …" / "… — ask the cloud."
 _CLOUD_PREFIX = re.compile(
     r"^\W*(?:(?:hey|ok|okay)\W+)?(?:(?:arya|aria)\W+)?(?:please\W+)?"
@@ -249,6 +257,7 @@ def _system_prompt(with_tools: bool = False) -> str:
         # so the local model reuses its cached reading of it instead of re-reading the whole prompt.
         + f"Current local date and time: {now}. Home city: {city}.\n"
         + _language_rule()                     # Hinglish for this turn (after the clock: the cached part stays the same)
+        + _style_rule()                        # length / follow-up chosen for this turn (arya/core/bandit.py)
         + (
             "Only call tools when the user asks for an action or live data. "
             "You may chain several tool calls to finish a multi-part request. "
@@ -2497,12 +2506,17 @@ async def stream_with_tools(message: str):
             if resolved and resolved.strip().lower() != message.strip().lower():
                 print(f"Dialogue: {message!r} -> {resolved!r}")
                 message = resolved
+            from arya.core import bandit                 # your reaction to the last answer -> a reward;
+            bandit.start_turn(message)                   # then this answer's length / follow-up are chosen
         said: list[str] = []
         async for sentence in _turn_pipeline(message):
             said.append(sentence)
             yield sentence
         if outer:
-            dialogue.record(_route_taken["name"] or "model", message, " ".join(said))
+            route = _route_taken["name"]
+            dialogue.record(route or "model", message, " ".join(said))
+            from arya.core import bandit
+            bandit.end_turn(route)           # only "model" / "model + tools" answers are shaped and learned from
     finally:
         _turn_depth["n"] -= 1
 
@@ -3473,6 +3487,7 @@ async def _stream_with_tools(message: str):
             # route the model sometimes calls a study tool with the number dropped and loses it.
             needs_tool_result = False
     print(f"Needs tool: {needs_tool_result}")
+    _route_taken["name"] = "model + tools" if needs_tool_result else "model"
 
     if needs_tool_result:
         response = await _tool_pipeline(message, history, mem_context)
