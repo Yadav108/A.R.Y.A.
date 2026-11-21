@@ -110,3 +110,106 @@ def test_popup_closed_while_typing_no_enter(monkeypatch, keys):
     typed = _fake_screen(monkeypatch, lambda: next(seq))
     reply = B._switch_to_named_tab("gmail")
     assert "didn't press Enter" in reply and (0x0D,) not in keys and typed == ["gmail"]
+
+
+# ── 2026-11-21 conversation: the Dynamics PDF tab ────────────────────────────
+
+@pytest.mark.parametrize("text,name", [
+    ("First, open Dynamics X-Solution PDF tab.", "Dynamics X-Solution PDF"),
+    ("open Dynamics PDF tab", "Dynamics PDF"),
+    ("Switch to the dynamics exercise solution tab.", "dynamics exercise solution"),
+    ("switch to the New York Times tab", "New York Times"),
+])
+def test_more_tab_names(text, name):
+    assert B.named_tab(text) == name
+
+
+@pytest.mark.parametrize("text", ["open a new tab", "open new tab", "open another tab", "open the last closed tab",
+                                  "open an incognito tab"])
+def test_open_new_tab_is_not_a_name(text):
+    assert B.named_tab(text) is None
+
+
+def test_fewer_words_after_a_miss():
+    assert B.tab_queries("dynamics exercise solution") == ["dynamics exercise solution", "dynamics", "exercise",
+                                                           "solution"]
+    assert B.tab_queries("Gmail") == ["Gmail"]
+    assert B.tab_queries("Dynamics Ex Solutions.pdf")[1] == "Dynamics"
+
+
+def test_switch_tries_single_words(monkeypatch, keys):
+    state = {"fg": 99}
+    typed = _fake_screen(monkeypatch, lambda: state["fg"])
+    monkeypatch.setattr(B, "_wait_for", lambda test, s: (99 if test(99) else None) if state["fg"] == 99 else 7)
+
+    def press(*k):
+        keys.append(k)
+        if k == (0x0D,) and typed and typed[-1] == "dynamics":
+            state["fg"] = 7                                # only "dynamics" matches a tab
+    monkeypatch.setattr(B, "_press", press)
+    import win32gui
+    monkeypatch.setattr(win32gui, "GetWindowText", lambda h: "Dynamics Ex Solutions.pdf - Google Chrome")
+    assert B._switch_to_named_tab("dynamics exercise solution") == "Switched to “Dynamics Ex Solutions.pdf”."
+    assert typed == ["dynamics exercise solution", "dynamics"]
+    assert (B.VK_CONTROL, ord("A")) in keys                # the first attempt was replaced, not appended to
+
+
+def test_after_a_miss_the_next_phrase_is_the_tab(monkeypatch):
+    names = []
+    monkeypatch.setattr(B, "_switch_to_named_tab", lambda q: names.append(q) or f"Switched to “{q}”.")
+    B._awaiting_tab["until"] = B.time.monotonic() + 60
+    try:
+        assert "Which tab?" in asyncio.run(B.handle("switch to it"))
+        assert asyncio.run(B.handle("Dynamics Ex Solutions.pdf")) == "Switched to “Dynamics Ex Solutions.pdf”."
+        B._awaiting_tab["until"] = B.time.monotonic() + 60
+        assert B._tab_answer("thank you") is None and B._tab_answer("what time is it?") is None
+        assert addressee.quick_verdict("the dynamics one") is True
+    finally:
+        B._awaiting_tab["until"] = 0.0
+    assert B._tab_answer("Dynamics Ex Solutions.pdf") is None      # not waiting: a normal sentence
+
+
+def test_no_match_asks_which_tab(monkeypatch, keys):
+    _fake_screen(monkeypatch, lambda: 99)
+    monkeypatch.setattr(B, "_wait_for", lambda test, s: 99 if test(99) else None)
+    try:
+        assert "Which tab?" in B._switch_to_named_tab("taal")
+        assert B.awaiting_tab()
+    finally:
+        B._awaiting_tab["until"] = 0.0
+
+
+@pytest.mark.parametrize("claim", [
+    "I see you've opened the PDF solutions tab for dynamics exercises.",
+    "Dynamics Ex Solutions.pdf is open now.",
+    "The PDF is now open.",
+])
+def test_tab_claims_are_blocked(claim):
+    import arya.core.llm as llm
+    from arya.core import policy
+    policy.begin_turn("switch to it")
+    assert llm._guard_claim(claim, quiet=True) == llm._NOT_DONE
+
+
+def test_fact_about_opening_hours_is_not_a_claim():
+    import arya.core.llm as llm
+    from arya.core import policy
+    policy.begin_turn("when does the library open?")
+    assert llm._guard_claim("The library is open until 8 tonight.", quiet=True) != llm._NOT_DONE
+
+
+# ── Song lyrics while music plays ────────────────────────────────────────────
+
+def test_long_repeated_lyric_is_a_loop():
+    assert addressee.repetitive("I don't know what to do with my life, " * 5)
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("Now we'll talk.", False),
+    ("Yeah, I do think we're gonna have a little bit there.", False),
+    ("pause the music", True),
+    ("NJ, what's this song?", True),
+    ("What is the Coriolis acceleration?", True),
+])
+def test_while_music_plays_only_clear_requests(text, expected):
+    assert asyncio.run(addressee.is_addressed(text, music_playing=True))[0] is expected

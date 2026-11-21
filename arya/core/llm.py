@@ -2336,6 +2336,11 @@ _ACTION_CLAIM = re.compile(
     # "Playing some classic music for you." / "I'm playing it now" (from the log: nothing was playing)
     r"|^\W*(?:now\s+)?playing\b(?!:)|\bi(?:'m| am)\s+(?:now\s+)?(?:playing|opening|starting|searching)\b"
     r"|\b(?:i've|i have)\s+(?:just\s+)?(?:put on|started playing|queued)\b"
+    # "I see you've opened the PDF solutions tab", "Dynamics Ex Solutions.pdf is open now" (2026-11-21: no tab
+    # had been switched; these slipped past the guard)
+    r"|\byou(?:'ve| have)\s+(?:now\s+|just\s+)?(?:opened|switched to|got)\s+(?:the|your|a)\b[^.?!]{0,60}\b"
+    r"(?:tab|pdf|file|window|document|page)\b"
+    r"|\b(?:\w+\.(?:pdf|docx?|pptx?|xlsx?|txt)|tab|window|document|pdf)\s+(?:is|are)\s+(?:now\s+)?open\b"
     # promises: "I will set a reminder for 13:00 tomorrow" (from the log — nothing was set)
     r"|\bi(?:'ll| will)\s+(?:now\s+|go ahead and\s+)?(?:set|add|create|schedule|start|play|open|send|save|book|"
     r"launch|search|minimi[sz]e|maximi[sz]e|close|turn (?:on|off|up|down)|put on|take (?:a )?note)\b"

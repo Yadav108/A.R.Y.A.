@@ -116,6 +116,46 @@ def _type(text: str) -> None:
 
 
 TAB_SEARCH_WAIT_S = 2.0
+# Lead-ins Whisper keeps: "First, open Dynamics X-Solution PDF tab." (2026-11-21: went to the model -> open_app)
+_LEAD = r"^\W*(?:(?:arya|first|now|then|ok|okay|so|and|also)\W+)*"
+TAB_ANSWER_S = 90.0                     # after "Which tab?", the next short phrase is the tab's name
+_awaiting_tab = {"until": 0.0}
+_FILLER_WORDS = {"tab", "tabs", "the", "with", "that", "this", "from", "page", "window", "chrome", "open", "my",
+                 "and", "for", "about", "showing"}
+
+
+def tab_queries(query: str) -> list[str]:
+    """What to type into Chrome's tab search: the whole name, then each telling word on its own."""
+    words = [w for w in re.findall(r"[\w.]+", query) if len(w) >= 4 and w.lower() not in _FILLER_WORDS]
+    out: list[str] = []
+    for q in [query.strip()] + (words if len(words) > 1 else []):
+        if q and q.lower() not in (o.lower() for o in out):
+            out.append(q)
+    return out[:5]
+
+
+def awaiting_tab() -> bool:
+    return time.monotonic() < _awaiting_tab["until"]
+
+
+# The answer to "Which tab?": "Dynamics Ex Solutions.pdf", "the dynamics one", "PDF". Not a new request.
+_TAB_ANSWER = re.compile(r"^\W*(?:(?:it'?s|the|my)\s+)*(?P<q>[^?]{2,60}?)(?:\s+(?:one|tab|please))*\W*$",
+                         re.IGNORECASE)
+
+
+_NOT_AN_ANSWER = re.compile(r"^\W*(?:thanks?|thank you|ok|okay|no|nope|never ?mind|cancel|stop|forget it|yes|yeah|"
+                            r"yep|fine|cool|great|nothing|leave it|doesn'?t matter|switch|go|jump|move|take me)\b",
+                            re.IGNORECASE)
+_TO_IT = re.compile(_LEAD + r"(?:please\s+)?(?:switch|go|jump|move|take me)\s+(?:back\s+)?(?:to|over to|there)\s*"
+                    r"(?:it|that|that one|this one|there)?\W*$", re.IGNORECASE)
+
+
+def _tab_answer(message: str) -> str | None:
+    if not awaiting_tab() or _NEW_REQUEST.match(message) or _NOT_AN_ANSWER.match(message) or len(message.split()) > 8:
+        return None
+    m = _TAB_ANSWER.match(message)
+    q = m.group("q").strip(" .\"“”'‘’") if m else ""
+    return q if q and not _NOT_A_NAME.match(q) else None
 
 
 def _is_chrome(hwnd: int) -> bool:
@@ -159,16 +199,26 @@ def _switch_to_named_tab(query: str) -> str:
     popup = _wait_for(lambda f: f != hwnd and _is_chrome(f), TAB_SEARCH_WAIT_S)
     if popup is None:
         return "Chrome's tab search didn't open, so I didn't type anything. Try again, or say the tab's position."
-    _type(query)
-    time.sleep(0.5)                                     # results filter as you type
-    if _foreground() != popup:
-        return "The tab search closed before I could pick a tab, so I didn't press Enter."
-    _press(0x0D)                                        # Enter: the best match
-    if _wait_for(lambda f: f == hwnd, 1.0) is None and _foreground() == popup:
-        # No tab matched: Enter does nothing and the popup stays open — and the next Ctrl+Shift+A would close it
-        # instead of opening it (2026-11-21, live: every second named switch failed). Close it.
+    found = False
+    for i, attempt in enumerate(tab_queries(query)):
+        if i:
+            _press(VK_CONTROL, ord("A"))                # replace the last attempt in the search box
+        _type(attempt)
+        time.sleep(0.5)                                 # results filter as you type
+        if _foreground() != popup:
+            return "The tab search closed before I could pick a tab, so I didn't press Enter."
+        _press(0x0D)                                    # Enter: the best match
+        if _wait_for(lambda f: f == hwnd, 1.0) is not None or _foreground() != popup:
+            found = True
+            break
+        # No tab matched: Enter does nothing and the popup stays open. Try fewer words ("dynamics exercise
+        # solution" finds nothing; "dynamics" finds "Dynamics Ex Solutions.pdf" — 2026-11-21 log).
+    if not found:
+        # Close it: otherwise the next Ctrl+Shift+A closes it instead of opening it (2026-11-21, live).
         _press(0x1B)
-        return f"I couldn't find a tab matching {query}. Say part of its title, or its position like \"tab 2\"."
+        _awaiting_tab["until"] = time.monotonic() + TAB_ANSWER_S
+        return f"I couldn't find a tab matching {query}. Which tab? Say a word from its title."
+    _awaiting_tab["until"] = 0.0
     time.sleep(0.15)                                    # the title follows the switch
     title = re.sub(r"\s+-\s+Google Chrome$", "", win32gui.GetWindowText(_chrome_window() or hwnd))
     words = [w for w in re.findall(r"\w+", query.lower()) if len(w) > 2]
@@ -243,20 +293,22 @@ _RECENT = re.compile(rf"\b(?:tab\s+i\s+(?:was\s+(?:on|in|using)|had\s+open|used)
                      rf"(?:last|previously)\s+used\s+{_TAB})\b", re.IGNORECASE)
 # "switch to the Claude tab", "go to my Gmail tab", "switch to 'claude' tab opened in chrome under JCNS group"
 # (from the log, 2026-11-16 19:17: only positions — next / previous / tab 3 — were understood)
-_NAMED_TAB = re.compile(r"^\W*(?:arya\W+)?(?:(?:can you|could you|please)\s+)?(?:switch|go|jump|take me|move)\s+"
+_NAMED_TAB = re.compile(_LEAD + r"(?:(?:can you|could you|please)\s+)?(?:switch|go|jump|take me|move)\s+"
                         # "go to the tab with the PDF" (2026-11-21: searched the tabs for "the")
                         r"(?:back\s+)?(?:to|over to)\s+the\s+tab\s+(?:with|that\s+has|showing|for|about|of)\s+"
                         r"(?:the\s+|my\s+|a\s+)?(?P<q3>.+?)\W*$|"
-                        # "open the Gmail tab": switch to it (opening a new one is "open a new tab")
-                        r"^\W*(?:arya\W+)?(?:(?:can you|could you|please)\s+)?open\s+(?:the|my)\s+[\"“'‘]?(?P<q4>.+?)"
+                        # "open the Gmail tab" / "open Dynamics PDF tab": switch to it ("open a new tab" opens one)
+                        + _LEAD + r"(?:(?:can you|could you|please)\s+)?open\s+(?:the\s+|my\s+)?[\"“'‘]?(?P<q4>.+?)"
                         r"[\"”'’]?\s+tab\W*$|"
-                        r"^\W*(?:arya\W+)?(?:(?:can you|could you|please)\s+)?(?:switch|go|jump|take me|move)\s+"
+                        + _LEAD + r"(?:(?:can you|could you|please)\s+)?(?:switch|go|jump|take me|move)\s+"
                         r"(?:back\s+)?(?:to|over to)\s+(?:the\s+|my\s+)?[\"“'‘]?(?P<q>.+?)[\"”'’]?\s+tab\b.*$|"
-                        r"^\W*(?:arya\W+)?(?:please\s+)?(?:show|find)\s+(?:me\s+)?(?:the\s+|my\s+)?[\"“'‘]?(?P<q2>.+?)"
+                        + _LEAD + r"(?:please\s+)?(?:show|find)\s+(?:me\s+)?(?:the\s+|my\s+)?[\"“'‘]?(?P<q2>.+?)"
                         r"[\"”'’]?\s+tab\W*$", re.IGNORECASE)
 _NOT_A_NAME = re.compile(r"^(?:next|previous|prev|last|first|second|third|fourth|fifth|sixth|seventh|eighth|new|"
                          r"other|closed|last closed|left|right|\d+|the|a|an|this|that|my|it|current|"
                          r"empty|blank|previously used|last used)$", re.IGNORECASE)
+# "open a new tab", "open another tab", "open the last closed tab" are not tab names
+_NOT_OPEN_NAME = re.compile(r"^(?:a|an|another|one|new|empty|blank|incognito|private)\b|\bclosed\b", re.IGNORECASE)
 _ENGINE = r"(?P<eng>google|youtube music|youtube|the web|the internet|online)"
 _SEARCH = re.compile(rf"^\W*(?:arya\W+)?(?:(?:can you|could you|please)\s+)?(?:search|look up|look for|find)\s+"
                      rf"(?:on\s+|in\s+)?{_ENGINE}\s+(?:for\s+)?(?P<q>.+?)\W*$|"
@@ -330,6 +382,8 @@ def named_tab(message: str) -> str | None:
     m = _NAMED_TAB.match(message)
     if not m:
         return None
+    if m.group("q4") and _NOT_OPEN_NAME.search(m.group("q4")):
+        return None
     q = (m.group("q") or m.group("q2") or m.group("q3") or m.group("q4") or "").strip(" \"“”'‘’.")
     if not q or _NOT_A_NAME.match(q) or len(q) > 60:
         return None
@@ -347,7 +401,8 @@ def matches(message: str) -> bool:
 def tab_command(message: str) -> bool:
     """A Chrome tab command — for ARYA's "is this for me?" rules ("switch tab", "second tab", "the Gmail tab")."""
     return bool(named_tab(message) or _GOTO.search(message) or _NEXT.search(message) or _PREV.search(message)
-                or _RECENT.search(message) or _CLOSE.search(message) or _REOPEN.search(message))
+                or _RECENT.search(message) or _CLOSE.search(message) or _REOPEN.search(message)
+                or _tab_answer(message) or (awaiting_tab() and _TO_IT.match(message)))
 
 
 def awaiting_song() -> bool:
@@ -447,7 +502,10 @@ async def handle(message: str) -> str | None:
         policy.note_result("open_url")
         return f"Searching {_site(eng)} for {query}."
 
-    named = named_tab(message)
+    if awaiting_tab() and _TO_IT.match(message):        # "switch to it" — ARYA doesn't know which one yet
+        _awaiting_tab["until"] = time.monotonic() + TAB_ANSWER_S
+        return "Which tab? Say a word from its title, like \"dynamics\"."
+    named = named_tab(message) or _tab_answer(message)
     if named:
         reply = await asyncio.to_thread(_switch_to_named_tab, named)
         if not reply.startswith(("Chrome isn't", "I couldn't")):

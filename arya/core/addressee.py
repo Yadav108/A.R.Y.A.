@@ -179,7 +179,7 @@ def repetitive(text: str) -> bool:
     words = re.findall(r"[a-z0-9']+", (text or "").lower())
     if len(words) < 6:
         return False
-    for n in (1, 2, 3, 4, 5):
+    for n in range(1, 13):        # "I don't know what to do with my life" x5 is a 10-word loop (2026-11-21)
         grams = [" ".join(words[i:i + n]) for i in range(0, len(words) - n + 1)]
         if not grams:
             continue
@@ -274,7 +274,7 @@ def quick_verdict(text: str, pending_confirmation: bool = False) -> bool | None:
 
 async def is_addressed(text: str, *, last_reply: str = "", seconds_since_reply: float | None = None,
                        recent: list[dict] | None = None, pending_confirmation: bool = False,
-                       asked_question: bool = False) -> tuple[bool, str]:
+                       asked_question: bool = False, music_playing: bool = False) -> tuple[bool, str]:
     """(addressed?, reason). If the model can't decide: answers in cloud mode, stays quiet offline.
     pending_confirmation: ARYA waits for a yes/no, a song, a time — any answer is for it.
     asked_question: ARYA's last reply asked something real a moment ago — the model is told, but still
@@ -284,6 +284,10 @@ async def is_addressed(text: str, *, last_reply: str = "", seconds_since_reply: 
         return verdict, "rule"
     if asked_question and _BARE_ANSWER.match(text):
         return True, "answer to its question"
+    if music_playing:
+        # Songs have vocals: from the log (2026-11-21), lyrics like "Now we'll talk." were judged ARYA and
+        # answered — and even learned from. Commands, real questions and "NJ, …" are settled by the rules above.
+        return False, "music playing, unclear sentence ignored"
 
     from arya.core.llm_local import LocalLLMUnavailable, chat_local
 
