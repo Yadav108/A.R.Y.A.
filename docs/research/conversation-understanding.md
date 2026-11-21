@@ -56,12 +56,45 @@ replaces the model only if the leave-one-day-out cost isn't worse.
 - The music-playing state isn't in the old logs, so that rule (lyrics are ignored) isn't measured here.
 - 84 examples from the oldest part of the log have no timestamps, so their reply age is unknown.
 
+## Problem 2: follow-ups that refer back (done, v1)
+
+**Data.** I mined the history for short follow-ups that refer to an earlier turn, and found 38. The ones
+ARYA got wrong fall into four patterns:
+- **Complaints after an action:** "No it haven't" after "Resume playing the song".
+- **Pronouns for the last thing named:** "switch to it" (a tab), "Delete it." (a photo), "Find it in the
+  Windows Explorer." (a document).
+- **A detail spread over turns:** "Nico's MCP phase 1 plan" … "It is in downloads."
+- **Repeats:** "again", "one more time".
+
+**Benchmark.** `python -m arya.eval --dialogues` runs `arya/eval/dialogues.yaml`: 13 dialogues (26
+turns) built from these patterns, in the routing sandbox, without a reset between turns. Two of the
+dialogues check that chat and questions are *not* resolved ("explain it again more simply",
+"it didn't rain today").
+
+**Method.** `arya/core/dialogue.py` keeps one record:
+- **The last action:** which handler answered and the exact request. Only actions safe to repeat count
+  (music, tabs, windows, opening apps, sites and files), never a delete, a move, a message or a timer.
+- **The entities named:** song, tab, app, window, document and its path.
+
+Before a turn, `resolve()` rewrites a referring sentence into the explicit request, which then goes
+through the usual handlers. After the turn, `record()` notes what happened. A chat or question turn in
+between clears the last action, and references expire after 10 minutes. File names are now matched
+fuzzily as word sets, so "MCP phase one plan" finds `NICOS_MCP_Phase1_Plan.docx`.
+
+**Results** (21 Nov 2026):
+
+| | turns passed | referring turns resolved |
+|---|---|---|
+| before | 13/26 (50 %) | 1/11 |
+| after | **26/26 (100 %)** | **11/11** |
+
+The routing benchmark stays at 159/159, and the golden questions are untouched (none was rewritten).
+
+**Limits.** The benchmark is hand-built from log patterns. It counts which handler answered, not whether
+that was the best result, and "the second one" (picking from a list) isn't covered yet.
+
 ## Next problems (planned)
 
-2. **Reference resolution / dialogue state.** "Switch to it", "do that again", "the second one",
-   "it didn't work" currently each need their own rule. Plan: one dialogue-state record holding the
-   last action, its arguments, its outcome, and the entities mentioned (tab, song, file, time).
-   Follow-ups would resolve against that record. Measured on the follow-ups that refer back.
 3. **Learning from side talk.** Exclude exchanges marked "that wasn't for you" from
    `memory/learning.py`. In the 21 Nov log, song lyrics were learned as a preference.
 4. **Intent routing accuracy.** Extend the routing benchmark from the log's misroutes, and mine

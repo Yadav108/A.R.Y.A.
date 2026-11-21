@@ -258,3 +258,73 @@ def run(verbose: bool = False) -> tuple[int, int, list[str]]:
             print(line + (f"\n        {reply[:150]}" if verbose else ""))
     _reset()
     return passed, len(items), failures
+
+
+def _sandbox_files() -> None:
+    """Downloads / Desktop / Documents for the dialogue benchmark: a scratch tree with known files."""
+    from arya.tools import file_agent
+    tmp = Path(tempfile.mkdtemp(prefix="arya_dialogue_files_"))
+    folders = {name: tmp / name.capitalize() for name in ("downloads", "desktop", "documents")}
+    for p in folders.values():
+        p.mkdir()
+    (folders["downloads"] / "NICOS_MCP_Phase1_Plan.docx").write_text("plan", encoding="utf-8")
+    (folders["downloads"] / "Dynamics Ex Solutions.pdf").write_text("pdf", encoding="utf-8")
+    (folders["documents"] / "Lab report draft.docx").write_text("draft", encoding="utf-8")
+    file_agent._folders = lambda: folders
+    # The scratch tree is in %TEMP% (under AppData, which the policy rightly refuses): allow only this tree.
+    from arya.core import policy
+    real_check = policy.check_path
+
+    def check_path(p, *a, **k):
+        return Path(p) if tmp in Path(p).resolve().parents or Path(p).resolve() == tmp else real_check(p, *a, **k)
+    policy.check_path = check_path
+
+
+def run_dialogues(verbose: bool = False) -> tuple[int, int, list[str]]:
+    """Each dialogue in dialogues.yaml in order, without a reset between its turns. A turn passes when the right
+    part of ARYA answered, did the right thing and said the right piece."""
+    import yaml
+
+    from arya.core.embedder import load_embedder
+
+    load_embedder()
+    rec = Recorder()
+    _sandbox(rec)
+    _sandbox_files()
+    items = yaml.safe_load((HERE / "dialogues.yaml").read_text(encoding="utf-8"))["dialogues"]
+    passed = total = 0
+    failures: list[str] = []
+    for d in items:
+        _reset()
+        try:
+            from arya.core import dialogue
+            dialogue.reset()
+        except ImportError:
+            pass
+        print(f"  {d['name']}")
+        for turn in d["turns"]:
+            rec.actions.clear()
+            say = turn["say"]
+            try:
+                route, reply = asyncio.run(_turn(say))
+            except Exception as exc:
+                route, reply = "(error)", f"{type(exc).__name__}: {exc}"
+            problems = []
+            expected = turn.get("route")
+            if expected == "model" and route in ("model", "model + tools"):
+                expected = route
+            if expected and route != expected:
+                problems.append(f"went to {route!r}, expected {turn['route']!r}")
+            if turn.get("reply") and turn["reply"].lower() not in reply.lower():
+                problems.append(f"reply lacks {turn['reply']!r}")
+            if turn.get("action") and turn["action"] not in rec.actions:
+                problems.append(f"no {turn['action']} (did: {rec.actions or 'nothing'})")
+            total += 1
+            passed += not problems
+            mark = "PASS" if not problems else "FAIL"
+            print(f"    {mark}  {say[:50]:50} → {route}" + ("  — " + "; ".join(problems) if problems else "")
+                  + (f"\n          {reply[:140]}" if verbose else ""))
+            if problems:
+                failures.append(f"{d['name']}: {say!r}: " + "; ".join(problems))
+    _reset()
+    return passed, total, failures
