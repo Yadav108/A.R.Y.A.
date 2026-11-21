@@ -140,6 +140,8 @@ def main() -> int:
     if args.cloud:
         os.environ["ARYA_MODE"] = "cloud"
     os.environ["ARYA_CLOUD_OFFER"] = "0"            # measure answers, not "shall I ask the cloud?" offers
+    os.environ["ARYA_BANDITS"] = "0"                # benchmark turns must not teach your style learner, and every
+                                                    # run answers the same way (arya/core/bandit.py)
     sys.path.insert(0, str(HERE.parents[1]))
 
     import yaml
