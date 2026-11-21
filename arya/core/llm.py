@@ -3254,6 +3254,19 @@ async def stream_with_tools(message: str):
         yield result
         return
 
+    from arya.core import addressee as _addr
+    if _addr.not_for_you(message):
+        # "That wasn't for you": the last sentence ARYA answered was side talk — a label for the daily refit.
+        last = next((m["content"] for m in reversed(get_history(limit=6)) if m["role"] == "user"), "")
+        if last:
+            _addr.record_feedback(last, "other")
+        reply = "Sorry, I'll stay out of that. I'll learn from it."
+        print("Instant answer: not for ARYA (feedback)")
+        save_message("user", message)
+        save_message("assistant", reply)
+        yield reply
+        return
+
     retry = await _retry_after_complaint(message)
     if retry is not None:
         print("Instant answer: retried after 'it didn't work'")

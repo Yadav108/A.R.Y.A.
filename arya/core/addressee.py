@@ -184,6 +184,34 @@ def strip_filler(text: str) -> str:
     return rest if rest and quick_verdict(rest) is True else text
 
 
+# "That wasn't for you", "I wasn't talking to you", "not you, NJ" — the last answered sentence was side talk.
+# A label for the classifier (the opposite of the "It was for you" button).
+_NOT_FOR_YOU = re.compile(
+    r"^\W*(?:(?:no|nope|sorry|hey|arya|nj|ok|okay)\W+)*(?:that\s+(?:was\s*n[o']?t|wasn'?t|is\s*n[o']?t|isn'?t|"
+    r"was\s+not|is\s+not)\s+(?:for|to|meant\s+for)\s+you|i\s+(?:was\s*n[o']?t|wasn'?t|was\s+not)\s+(?:talking|speaking)"
+    r"\s+to\s+you|not\s+(?:talking\s+to\s+)?you|(?:i\s+was\s+)?talking\s+to\s+(?:someone|somebody)\s+else|"
+    r"(?:that'?s|it'?s|that\s+is)\s+not\s+for\s+you)(?:\W+(?:arya|nj|stop listening))*\W*$", re.IGNORECASE)
+
+
+def not_for_you(text: str) -> bool:
+    return bool(_NOT_FOR_YOU.match(text or ""))
+
+
+def record_feedback(text: str, label: str) -> None:
+    """Save a label from use ("other" after "that wasn't for you") for the daily refit. Local only."""
+    import json
+    from datetime import datetime
+    from pathlib import Path
+    path = Path(os.getenv("ARYA_DATA_DIR") or Path(os.getenv("LOCALAPPDATA") or Path.home()) / "ARYA") / "research" / "feedback.jsonl"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps({"text": text, "label": label, "at": datetime.now().isoformat(timespec="seconds")},
+                               ensure_ascii=False) + "\n")
+    except OSError as exc:
+        print(f"Listening: feedback not saved ({exc})")
+
+
 def repetitive(text: str) -> bool:
     """'Cheese. Cheese. Cheese. …', 'I don't know, I don't know, but I don't know …', 'This is a joke.' x4:
     the same phrase over and over is Whisper looping on background noise or a song, not a request."""
@@ -223,6 +251,8 @@ def quick_verdict(text: str, pending_confirmation: bool = False) -> bool | None:
     """True/False when a rule settles it, None when the model should decide."""
     if repetitive(text):
         return False
+    if not_for_you(text):
+        return True                       # said to ARYA, about the last thing it answered
     if pending_confirmation:
         return True                       # ARYA asked a yes/no question — the answer is for it
     if _NAME.search(text):
@@ -283,6 +313,27 @@ def quick_verdict(text: str, pending_confirmation: bool = False) -> bool | None:
     return None                           # the local model decides from context
 
 
+USE_CLASSIFIER = os.getenv("ARYA_ADDRESSEE_CLASSIFIER", "1") != "0"
+
+
+async def classifier_probability(text: str, last_reply: str, seconds_since_reply: float | None) -> float | None:
+    """P(said to ARYA) from the learned classifier, or None when there is none (not fitted yet / turned off)."""
+    if not USE_CLASSIFIER:
+        return None
+    try:
+        import asyncio
+
+        from arya.research.addressee_model import featurize, load_model, probability
+        m = load_model()
+        if m is None:
+            return None
+        x = await asyncio.to_thread(featurize, text, last_reply, seconds_since_reply)
+        return probability(x, m)
+    except Exception as exc:
+        print(f"Addressee classifier skipped ({type(exc).__name__}: {exc})")
+        return None
+
+
 async def is_addressed(text: str, *, last_reply: str = "", seconds_since_reply: float | None = None,
                        recent: list[dict] | None = None, pending_confirmation: bool = False,
                        asked_question: bool = False, music_playing: bool = False) -> tuple[bool, str]:
@@ -299,6 +350,19 @@ async def is_addressed(text: str, *, last_reply: str = "", seconds_since_reply: 
         # Songs have vocals: from the log (2026-11-21), lyrics like "Now we'll talk." were judged ARYA and
         # answered — and even learned from. Commands, real questions and "NJ, …" are settled by the rules above.
         return False, "music playing, unclear sentence ignored"
+
+    # The learned classifier (arya/research/addressee_model.py, fitted on your labelled follow-ups): sure either
+    # way -> decided here in a few ms; only the uncertain middle goes to the local model. Measured leave-one-day-
+    # out on 379 real follow-ups: side talk answered 20.9% -> 11.4%, requests ignored 23.1% -> 15.8%,
+    # model calls 233 -> 70.
+    p = await classifier_probability(text, last_reply, seconds_since_reply)
+    if p is not None:
+        from arya.research.addressee_model import load_model
+        m = load_model()
+        if p >= m.get("hi", 0.7):
+            return True, f"classifier p={p:.2f}"
+        if p < m.get("lo", 0.4):
+            return False, f"classifier p={p:.2f}"
 
     from arya.core.llm_local import LocalLLMUnavailable, chat_local
 

@@ -60,6 +60,17 @@ def backed_up_today(today: date | None = None) -> bool:
     return any(p.name == day for p in backups())
 
 
+async def _refit_listening() -> None:
+    """Once a day: refit "was that for me?" on everything labelled so far — each "It was for you" and
+    "that wasn't for you" since yesterday included (arya/research/addressee_model.py). Local only."""
+    try:
+        from arya.research import addressee_data, addressee_model
+        await asyncio.to_thread(addressee_data.main)          # rebuild the dataset from the log
+        print("Listening: " + await asyncio.to_thread(addressee_model.retrain))
+    except Exception as exc:
+        print(f"Listening: refit skipped ({type(exc).__name__}: {exc})")
+
+
 async def run() -> None:
     """Started by the server: back up once a day."""
     await asyncio.sleep(120)                                  # let startup finish first
@@ -67,6 +78,7 @@ async def run() -> None:
         try:
             if not backed_up_today():
                 await asyncio.to_thread(back_up)
+                await _refit_listening()
         except Exception as exc:
             print(f"Backup failed: {type(exc).__name__}: {exc}")
         await asyncio.sleep(3600)
