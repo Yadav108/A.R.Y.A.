@@ -193,6 +193,32 @@ _NOT_FOR_YOU = re.compile(
     r"(?:that'?s|it'?s|that\s+is)\s+not\s+for\s+you)(?:\W+(?:arya|nj|stop listening))*\W*$", re.IGNORECASE)
 
 
+# How the current turn reached ARYA: "wake", "name", "typed", "push-to-talk", "phone", or "follow:<how>"
+# (rule / classifier with its p / model / answer / unfiltered). Saved with your line; learning reads it.
+origin: dict = {"source": "typed", "p": None}
+
+# Sources that are clearly said to ARYA. A follow-up the classifier judged counts only when it was sure.
+TRUSTED_SOURCES = {"wake", "name", "typed", "push-to-talk", "phone", "follow:rule", "follow:answer"}
+# Measured (arya/research/learning_trust_eval.py, leave-one-day-out): side talk among learnable follow-ups
+# 14.0% (everything answered) -> 2.0% at 0.7 with 65% of real requests kept; 0.85 leaked more (2.3%) and kept less.
+TRUST_P = 0.7
+
+
+def set_origin(source: str, p: float | None = None) -> None:
+    origin.update(source=source, p=p)
+
+
+def trusted(source: str | None, p: float | None) -> bool | None:
+    """True/False for a recorded source; None when unknown (older lines: judged again when learning)."""
+    if not source:
+        return None
+    if source in TRUSTED_SOURCES:
+        return True
+    if source == "follow:classifier":
+        return p is not None and p >= TRUST_P
+    return False                         # the 3B judge, unfiltered speech, side talk
+
+
 def not_for_you(text: str) -> bool:
     return bool(_NOT_FOR_YOU.match(text or ""))
 

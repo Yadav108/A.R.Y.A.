@@ -47,10 +47,45 @@ def _initialize_database() -> None:
                 "CREATE INDEX IF NOT EXISTS idx_mv_timestamp "
                 "ON memory_vectors (timestamp DESC)"
             )
+            # How each of your lines reached ARYA (wake word, typed, a follow-up the classifier was sure of …):
+            # learning only trusts lines that were clearly said to ARYA (arya/memory/learning.py).
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS message_source (
+                    message_id INTEGER PRIMARY KEY,
+                    source     TEXT    NOT NULL,
+                    p          REAL
+                )
+            """)
             conn.commit()
 
 
 # ── Messages ─────────────────────────────────────────────────────────────────
+
+def note_source(message_id: int, source: str, p: float | None = None) -> None:
+    with _DB_LOCK:
+        with _get_connection() as conn:
+            conn.execute("INSERT OR REPLACE INTO message_source (message_id, source, p) VALUES (?, ?, ?)",
+                         (message_id, source, p))
+            conn.commit()
+
+
+def last_user_message_id() -> int | None:
+    with _DB_LOCK:
+        with _get_connection() as conn:
+            row = conn.execute("SELECT id FROM messages WHERE role = 'user' ORDER BY id DESC LIMIT 1").fetchone()
+    return row[0] if row else None
+
+
+def sources(ids: list[int]) -> dict[int, tuple[str, float | None]]:
+    if not ids:
+        return {}
+    with _DB_LOCK:
+        with _get_connection() as conn:
+            q = ",".join("?" * len(ids))
+            rows = conn.execute(f"SELECT message_id, source, p FROM message_source WHERE message_id IN ({q})",
+                                ids).fetchall()
+    return {r[0]: (r[1], r[2]) for r in rows}
+
 
 def save_message(role: str, content: str) -> int:
     """Insert a message and return its row-id."""

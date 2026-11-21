@@ -33,9 +33,20 @@ def run(verbose: bool = False) -> int:
     t0 = time.monotonic()
     for i, case in enumerate(cases, 1):
         learning.DB_OVERRIDE = Path(tempfile.mkdtemp(prefix="arya_learn_")) / "learn.db"
+        from arya.memory.database import note_source, save_message
         for n, convo in enumerate(case["conversations"]):
-            cv = learning.Conversation(first=n * 100 + 1, last=n * 100 + len(convo), ended=time.time(),
-                                       lines=[(role, text) for role, text in convo])
+            # A line can say how it reached ARYA: [user, "…", "follow:model"] (default: typed). They go into the
+            # eval's scratch history, so learning reads the sources exactly as it does live.
+            ids = []
+            for line in convo:
+                mid = save_message(line[0], line[1])
+                if line[0] == "user":
+                    src = line[2] if len(line) > 2 else "typed"
+                    p = float(src.split("@")[1]) if "@" in src else None
+                    note_source(mid, src.split("@")[0], p)
+                ids.append(mid)
+            cv = learning.Conversation(first=ids[0], last=ids[-1], ended=time.time(),
+                                       lines=[(line[0], line[1]) for line in convo], ids=ids)
             loop.run_until_complete(learning.learn_from(cv))
         kept = [r["text"] for r in learning.memories(None)]
         hit = [p for p in case.get("expect", []) if any(re.search(p, k, re.IGNORECASE) for k in kept)]

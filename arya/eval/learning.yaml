@@ -118,3 +118,37 @@ cases:
         - [assistant, "Reminder set for Friday."]
     expect: []
     forbid: ["money", "bank", "spent"]
+
+  # Only what was said to ARYA (2026-11-21: lyrics and talk with friends were learned). The third element says
+  # how a line reached ARYA: wake / typed / follow:rule / follow:classifier@p / follow:model / side-talk.
+  - id: lyrics-answered
+    conversations:
+      - - [user, "open YouTube Music", "wake"]
+        - [assistant, "Opening YouTube Music."]
+        - [user, "Yeah, I do think we're gonna have a little bit there.", "follow:model"]
+        - [assistant, "Great thinking. Enjoy your music session."]
+        - [user, "Does even plan, but really. I never plan anything, I just go with it.", "follow:model"]
+        - [assistant, "Then perhaps we could catch up on some reading or a light walk."]
+    expect: []
+    forbid: ["plan", "spontaneous", "reading", "walk", "music"]
+
+  - id: friend-chat-and-a-real-fact
+    conversations:
+      - - [user, "I'm building a line-following robot for my project course, remind me how PID works", "wake"]
+        - [assistant, "A PID controller adds a proportional, an integral and a derivative term of the error."]
+        - [user, "Actually, I wanted to do psychology, that's my field, I want to explore the BBA department too",
+           "follow:classifier@0.55"]
+        - [assistant, "Great choice. What would you like to explore?"]
+        - [user, "I believe in building myself rather than using someone else's work", "side-talk"]
+        - [assistant, "That's a strong stance."]
+    expect: ["robot"]
+    forbid: ["psychology", "bba", "building myself|own work|someone else"]
+
+  - id: sure-follow-up-still-learned
+    conversations:
+      - - [user, "what's the weather like in Schweinfurt?", "wake"]
+        - [assistant, "Overcast, 8 degrees."]
+        - [user, "I prefer temperatures in Fahrenheit, always give me Fahrenheit please", "follow:classifier@0.93"]
+        - [assistant, "Okay, Fahrenheit from now on."]
+    expect: ["fahrenheit"]
+    forbid: ["schweinfurt", "overcast"]

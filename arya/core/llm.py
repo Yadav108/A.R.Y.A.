@@ -22,8 +22,17 @@ from arya.memory.database import save_message as _db_save_message
 
 def save_message(role: str, content: str) -> int:
     """History keeps ARYA's maths readable (ζ, ωₙ²) and plain, so the model isn't shown its own
-    LaTeX or markdown to copy."""
-    return _db_save_message(role, plain_text(latex_to_text(content)) if role == "assistant" else content)
+    LaTeX or markdown to copy. Your lines are saved with how they reached ARYA (learning trusts only
+    lines clearly said to it)."""
+    mid = _db_save_message(role, plain_text(latex_to_text(content)) if role == "assistant" else content)
+    if role == "user":
+        try:
+            from arya.core import addressee
+            from arya.memory.database import note_source
+            note_source(mid, addressee.origin["source"], addressee.origin["p"])
+        except Exception as exc:
+            print(f"History: source not saved ({type(exc).__name__})")
+    return mid
 
 
 # Spoken answers stop here unless detail was asked for (~8 short sentences); see wants_detail().
@@ -3299,6 +3308,13 @@ async def _turn_pipeline(message: str):
         last = next((m["content"] for m in reversed(get_history(limit=6)) if m["role"] == "user"), "")
         if last:
             _addr.record_feedback(last, "other")
+            try:                                         # …and never learn from it (arya/memory/learning.py)
+                from arya.memory.database import last_user_message_id, note_source
+                mid = last_user_message_id()
+                if mid is not None:
+                    note_source(mid, "side-talk")
+            except Exception as exc:
+                print(f"History: side talk not marked ({type(exc).__name__})")
         reply = "Sorry, I'll stay out of that. I'll learn from it."
         _instant("not for ARYA (feedback)")
         save_message("user", message)
