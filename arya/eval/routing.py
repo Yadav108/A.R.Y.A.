@@ -85,6 +85,9 @@ def _sandbox(rec: Recorder) -> None:
     browser._focus = lambda hwnd: True
     browser._press = lambda *keys: rec.add("keys")
     browser._type = lambda text: None                  # typing into Chrome's tab search: never for real
+    browser._foreground = lambda: 2                     # the tab-search popup "is open" (never the real screen)
+    browser._is_chrome = lambda hwnd: True
+    browser._wait_for = lambda test, seconds: 2
     from arya.tools import remote
     remote._lock = lambda: rec.add("lock")             # never lock or sleep the laptop during a benchmark
     remote._suspend = lambda: rec.add("sleep")

@@ -745,6 +745,16 @@ def set_smart_listening(enabled: bool) -> None:
     emit_status(f"ARYA_SMART:{'on' if _smart_listening else 'off'}")
 
 
+async def _music_playing() -> bool:
+    """Is a song playing right now (Windows media controls)? False if that can't be told quickly."""
+    try:
+        from arya.tools import music
+        now = await asyncio.wait_for(music.now_playing(), timeout=0.5)
+        return bool(now and now.get("playing"))
+    except Exception:
+        return False
+
+
 async def _meant_for_arya(command: str, quiet: bool = False) -> bool:
     """Decide whether a follow-up was said to ARYA. Ignored speech is never
     answered, never saved to history, and doesn't keep the conversation open;
@@ -757,12 +767,13 @@ async def _meant_for_arya(command: str, quiet: bool = False) -> bool:
     since = time.monotonic() - _last_spoke_at if _last_spoke_at else None
     from arya.tools import alarms, browser
     # ARYA is waiting for an answer: a yes/no, the song or the reminder time it asked for -> it's for ARYA.
-    expecting = policy.has_pending() or browser.awaiting_song() or alarms.awaiting()
+    expecting = policy.has_pending() or browser.awaiting_song() or browser.awaiting_tab() or alarms.awaiting()
     # A real question in its last reply a moment ago -> the model is told so but still judges. ("How can I
     # assist you today?" isn't one: from the log, it ended nearly every reply and let all chatter through.)
     asked = (addressee.asks_a_real_question(last_reply) and since is not None and since < ANSWER_WINDOW_S)
     ok, why = await addressee.is_addressed(command, last_reply=last_reply, seconds_since_reply=since,
-                                           recent=recent, pending_confirmation=expecting, asked_question=asked)
+                                           recent=recent, pending_confirmation=expecting, asked_question=asked,
+                                           music_playing=await _music_playing())
     if ok:
         _ignored_in_a_row = 0
         return True

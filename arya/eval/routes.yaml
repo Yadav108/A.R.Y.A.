@@ -55,6 +55,19 @@ routes:
   - {say: "minimize window explorer", route: window control, action: window}   # from-log
   - {say: "Can you restore the tab?", route: browser, action: keys}   # from-log (was window control)
   - {say: "switch to \"claude\" tab opened in chrome under JCNS group", route: browser, action: keys}   # from-log
+  # 2026-11-21 tab check: these went to the model
+  - {say: "switch tabs", route: browser, action: keys, addressed: true}
+  - {say: "change the tab", route: browser, action: keys, addressed: true}
+  - {say: "second tab", route: browser, action: keys, addressed: true}
+  - {say: "last tab", route: browser, action: keys, addressed: true}
+  - {say: "go back a tab", route: browser, action: keys, addressed: true}
+  - {say: "tab to the right", route: browser, action: keys, addressed: true}
+  - {say: "switch to the other tab", route: browser, action: keys, addressed: true}
+  - {say: "open the Gmail tab", route: browser, action: keys, addressed: true}
+  - {say: "go to the tab with the PDF", route: browser, action: keys, addressed: true}
+  - {say: "go back to the last tab I was on", route: browser, reply: "no shortcut"}
+  - {say: "First, open Dynamics X-Solution PDF tab.", route: browser, action: keys, addressed: true}   # from-log (was open_app)
+  - {say: "open a new tab", route: browser, action: keys}
   # KiCad projects (K1)
   - {say: "new board project called motor driver", route: kicad, addressed: true}
   - {say: "requirement: runs from 12 V", route: kicad, addressed: true}
