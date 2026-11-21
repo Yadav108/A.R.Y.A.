@@ -87,6 +87,7 @@ routes:
   - {say: "next", route: media keys}                                     # no bench session: next track, as before
   # Field limits (log 2026-11-16/17)
   - {say: "Hurry up, pause the music.", route: media keys, action: media_key, addressed: true}   # from-log
+  - {say: "First, resume the music.", route: media keys, action: media_key, addressed: true}   # from-log 2026-11-21
   - {say: "open window explorer.", route: open app, action: open_app, addressed: true}         # from-log
   - {say: "No, that's not it.", route: model}
   # Webcam, only when asked (PR F)

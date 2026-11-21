@@ -134,6 +134,15 @@ _MISHEARD_NJ_ALONE = re.compile(rf"^\W*(?:hey|hi|ok|okay)\W+{_NJ_FORMS}\W*$", re
 _MISHEARD_NJ_TIGHT = re.compile(r"^\W*(?:(?:hey|hi|ok|okay)\W+)?(?:enjoy|anjay|engine)\s+(?=\w)", re.IGNORECASE)
 
 
+_LONE_NJ = re.compile(rf"^\W*(?:(?:hey|hi|ok|okay|uh|um)\W+)?(?:{_NJ_FORMS}|{_LOOSE_NAME})\W*$", re.IGNORECASE)
+
+
+def lone_nj(text: str) -> bool:
+    """'Enjoy.' / 'Engine?' / 'NJ.' — only the name. Used right after a bare wake word, where a lone 'Enjoy!'
+    can't be the start of a sentence for someone else."""
+    return bool(_LONE_NJ.match(text or ""))
+
+
 def misheard_nj(text: str) -> re.Match | None:
     from arya.core import hotword
     if not hotword.extra_models():
@@ -162,7 +171,9 @@ def split_name(text: str) -> tuple[str, bool]:
     return text, False
 
 
-_FILLER = re.compile(r"^\W*(?:hurry\s+up|come\s+on|quick(?:ly)?|okay\s+so|ok\s+so|alright|all\s+right|now|"
+# "First, resume the music." (2026-11-21: ignored, then answered in words without pressing play)
+_FILLER = re.compile(r"^\W*(?:hurry\s+up|come\s+on|quick(?:ly)?|okay\s+so|ok\s+so|alright|all\s+right|now|first|"
+                     r"first\s+of\s+all|then|and\s+then|after\s+that|next|also|okay|ok|"
                      r"listen|wait|oh|hmm|yeah|yes|no|sorry|please|and|so|um|uh)\s*[,.!:;-]+\s*(?=\w)", re.IGNORECASE)
 
 
