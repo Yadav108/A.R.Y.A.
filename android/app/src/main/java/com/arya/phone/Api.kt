@@ -35,6 +35,17 @@ object Api {
 
     fun hello(base: String, key: String): JSONObject = call(request(base, "/api/hello", key).get().build())
 
+    // Before talking: is the laptop there at all? Short timeouts, so an asleep laptop costs about a second, not 16.
+    private val quick = client.newBuilder()
+        .connectTimeout(1200, TimeUnit.MILLISECONDS)
+        .readTimeout(2, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(false)
+        .build()
+
+    fun reachable(base: String, key: String): Boolean = try {
+        quick.newCall(request(base, "/api/hello", key).get().build()).execute().use { it.code < 500 }
+    } catch (e: Exception) { false }
+
     fun waitFor(base: String, key: String, after: Long): JSONObject =
         call(request(base, "/api/wait?after=$after&timeout=50", key).get().build())
 

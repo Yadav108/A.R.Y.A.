@@ -12,6 +12,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
 import android.os.Looper
 import android.util.Base64
 import android.view.Gravity
@@ -45,6 +46,10 @@ class TalkActivity : Activity() {
     @Volatile private var pendingAction: JSONObject? = null       // a phone task that opens another app: runs after
     @Volatile private var leftApp = false                         // ARYA said "Calling Mom." (Actions.kt)
     private var tts: TextToSpeech? = null                         // the phone's own voice, for what only the phone knows
+    @Volatile private var offline: Boolean? = null                // laptop out of reach -> phone tasks on the phone alone
+    private lateinit var ear: OfflineEar
+    private val afterSpeech = java.util.concurrent.ConcurrentHashMap<String, () -> Unit>()
+    private var utterances = 0
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -55,6 +60,12 @@ class TalkActivity : Activity() {
             setTurnScreenOn(true)
         }
         tts = TextToSpeech(this) { }
+        tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+            override fun onStart(id: String?) {}
+            override fun onDone(id: String?) { afterSpeech.remove(id)?.let { ui.post(it) } }
+            @Deprecated("Deprecated in Java") override fun onError(id: String?) { afterSpeech.remove(id)?.let { ui.post(it) } }
+        })
+        ear = OfflineEar(this)
         player = Player(this) { ui.post { spokenAll() } }
         build()
         if (!prefs.paired) {
@@ -111,10 +122,40 @@ class TalkActivity : Activity() {
     }
 
     /** What only the phone knows ("I couldn't find Mom in your contacts"): said with the phone's own voice. */
-    private fun say(text: String) {
+    private fun say(text: String, then: (() -> Unit)? = null) {
         show(State.IDLE, text)
         ui.post { reply.text = text }
-        tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "arya-local")
+        val id = "arya-local-${utterances++}"
+        if (then != null) afterSpeech[id] = then
+        val ok = tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, id)
+        if (ok != TextToSpeech.SUCCESS) afterSpeech.remove(id)?.let { ui.post(it) }      // no voice: carry on anyway
+    }
+
+    // ── The laptop out of reach: phone tasks on the phone alone (PhoneCommands.kt) ─────────────────────────────
+
+    private fun listenOffline(follow: Boolean) {
+        show(State.LISTENING, if (follow) "Anything else? (on the phone — the laptop is out of reach)"
+                              else "Listening on the phone — the laptop is out of reach.")
+        ear.listen { text ->
+            if (text.isNullOrBlank()) show(State.IDLE, "Tap to talk again.")
+            else offlineTurn(text)
+        }
+    }
+
+    private fun offlineTurn(text: String) {
+        ui.post { heard.text = "You: $text"; reply.text = "" }
+        val cmd = PhoneCommands.parse(text)
+        if (cmd == null) {
+            say("The laptop is out of reach, so right now I can only do phone tasks: alarms, timers, calls, " +
+                "messages, maps, apps, music and the flashlight.")
+            return
+        }
+        val a = JSONObject(cmd.fields).put("action", cmd.action)
+        when {
+            cmd.action == "ask" -> say(cmd.say) { listenOffline(follow = true) }
+            Actions.leavesApp(a) -> say(cmd.say) { perform(a) }               // "Calling Mom." then the call
+            else -> { perform(a); say(cmd.say) }
+        }
     }
 
     private fun build() {
@@ -171,6 +212,15 @@ class TalkActivity : Activity() {
     private fun listen(follow: Boolean) {
         val urls = prefs.urls
         if (urls.isEmpty()) return
+        if (offline == null) {                                     // first: is the laptop there? (≈1 s at most)
+            show(State.THINKING, "Connecting…")
+            thread(name = "arya-reach") {
+                offline = urls.none { Api.reachable(it, prefs.key) }
+                ui.post { listen(follow) }
+            }
+            return
+        }
+        if (offline == true) { listenOffline(follow); return }
         followUp = follow
         show(State.LISTENING, if (follow) "Anything else? (just speak)" else "Speak now — I'll send it when you pause.")
         val r = Recorder()
@@ -206,8 +256,12 @@ class TalkActivity : Activity() {
         streamDone = true
         if (lastFailure != null) {
             lastError = true
-            show(State.IDLE, if (lastFailure is Api.Unpaired) "Not paired any more: scan the new QR code in ARYA."
-                             else "Can't reach the laptop. Is it awake, and Tailscale on?")
+            if (lastFailure is Api.Unpaired) show(State.IDLE, "Not paired any more: scan the new QR code in ARYA.")
+            else {                                                     // the laptop went away: carry on with the phone
+                offline = true
+                ui.post { say("The laptop is out of reach. Say it again and I'll do it on the phone.") {
+                    listenOffline(follow = false) } }
+            }
         } else if (!player.busy) ui.post { spokenAll() }
     }
 
@@ -267,6 +321,7 @@ class TalkActivity : Activity() {
         player.stop()
         releaseFocus()
         if (pendingAction == null) tts?.stop()
+        ear.stop()
         if (!isChangingConfigurations) finish()                         // closed: stop listening, don't come back
     }
 

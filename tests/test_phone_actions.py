@@ -126,3 +126,25 @@ def test_contacts_and_messages_are_not_logged(ws, monkeypatch, tmp_path):
     run_turn(ws, monkeypatch, "Text Anna I am running late.")
     assert ("phone_action", {"action": "sms"}) in logged
     assert "Anna" not in repr(logged) and "late" not in repr(logged)
+
+
+# ── The same cases the phone's offline parser is tested with (PhoneCommandsTest.kt) ─────────────────────────────
+
+import json
+from pathlib import Path
+
+CASES = json.loads((Path(__file__).resolve().parents[1] / "android" / "app" / "src" / "test" / "resources" /
+                    "phone_cases.json").read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize("case", CASES["tasks"], ids=lambda c: c["say"])
+def test_shared_tasks(case):
+    got = A.parse(case["say"], NOW)
+    assert got is not None, case["say"]
+    for k, v in case["want"].items():
+        assert got[k] == v, (case["say"], k, got)
+
+
+@pytest.mark.parametrize("text", CASES["none"])
+def test_shared_not_tasks(text):
+    assert A.parse(text, NOW) is None
