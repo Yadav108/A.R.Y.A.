@@ -7,8 +7,11 @@ import android.graphics.drawable.GradientDrawable
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
+import android.app.KeyguardManager
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
+import android.speech.tts.TextToSpeech
 import android.os.Looper
 import android.util.Base64
 import android.view.Gravity
@@ -17,6 +20,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import kotlin.concurrent.thread
+import org.json.JSONObject
 
 /** Talking to ARYA. Opens listening; you speak; ARYA's answer plays sentence by sentence as it arrives (its own
  *  voice, from the laptop); then it listens again for a follow-up. Tap the circle to interrupt ARYA, or to send
@@ -38,11 +42,19 @@ class TalkActivity : Activity() {
     @Volatile private var followUp = false
     @Volatile private var lastError = false
     private var focus: AudioFocusRequest? = null
+    @Volatile private var pendingAction: JSONObject? = null       // a phone task that opens another app: runs after
+    @Volatile private var leftApp = false                         // ARYA said "Calling Mom." (Actions.kt)
+    private var tts: TextToSpeech? = null                         // the phone's own voice, for what only the phone knows
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         prefs = Prefs(this)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        if (Build.VERSION.SDK_INT >= 27) {                         // works from the lock screen, like Google's assistant
+            setShowWhenLocked(true)
+            setTurnScreenOn(true)
+        }
+        tts = TextToSpeech(this) { }
         player = Player(this) { ui.post { spokenAll() } }
         build()
         if (!prefs.paired) {
@@ -57,8 +69,52 @@ class TalkActivity : Activity() {
     }
 
     override fun onRequestPermissionsResult(code: Int, perms: Array<out String>, results: IntArray) {
+        if (code == PEOPLE) {                                      // contacts / calls: now carry out the waiting task
+            pendingAction?.let { a -> pendingAction = null; perform(a) }
+            return
+        }
         if (code == MIC && results.firstOrNull() == PackageManager.PERMISSION_GRANTED) listen(follow = false)
         else show(State.IDLE, "ARYA needs the microphone to hear you (Settings → Apps → ARYA → Permissions).")
+    }
+
+    // ── Phone tasks (Actions.kt) ─────────────────────────────────────────────
+
+    private fun action(a: JSONObject) {
+        if (Actions.leavesApp(a)) pendingAction = a                   // after "Calling Mom." has been said
+        else ui.post { perform(a) }
+    }
+
+    private fun perform(a: JSONObject) {
+        val needs = when (a.optString("action")) {
+            "call" -> listOf(android.Manifest.permission.READ_CONTACTS, android.Manifest.permission.CALL_PHONE)
+            "sms" -> listOf(android.Manifest.permission.READ_CONTACTS)
+            else -> emptyList()
+        }.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
+        val isNumber = a.optString("who").none { it.isLetter() }
+        if (needs.isNotEmpty() && !(isNumber && a.optString("action") == "call") && !prefs.askedPeople) {
+            prefs.askedPeople = true                               // asked once; after that Actions.kt explains
+            pendingAction = a
+            requestPermissions(needs.toTypedArray(), PEOPLE)
+            return
+        }
+        val go = {
+            if (Actions.leavesApp(a)) leftApp = true
+            val problem = Actions.run(this, a)
+            if (problem != null) { leftApp = false; say(problem) }
+        }
+        val km = getSystemService(KeyguardManager::class.java)
+        if (Actions.leavesApp(a) && km.isKeyguardLocked && Build.VERSION.SDK_INT >= 26) {
+            km.requestDismissKeyguard(this, object : KeyguardManager.KeyguardDismissCallback() {   // unlock first
+                override fun onDismissSucceeded() { go() }
+            })
+        } else go()
+    }
+
+    /** What only the phone knows ("I couldn't find Mom in your contacts"): said with the phone's own voice. */
+    private fun say(text: String) {
+        show(State.IDLE, text)
+        ui.post { reply.text = text }
+        tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "arya-local")
     }
 
     private fun build() {
@@ -167,6 +223,7 @@ class TalkActivity : Activity() {
                     player.enqueue(Base64.decode(audio, Base64.DEFAULT), e.optString("mime", "audio/wav"))
                 }
             }
+            "action" -> action(e)
             "done" -> {
                 val err = e.optString("error")
                 if (err.isNotEmpty()) { lastError = true; show(State.IDLE, "$err Tap to talk.") }
@@ -179,6 +236,12 @@ class TalkActivity : Activity() {
     private fun spokenAll() {
         if (!streamDone || player.busy) return
         releaseFocus()
+        pendingAction?.let { a ->                                   // "Calling Mom." said: now call
+            pendingAction = null
+            perform(a)
+            if (leftApp || pendingAction != null) return             // gone to the other app, or asking permission
+        }
+        if (leftApp) return
         if (state == State.SPEAKING || state == State.THINKING) {
             if (lastError) show(State.IDLE, "Tap to talk.") else listen(follow = true)
         }
@@ -203,10 +266,17 @@ class TalkActivity : Activity() {
         recorder?.cancel()
         player.stop()
         releaseFocus()
+        if (pendingAction == null) tts?.stop()
         if (!isChangingConfigurations) finish()                         // closed: stop listening, don't come back
+    }
+
+    override fun onDestroy() {
+        tts?.shutdown()
+        super.onDestroy()
     }
 
     companion object {
         private const val MIC = 11
+        private const val PEOPLE = 12
     }
 }
