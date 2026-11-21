@@ -259,6 +259,115 @@ def _list(found: list[tuple[float, Path]], now: float) -> str:
     return "; ".join(items)
 
 
+# ── Finding a file by (roughly) its name ─────────────────────────────────────
+# From the log: "NICO's MCP phase one plan" … "It is in downloads." — the file is NICOS_MCP_Phase1_Plan.docx, which
+# no exact-substring search finds. Names are compared as word sets: case, punctuation, "_", "phase1" -> "phase 1",
+# "one" -> "1" and plural / possessive "s" don't matter.
+
+_NUM = {"zero": "0", "one": "1", "two": "2", "three": "3", "four": "4", "five": "5", "six": "6", "seven": "7",
+        "eight": "8", "nine": "9", "ten": "10", "first": "1", "second": "2", "third": "3"}
+_STOP = {"my", "the", "a", "an", "of", "for", "file", "files", "document", "documents", "doc", "docs", "in", "on",
+         "and", "to", "with", "that", "this", "it", "please", "me", "pdf", "version", "copy"}
+_DOC_WORD = r"(?:document|doc|file|pdf|plan|notes?|slides?|presentation|report|sheet|spreadsheet|draft|paper|thesis|" \
+            r"essay|letter|cv|resume|protocol|manual|script|docx|xlsx|pptx)"
+_PLACE = r"(?:downloads|documents|desktop|(?:windows\s+|file\s+)?explorer)"
+_FIND_NAME = re.compile(
+    rf"^\W*(?:(?:can you|could you|please)\s+)*(?:find|look for|search for|locate|where(?:'s| is| are)|look at|show me|"
+    rf"open|show)\s+(?:me\s+)?(?:my\s+|the\s+)?(?P<name>.+?)(?:\s+(?P<doc>{_DOC_WORD}))?"
+    rf"(?:\s+(?:in|on|from)\s+(?:my\s+|the\s+)?(?P<where>{_PLACE}))?\W*$", re.IGNORECASE)
+NAME_SCAN_LIMIT = 20_000
+
+
+def _tokens(text: str) -> list[str]:
+    text = re.sub(r"([a-z])([A-Z])", r"\1 \2", text)
+    text = re.sub(r"([A-Za-z])(\d)|(\d)([A-Za-z])", lambda m: " ".join(g for g in m.groups() if g), text)
+    out = []
+    for w in re.findall(r"[a-z0-9]+", text.lower().replace("'s", "")):
+        w = _NUM.get(w, w)
+        if len(w) > 3 and w.endswith("s"):
+            w = w[:-1]
+        if w not in _STOP:
+            out.append(w)
+    return out
+
+
+def name_score(query: str, filename: str) -> float:
+    """Share of the query's words found in the file name (0..1)."""
+    q, f = _tokens(query), set(_tokens(Path(filename).stem))
+    if not q:
+        return 0.0
+    hit = sum(1 for w in q if w in f or (len(w) >= 3 and any(x.startswith(w) or w.startswith(x) for x in f if len(x) >= 3)))
+    return hit / len(q)
+
+
+def find_by_name(name: str, where: list[str] | None = None, limit: int = 3) -> list[tuple[float, Path]]:
+    folders = _folders()
+    found: list[tuple[float, float, Path]] = []
+    seen = 0
+    for key in where or ["downloads", "desktop", "documents"]:
+        base = folders.get(key)
+        if not base or not base.is_dir():
+            continue
+        depth = 3 if key == "documents" else 1
+        for root, dirs, files in os.walk(base):
+            rel = len(Path(root).relative_to(base).parts)
+            dirs[:] = [] if rel >= depth else [d for d in dirs if not d.startswith(".")]
+            for f in files:
+                seen += 1
+                if seen > NAME_SCAN_LIMIT:
+                    break
+                s = name_score(name, f)
+                if s >= 0.6:
+                    p = Path(root) / f
+                    try:
+                        found.append((s, p.stat().st_mtime, p))
+                    except OSError:
+                        pass
+    found.sort(key=lambda t: (t[0], t[1]), reverse=True)
+    return [(s, p) for s, _, p in found[:limit]]
+
+
+def _find_reply(message: str, now: float) -> str | None:
+    m = _FIND_NAME.match(message)
+    if not m:
+        return None
+    name = m.group("name").strip(" ,.'\"")
+    where_word = (m.group("where") or "").lower()
+    if re.search(r"\b(?:tab|window|song|music|track|video|app|email|mail|message|chat|website|site|formula|"
+                 r"exercise|lecture|chapter)\b", name, re.IGNORECASE) or len(_tokens(name)) == 0:
+        return None
+    # "where is the Coriolis acceleration in my notes?" — your course library, not a file on disk
+    if re.search(r"\b(?:in|from)\s+(?:my\s+|the\s+)?(?:notes|lectures?|material|slides|course|book|script|library)\b",
+                 message, re.IGNORECASE):
+        return None
+    explicit = bool(m.group("doc") or where_word or re.search(rf"\b{_DOC_WORD}\b", name, re.IGNORECASE))
+    where = [where_word] if where_word in ("downloads", "documents", "desktop") else None
+    hits = find_by_name(name, where)
+    strong = hits and hits[0][0] >= 0.75 and len(_tokens(name)) >= 2
+    if not (explicit or strong):
+        return None                                   # "find the Coriolis formula": not a file request
+    from arya.core import dialogue
+    dialogue.note_entity("document", name)
+    if not hits:
+        place = where_word.capitalize() if where else "Downloads, Desktop or Documents"
+        return f"I couldn't find a file called {name} in your {place}. Where is it, or what is it called exactly?"
+    score, p = hits[0]
+    dialogue.note_entity("document", name, path=str(p))
+    verb = m.group(0).strip().split()[0].lower()
+    from arya.core import policy
+    from arya.core.policy import check_path
+    if "explorer" in where_word:
+        os.startfile(str(check_path(p.parent)))         # the folder that holds it
+        policy.note_result("open_app")
+        return f"Opened the folder with {p.name}: {_where(p)}."
+    if verb == "open":
+        os.startfile(str(check_path(p)))
+        policy.note_result("open_app")
+        return f"Opening {_where(p)}."
+    others = f" Similar: {', '.join(q.name for _, q in hits[1:])}." if len(hits) > 1 else ""
+    return f"Found it: {_where(p)}, from {_ago(p.stat().st_mtime, now)}. Say \"open it\" to open it.{others}"
+
+
 def handle(message: str, now: float | None = None) -> str | None:
     """ARYA's reply for file chores, else None. Tidying only *offers* (policy.offer); the yes runs it."""
     from arya.core import policy
@@ -327,7 +436,7 @@ def handle(message: str, now: float | None = None) -> str | None:
         if len(found) == 1:
             return f"One {_spoken_kind(kind, 1)}: {_list(found, now)}."
         return f"Your newest {what}: {_list(found, now)}."
-    return None
+    return _find_reply(message, now)
 
 
 def confirm_tidy(args: dict) -> str:

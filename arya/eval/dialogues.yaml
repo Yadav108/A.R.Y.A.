@@ -1,0 +1,58 @@
+# Dialogue benchmark: follow-ups that refer back to the conversation ("it", "again", "it didn't work",
+# "it is in downloads"). Each dialogue runs in order without a reset; each turn says which part of ARYA must
+# answer (route), what it must have done (action) and/or a piece of the reply. Patterns from the real log
+# (python -m arya.eval --dialogues; see docs/research/conversation-understanding.md, problem 2).
+dialogues:
+  - name: song again
+    turns:
+      - {say: "play Kon Tujhe by Kishore Kumar", route: browser, action: open_url}
+      - {say: "play it again", route: browser, action: open_url, reply: "Kon Tujhe"}
+  - name: next song, again
+    turns:
+      - {say: "next song", route: media keys, action: media_key}
+      - {say: "again", route: media keys, action: media_key}
+  - name: volume, once more
+    turns:
+      - {say: "turn the volume up by 30 percent", action: media_key}
+      - {say: "one more time", action: media_key}
+  - name: resume, it haven't            # from-log: "Resume playing the song" -> "No it haven't"
+    turns:
+      - {say: "Resume playing the song", route: media keys, action: media_key}
+      - {say: "No it haven't", action: media_key}
+  - name: website didn't open
+    turns:
+      - {say: "open YouTube", route: browser, action: open_url}
+      - {say: "it didn't open", route: browser, action: open_url}
+  - name: tab switch didn't work
+    turns:
+      - {say: "switch to the Gmail tab", route: browser, action: keys}
+      - {say: "that didn't work", route: browser, action: keys}
+  - name: app again
+    turns:
+      - {say: "open Windows Explorer", action: open_app}
+      - {say: "open it again", action: open_app}
+  - name: window back                   # minimise, then "bring it back"
+    turns:
+      - {say: "minimize the Chrome window", route: window control, action: window}
+      - {say: "bring it back", route: window control, action: window}
+  - name: document, then its folder     # from-log: "NICO's MCP phase one plan" ... "It is in downloads."
+    turns:
+      - {say: "find Nico's MCP phase 1 plan", route: file agent}
+      - {say: "It is in downloads.", route: file agent, reply: "NICOS_MCP_Phase1_Plan"}
+  - name: document, find it             # from-log: "look at my MCP phase plan" ... "Find it in the Windows Explorer."
+    turns:
+      - {say: "look at my MCP phase one plan document", route: file agent, reply: "NICOS_MCP_Phase1_Plan"}
+      - {say: "Find it in the Windows Explorer.", route: file agent, action: startfile}
+  - name: tab name after a miss         # from-log: failed tab switch, then the title, then "switch to it"
+    turns:
+      - {say: "switch to the solutions tab", route: browser, action: keys}
+      - {say: "switch to it", route: browser, action: keys}
+  # Must NOT be resolved against the last action
+  - name: question, then 'again' is not an action
+    turns:
+      - {say: "what is the Coriolis acceleration?", route: model}
+      - {say: "explain it again more simply", route: model}
+  - name: chat after music is not a retry
+    turns:
+      - {say: "pause the music", route: media keys, action: media_key}
+      - {say: "it didn't rain today", route: model}

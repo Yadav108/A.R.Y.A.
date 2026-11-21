@@ -127,6 +127,8 @@ def main() -> int:
                     help="re-score the answers of the latest run with the current golden.yaml (no model calls)")
     ap.add_argument("--routes", action="store_true",
                     help="only the routing benchmark (routes.yaml): which part of ARYA answers each command")
+    ap.add_argument("--dialogues", action="store_true",
+                    help="the dialogue benchmark (dialogues.yaml): follow-ups that refer back (it, again, didn't work)")
     ap.add_argument("--learning", action="store_true",
                     help="the learning benchmark (learning.yaml): what ARYA learns from conversations")
     args = ap.parse_args()
@@ -146,6 +148,8 @@ def main() -> int:
 
     if args.routes:
         return _routes(args.verbose)
+    if args.dialogues:
+        return _dialogues(args.verbose)
     if args.learning:
         from arya.eval import learning as learning_eval
         return learning_eval.run(args.verbose)
@@ -234,6 +238,15 @@ def _routes(verbose: bool = False) -> int:
     print("\nRouting — which part of ARYA answers each command (side effects recorded, not performed)")
     passed, total, _ = routing.run(verbose)
     print(f"Routing: {passed}/{total} = {100.0 * passed / total:.0f} %")
+    return 0 if passed == total else 2
+
+
+def _dialogues(verbose: bool = False) -> int:
+    from arya.eval import routing
+
+    print("\nDialogues — follow-ups that refer back to the conversation")
+    passed, total, _ = routing.run_dialogues(verbose)
+    print(f"Dialogues: {passed}/{total} turns = {100.0 * passed / total:.0f} %")
     return 0 if passed == total else 2
 
 

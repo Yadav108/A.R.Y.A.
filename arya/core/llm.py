@@ -2194,7 +2194,9 @@ _QUICK_MEDIA = [
     (re.compile(r"^(?:un)?mute(?:\s+(?:the\s+)?(?:sound|volume|audio|it|music|pc|computer))?$"), "mute"),
     # Real pause / play, not one toggle for all (from the log: "resume", then "play", paused it again)
     (re.compile(r"^pause(?:\s+(?:the\s+)?(?:music|song|video|playback|it|track))?$"), "pause"),
-    (re.compile(r"^(?:resume|unpause|continue)(?:\s+(?:the\s+)?(?:music|song|video|playback|it|track))?$"
+    # "Resume playing the song" (from the log: went to the model, nothing pressed)
+    (re.compile(r"^(?:resume|unpause|continue|start)(?:\s+playing)?(?:\s+(?:the\s+)?(?:music|song|video|playback|it|"
+                r"track))?$"
                 r"|^play(?:\s+(?:the\s+)?(?:music|song|video|it))?$"), "play"),
     (re.compile(r"^(?:next|skip)(?:\s+(?:this\s+|the\s+)?(?:song|track|one|video))?$"
                 r"|^(?:play\s+)?(?:the\s+)?next\s+(?:song|track)$"), "next"),
@@ -2298,7 +2300,8 @@ _MEDIA_WITH_REASON = re.compile(r"^\W*(?:arya\W+)?(?P<cmd>play|resume|unpause|co
 _COMPLAINT = re.compile(
     r"^\W*(?:(?:no|nope|but|well|hey|nj|arya)\W+)*(?:"
     r"(?:it|that|you|the music|music|the song)\s+(?:did\s*n[o']?t|didn'?t|does\s*n[o']?t|doesn'?t|has\s*n[o']?t|"
-    r"hasn'?t|is\s*n[o']?t|isn'?t|did not|does not|has not|is not)(?:\s+(?:work|play|resume|start|happen|do anything|"
+    r"hasn'?t|have\s*n[o']?t|haven'?t|have not|is\s*n[o']?t|isn'?t|did not|does not|has not|is not)"
+    r"(?:\s+(?:work|play|resume|start|happen|do anything|"
     r"change|pause|stop|playing|working|done))?(?:\s+(?:yet|anything))?"
     r"|nothing(?:'s|\s+has|\s+is)?\s+(?:happened|happening|playing|changed)"
     r"|(?:it'?s|it\s+is|the music is|music is|the song is)\s+still\s+(?:paused|stopped|not\s+playing|playing|off|on)"
@@ -2460,7 +2463,42 @@ def _cloud_system_prompt() -> str:
     )
 
 
+_route_taken: dict = {"name": None}     # which part of ARYA answered this turn (arya/core/dialogue.py)
+_turn_depth = {"n": 0}                  # a routine's steps run turns inside a turn: only the outer one is recorded
+
+
+def _instant(route: str) -> None:
+    """Log the handler that answered ("Instant answer: browser" — arya/report.py reads these) and remember it."""
+    print(f"Instant answer: {route}")
+    _route_taken["name"] = route
+
+
 async def stream_with_tools(message: str):
+    """One turn. A follow-up that refers back ("play it again", "it didn't open", "switch to it", "It is in
+    downloads.") is first rewritten into the explicit request (arya/core/dialogue.py); afterwards the turn is
+    recorded so the next one can refer to it."""
+    from arya.core import dialogue
+
+    outer = _turn_depth["n"] == 0
+    _turn_depth["n"] += 1
+    try:
+        if outer:
+            _route_taken["name"] = None
+            resolved = dialogue.resolve(message)
+            if resolved and resolved.strip().lower() != message.strip().lower():
+                print(f"Dialogue: {message!r} -> {resolved!r}")
+                message = resolved
+        said: list[str] = []
+        async for sentence in _turn_pipeline(message):
+            said.append(sentence)
+            yield sentence
+        if outer:
+            dialogue.record(_route_taken["name"] or "model", message, " ".join(said))
+    finally:
+        _turn_depth["n"] -= 1
+
+
+async def _turn_pipeline(message: str):
     """Yield the reply sentence by sentence (so TTS can start on sentence one).
     Routes: pending confirmation → instant media command → explicit cloud
     question → LLM (local by default)."""
@@ -2476,7 +2514,7 @@ async def stream_with_tools(message: str):
     _turn_language.set(language.turn_language(message))                # Hinglish request -> Hinglish answer
     switched_language = language.handle(message) if language.matches(message) else None
     if switched_language:
-        print("Instant answer: language")
+        _instant("language")
         save_message("user", message)
         save_message("assistant", switched_language)
         yield switched_language
@@ -2504,7 +2542,7 @@ async def stream_with_tools(message: str):
         print(f"Capture skipped: {type(exc).__name__}: {exc}")
         captured = None
     if captured:
-        print("Instant answer: capture")
+        _instant("capture")
         save_message("user", message)
         save_message("assistant", captured)
         yield captured
@@ -2520,7 +2558,7 @@ async def stream_with_tools(message: str):
         print(f"KiCad skipped: {type(exc).__name__}: {exc}")
         designing = None
     if designing:
-        print("Instant answer: kicad")
+        _instant("kicad")
         save_message("user", message)
         save_message("assistant", designing)
         yield designing
@@ -2532,7 +2570,7 @@ async def stream_with_tools(message: str):
         print(f"Modes skipped: {type(exc).__name__}: {exc}")
         switched = None
     if switched:
-        print("Instant answer: mode")
+        _instant("mode")
         save_message("user", message)
         save_message("assistant", switched)
         yield switched
@@ -2551,7 +2589,7 @@ async def stream_with_tools(message: str):
         print(f"Remote / meeting skipped: {type(exc).__name__}: {exc}")
         controlled = None
     if controlled:
-        print("Instant answer: remote control")
+        _instant("remote control")
         save_message("user", message)
         save_message("assistant", controlled)
         yield controlled
@@ -2565,7 +2603,7 @@ async def stream_with_tools(message: str):
         print(f"Activity skipped: {type(exc).__name__}: {exc}")
         day = None
     if day:
-        print("Instant answer: your day")
+        _instant("your day")
         save_message("user", message)
         save_message("assistant", day)
         yield day
@@ -2578,7 +2616,7 @@ async def stream_with_tools(message: str):
         print(f"World clock skipped: {type(exc).__name__}: {exc}")
         clock = None
     if clock:
-        print("Instant answer: time")
+        _instant("time")
         save_message("user", message)
         save_message("assistant", clock)
         yield clock
@@ -2591,7 +2629,7 @@ async def stream_with_tools(message: str):
         print(f"Intercom skipped: {type(exc).__name__}: {exc}")
         relayed = None
     if relayed:
-        print("Instant answer: intercom")
+        _instant("intercom")
         save_message("user", message)
         save_message("assistant", relayed)
         yield relayed
@@ -2604,7 +2642,7 @@ async def stream_with_tools(message: str):
         print(f"Uploads skipped: {type(exc).__name__}: {exc}")
         uploaded = None
     if uploaded:
-        print("Instant answer: uploads")
+        _instant("uploads")
         save_message("user", message)
         save_message("assistant", uploaded)
         yield uploaded
@@ -2617,7 +2655,7 @@ async def stream_with_tools(message: str):
         print(f"Tasks skipped: {type(exc).__name__}: {exc}")
         todo = None
     if todo:
-        print("Instant answer: tasks")
+        _instant("tasks")
         save_message("user", message)
         save_message("assistant", todo)
         yield todo
@@ -2795,7 +2833,7 @@ async def stream_with_tools(message: str):
                 _in_routine.reset(token)
             return
         if defined:
-            print("Instant answer: routines")
+            _instant("routines")
             save_message("user", message)
             save_message("assistant", defined)
             async for sentence in _clean_stream(_aiter_text(defined)):
@@ -2809,7 +2847,7 @@ async def stream_with_tools(message: str):
         print(f"Alarms skipped: {type(exc).__name__}: {exc}")
         alarm = None
     if alarm:
-        print("Instant answer: alarms")
+        _instant("alarms")
         save_message("user", message)
         save_message("assistant", alarm)
         async for sentence in _clean_stream(_aiter_text(alarm)):
@@ -2821,7 +2859,7 @@ async def stream_with_tools(message: str):
         from arya.tools.os_tools import _APP_ALIASES, open_app
         name = app.group("app").lower()
         if name in _APP_ALIASES:
-            print("Instant answer: open app")
+            _instant("open app")
             result = await open_app(name)
             reply = f"Opening {app.group('app').strip()}." if not result.startswith("Failed") else \
                 f"I couldn't open {app.group('app').strip()}."
@@ -2833,7 +2871,7 @@ async def stream_with_tools(message: str):
             return
 
     if _BRIEFING.search(message):                       # "give me the briefing" (also a routine step)
-        print("Instant answer: briefing")
+        _instant("briefing")
         try:
             briefing = await get_daily_briefing()
         except Exception as exc:
@@ -2855,7 +2893,7 @@ async def stream_with_tools(message: str):
         print(f"Corrections skipped: {type(exc).__name__}: {exc}")
         correction_reply = None
     if correction_reply:
-        print("Instant answer: corrections memory")
+        _instant("corrections memory")
         save_message("user", message)
         save_message("assistant", correction_reply)
         yield correction_reply
@@ -2868,7 +2906,7 @@ async def stream_with_tools(message: str):
         print(f"Solution check skipped: {type(exc).__name__}: {exc}")
         checking = None
     if checking:
-        print("Instant answer: solution check")
+        _instant("solution check")
         save_message("user", message)
         save_message("assistant", checking)
         async for sentence in _clean_stream(_aiter_text(checking)):
@@ -2884,7 +2922,7 @@ async def stream_with_tools(message: str):
         print(f"Screen reading skipped: {type(exc).__name__}: {exc}")
         on_screen = None
     if on_screen:
-        print("Instant answer: " + ("webcam" if _webcam.matches(message) else "screen"))
+        _instant("webcam" if _webcam.matches(message) else "screen")
         reply, artifacts = on_screen
         for kind, payload in artifacts:
             emit_artifact(kind, payload)
@@ -2901,7 +2939,7 @@ async def stream_with_tools(message: str):
         print(f"Window control skipped: {type(exc).__name__}: {exc}")
         windowing = None
     if windowing:
-        print("Instant answer: window control")
+        _instant("window control")
         save_message("user", message)
         save_message("assistant", windowing)
         async for sentence in _clean_stream(_aiter_text(windowing)):
@@ -2915,7 +2953,7 @@ async def stream_with_tools(message: str):
         print(f"Browser skipped: {type(exc).__name__}: {exc}")
         browsing = None
     if browsing:
-        print("Instant answer: browser")
+        _instant("browser")
         save_message("user", message)
         save_message("assistant", browsing)
         async for sentence in _clean_stream(_aiter_text(browsing)):
@@ -2929,7 +2967,7 @@ async def stream_with_tools(message: str):
         print(f"Upkeep skipped: {type(exc).__name__}: {exc}")
         housekeeping = None
     if housekeeping:
-        print("Instant answer: upkeep")
+        _instant("upkeep")
         save_message("user", message)
         save_message("assistant", housekeeping)
         async for sentence in _clean_stream(_aiter_text(housekeeping)):
@@ -2943,7 +2981,7 @@ async def stream_with_tools(message: str):
         print(f"Phone access skipped: {type(exc).__name__}: {exc}")
         phone_reply = None
     if phone_reply:
-        print("Instant answer: phone access")
+        _instant("phone access")
         save_message("user", message)
         save_message("assistant", phone_reply)
         async for sentence in _clean_stream(_aiter_text(phone_reply)):
@@ -2957,7 +2995,7 @@ async def stream_with_tools(message: str):
         print(f"Learning skipped: {type(exc).__name__}: {exc}")
         learned = None
     if learned:
-        print("Instant answer: learning")
+        _instant("learning")
         save_message("user", message)
         save_message("assistant", learned)
         async for sentence in _clean_stream(_aiter_text(learned)):
@@ -2971,7 +3009,7 @@ async def stream_with_tools(message: str):
         print(f"Profile skipped: {type(exc).__name__}: {exc}")
         remembered = None
     if remembered:
-        print("Instant answer: profile")
+        _instant("profile")
         save_message("user", message)
         save_message("assistant", remembered)
         async for sentence in _clean_stream(_aiter_text(remembered)):
@@ -2985,7 +3023,7 @@ async def stream_with_tools(message: str):
         print(f"Lecture transcription skipped: {type(exc).__name__}: {exc}")
         transcribing = None
     if transcribing:
-        print("Instant answer: lectures")
+        _instant("lectures")
         save_message("user", message)
         save_message("assistant", transcribing)
         async for sentence in _clean_stream(_aiter_text(transcribing)):
@@ -2999,7 +3037,7 @@ async def stream_with_tools(message: str):
         print(f"Nudge settings skipped: {type(exc).__name__}: {exc}")
         muting = None
     if muting:
-        print("Instant answer: nudge settings")
+        _instant("nudge settings")
         save_message("user", message)
         save_message("assistant", muting)
         async for sentence in _clean_stream(_aiter_text(muting)):
@@ -3014,7 +3052,7 @@ async def stream_with_tools(message: str):
         examining = None
     if examining:
         reply, sources = examining
-        print("Instant answer: mock exam")
+        _instant("mock exam")
         if sources:
             emit_artifact("SOURCES", sources)
         save_message("user", message)
@@ -3030,7 +3068,7 @@ async def stream_with_tools(message: str):
         print(f"Study mode skipped: {type(exc).__name__}: {exc}")
         studying = None
     if studying:
-        print("Instant answer: study mode")
+        _instant("study mode")
         save_message("user", message)
         save_message("assistant", studying)
         async for sentence in _clean_stream(_aiter_text(studying)):
@@ -3044,7 +3082,7 @@ async def stream_with_tools(message: str):
         print(f"Planner skipped: {type(exc).__name__}: {exc}")
         planning = None
     if planning:
-        print("Instant answer: exam planner")
+        _instant("exam planner")
         save_message("user", message)
         save_message("assistant", planning)
         async for sentence in _clean_stream(_aiter_text(planning)):
@@ -3075,7 +3113,7 @@ async def stream_with_tools(message: str):
         print(f"Calendar skipped: {type(exc).__name__}: {exc}")
         scheduling = None
     if scheduling:
-        print("Instant answer: calendar")
+        _instant("calendar")
         if scheduling.startswith(("Added ", "Removed ")):
             from arya.core import policy
             policy.note_result("calendar")
@@ -3092,7 +3130,7 @@ async def stream_with_tools(message: str):
         print(f"Email skipped: {type(exc).__name__}")
         mailing = None
     if mailing:
-        print("Instant answer: email")
+        _instant("email")
         save_message("user", message)
         save_message("assistant", mailing)
         async for sentence in _clean_stream(_aiter_text(mailing)):
@@ -3106,7 +3144,7 @@ async def stream_with_tools(message: str):
         print(f"Music skipped: {type(exc).__name__}: {exc}")
         playing = None
     if playing:
-        print("Instant answer: music")
+        _instant("music")
         save_message("user", message)
         save_message("assistant", playing)
         async for sentence in _clean_stream(_aiter_text(playing)):
@@ -3120,7 +3158,7 @@ async def stream_with_tools(message: str):
         print(f"File agent skipped: {type(exc).__name__}: {exc}")
         filing = None
     if filing:
-        print("Instant answer: file agent")
+        _instant("file agent")
         save_message("user", message)
         save_message("assistant", filing)
         async for sentence in _clean_stream(_aiter_text(filing)):
@@ -3200,7 +3238,7 @@ async def stream_with_tools(message: str):
         return
 
     if _CAPABILITIES.match(message):
-        print("Instant answer: capabilities")
+        _instant("capabilities")
         caps = capabilities()
         save_message("user", message)
         save_message("assistant", caps)
@@ -3210,7 +3248,7 @@ async def stream_with_tools(message: str):
     from arya.study.formulas import quick_formula_answer
     exact = quick_formula_answer(message)               # course formulas with numbers: computed, never guessed
     if exact:
-        print("Instant answer: course formula")
+        _instant("course formula")
         save_message("user", message)
         save_message("assistant", exact)
         yield exact
@@ -3223,7 +3261,7 @@ async def stream_with_tools(message: str):
         print(f"Where-is lookup skipped: {type(exc).__name__}: {exc}")
         found = None
     if found is not None:                               # "which page explains X?": pages from the search, not guessed
-        print("Instant answer: where in your material")
+        _instant("where in your material")
         if found:
             emit_artifact("SOURCES", [p.as_dict() for p in found])
         reply = _library.where_answer(message, found)
@@ -3239,7 +3277,7 @@ async def stream_with_tools(message: str):
         print(f"Library overview skipped: {type(exc).__name__}: {exc}")
         listing = None
     if listing:
-        print("Instant answer: library overview")
+        _instant("library overview")
         save_message("user", message)
         save_message("assistant", listing)
         yield listing
@@ -3248,6 +3286,7 @@ async def stream_with_tools(message: str):
     status_tool = quick_status_command(message)
     if status_tool is not None and quick_media_command(message) is None:
         print(f"Instant command: {status_tool}")
+        _route_taken["name"] = "system status"
         result = await _execute_tool(status_tool, {})
         save_message("user", message)
         save_message("assistant", result)
@@ -3261,7 +3300,7 @@ async def stream_with_tools(message: str):
         if last:
             _addr.record_feedback(last, "other")
         reply = "Sorry, I'll stay out of that. I'll learn from it."
-        print("Instant answer: not for ARYA (feedback)")
+        _instant("not for ARYA (feedback)")
         save_message("user", message)
         save_message("assistant", reply)
         yield reply
@@ -3269,7 +3308,7 @@ async def stream_with_tools(message: str):
 
     retry = await _retry_after_complaint(message)
     if retry is not None:
-        print("Instant answer: retried after 'it didn't work'")
+        _instant("retried after 'it didn't work'")
         save_message("user", message)
         save_message("assistant", retry)
         yield retry
@@ -3278,6 +3317,7 @@ async def stream_with_tools(message: str):
     quick = quick_media_command(message) or contextual_media_command(message)
     if quick is not None:
         print(f"Instant command: media_control {quick}")
+        _route_taken["name"] = "media keys"
         note_media(quick)
         result = await _execute_tool("media_control", quick)
         save_message("user", message)
