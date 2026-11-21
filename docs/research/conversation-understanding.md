@@ -93,10 +93,43 @@ The routing benchmark stays at 159/159, and the golden questions are untouched (
 **Limits.** The benchmark is hand-built from log patterns. It counts which handler answered, not whether
 that was the best result, and "the second one" (picking from a list) isn't covered yet.
 
+## Problem 3: learning only from what was said to ARYA (done, v1)
+
+**Failure.** Learning read every saved user line. Side talk that ARYA wrongly *answered* became
+evidence for memories. Between 19 and 21 Nov this produced five wrong memories, all deleted:
+"spontaneous, doesn't plan ahead" (from song lyrics), "wants to explore the city", "working on a
+psychology project", "prefers own work", and an out-of-date reminder.
+
+**Method.**
+- Every user line is now saved with **how it reached ARYA**, in the `message_source` table:
+  `wake`, `name`, `typed`, `push-to-talk`, `phone`, `follow:rule`, `follow:answer`,
+  `follow:classifier` with its p, `follow:model`, `follow:unfiltered`, or `side-talk` (marked by
+  "that wasn't for you").
+- `learning.said_to_arya()` drops lines that weren't clearly said to ARYA, together with ARYA's
+  answer to them, before the model reads the conversation.
+- **Trusted** means: wake word, the name, typed, push-to-talk, phone, a rule, a bare answer to
+  ARYA's question, or the classifier at p ≥ 0.7.
+- Older lines without a recorded source are judged again: the name or a rule, otherwise the
+  classifier.
+
+**Measured** (`python -m arya.research.learning_trust_eval`, 379 labelled follow-ups, classifier
+probabilities leave-one-day-out):
+
+| | learnable follow-ups | side talk among them | real requests kept |
+|---|---|---|---|
+| before: everything answered | 222 | 14.0 % | 86.4 % |
+| after, p ≥ 0.85 | 128 | 2.3 % | 56.6 % |
+| **after, p ≥ 0.7 (chosen)** | **147** | **2.0 %** | **65.2 %** |
+
+Lines said with the wake word, typed, or sent from the phone are always learnable, so most of what
+ARYA learns from is unaffected.
+
+The learning benchmark (`--learning`) has three new cases: lyrics answered, a chat with a friend
+next to a real fact, and a sure follow-up that must still be learned. Result: 17/17 cases,
+0 forbidden memories, recall 100 %.
+
 ## Next problems (planned)
 
-3. **Learning from side talk.** Exclude exchanges marked "that wasn't for you" from
-   `memory/learning.py`. In the 21 Nov log, song lyrics were learned as a preference.
 4. **Intent routing accuracy.** Extend the routing benchmark from the log's misroutes, and mine
    `python -m arya.report --candidates` weekly.
 5. **ASR robustness.** Measure the name variants Whisper produces ("Enjoy", "Andrew", "GMT") and

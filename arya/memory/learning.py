@@ -176,10 +176,75 @@ class Conversation:
     last: int
     ended: float                       # unix time of the last message
     lines: list[tuple[str, str]]       # (role, content)
+    ids: list[int] | None = None       # message ids, parallel to lines (None: not from the history)
 
     @property
     def key(self) -> str:
         return f"{self.first}-{self.last}"
+
+
+# ── Only what was said to ARYA ────────────────────────────────────────────────
+# From the log (2026-11-19/21): song lyrics and talk with friends that ARYA wrongly answered were learned as
+# "preferences" ("spontaneous, doesn't plan ahead", "wants to explore the city"). Each of your lines is saved with
+# how it reached ARYA (arya/core/addressee.py: wake word, typed, a follow-up …); learning reads only the lines
+# clearly said to ARYA. Older lines without that record are judged again: a rule or a sure classifier.
+
+def line_trust(cv: Conversation) -> list[bool]:
+    """For each line of the conversation: may it be learned from? (ARYA's own lines: True.)"""
+    if not getattr(cv, "ids", None):
+        return [True] * len(cv.lines)
+    from arya.core import addressee
+    from arya.memory.database import sources
+    known = sources([i for i, (r, _t) in zip(cv.ids, cv.lines) if r == "user"])
+    out, prev_reply = [], ""
+    for mid, (role, text) in zip(cv.ids, cv.lines):
+        if role != "user":
+            out.append(True)
+            prev_reply = text
+            continue
+        src, p = known.get(mid, (None, None))
+        verdict = addressee.trusted(src, p)
+        if verdict is None:
+            verdict = _judge_again(text, prev_reply)
+        out.append(verdict)
+    return out
+
+
+def _judge_again(text: str, prev_reply: str) -> bool:
+    from arya.core import addressee
+    rest, named = addressee.split_name(text)
+    if named or addressee.quick_verdict(rest) is True:
+        return True
+    try:
+        from arya.research.addressee_model import featurize, load_model, probability
+        m = load_model()
+        if m is None:
+            return True                      # no classifier yet: as before
+        return probability(featurize(text, prev_reply, None), m) >= addressee.TRUST_P
+    except Exception as exc:
+        print(f"Learning: couldn't judge a line again ({type(exc).__name__})")
+        return True
+
+
+def said_to_arya(cv: Conversation) -> tuple[Conversation, int]:
+    """The conversation without side talk (and ARYA's answer to it); and how many lines were dropped."""
+    if not getattr(cv, "ids", None):
+        return cv, 0                         # not from the history (the benchmark, a test): nothing to check
+    trust = line_trust(cv)
+    lines, ids, dropped, skip_reply = [], [], 0, False
+    for k, ((role, text), ok) in enumerate(zip(cv.lines, trust)):
+        if role == "user" and not ok:
+            dropped += 1
+            skip_reply = True
+            continue
+        if role == "assistant" and skip_reply:
+            skip_reply = False
+            continue
+        skip_reply = False
+        lines.append((role, text))
+        if cv.ids:
+            ids.append(cv.ids[k])
+    return Conversation(cv.first, cv.last, cv.ended, lines, ids or None), dropped
 
 
 def _parse_ts(ts: str) -> float:
@@ -200,8 +265,9 @@ def finished_conversations(after_id: int, now: float | None = None) -> list[Conv
         if convs and t - convs[-1].ended <= CONVERSATION_GAP_S:
             convs[-1].last, convs[-1].ended = mid, t
             convs[-1].lines.append((role, content))
+            convs[-1].ids.append(mid)
         else:
-            convs.append(Conversation(mid, mid, t, [(role, content)]))
+            convs.append(Conversation(mid, mid, t, [(role, content)], [mid]))
     return [cv for cv in convs if now - cv.ended > CONVERSATION_GAP_S]
 
 
@@ -391,6 +457,10 @@ async def propose(transcript_text: str) -> dict:
 async def learn_from(cv: Conversation, mode: str = "default") -> dict:
     """Read one finished conversation: returns counts, for the log and the eval."""
     stats = {"proposed": 0, "kept": 0, "rejected": {}}
+    cv, dropped = await asyncio.to_thread(said_to_arya, cv)
+    if dropped:
+        stats["side talk dropped"] = dropped
+        print(f"Learning: left out {dropped} line(s) not clearly said to ARYA")
     if not _worth_reading(cv):
         return stats
     from arya.core import guard

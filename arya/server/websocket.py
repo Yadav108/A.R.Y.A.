@@ -169,7 +169,12 @@ async def preload_models() -> None:
             command, named = addressee.split_name(command)
             if named and not command:
                 wake_triggered = True                    # just the name: answer like a wake word ("Yes?")
-        if not wake_triggered and command and not named and _smart_listening and not _answers_bare_wake(command):
+        # How it reached ARYA — learning only trusts lines clearly said to it (arya/memory/learning.py)
+        origin: tuple[str, float | None] = ("wake", None) if wake_triggered else ("name", None) if named \
+            else ("follow:unfiltered", None)
+        if not wake_triggered and command and not named and _smart_listening and _answers_bare_wake(command):
+            origin = ("wake", None)                      # the request right after a bare "Hey ARYA"
+        elif not wake_triggered and command and not named and _smart_listening:
             # A request split by a pause ("… by Kishore Kumar." + "on YouTube music."): judge the pieces together.
             now = time.monotonic()
             joined = (_fragment["text"] + " " + command) if _fragment["text"] and \
@@ -180,7 +185,8 @@ async def preload_models() -> None:
                 _fragment.update(text=(joined or command)[-300:], at=now)
                 return
             _fragment.update(text="", at=0.0)
-        await _dispatch(command, wake_triggered=wake_triggered, announce_transcript=True)
+            origin = _follow_up_origin(_last_verdict["why"])
+        await _dispatch(command, wake_triggered=wake_triggered, announce_transcript=True, origin=origin)
 
     wake_engine.set_callback(on_wake, loop)
     if hasattr(wake_engine, "set_interrupt_callback"):
@@ -751,6 +757,18 @@ def set_smart_listening(enabled: bool) -> None:
     emit_status(f"ARYA_SMART:{'on' if _smart_listening else 'off'}")
 
 
+_last_verdict = {"why": ""}       # why the last follow-up was taken as for ARYA (rule / classifier p=… / model …)
+
+
+def _follow_up_origin(why: str) -> tuple[str, float | None]:
+    """('follow:classifier', 0.82) from 'classifier p=0.82'; ('follow:rule', None) from 'rule'."""
+    m = re.search(r"p=([0-9.]+)", why or "")
+    kind = (why or "unknown").split(" ")[0].split("(")[0].strip() or "unknown"
+    if why.startswith("answer to its question"):
+        kind = "answer"
+    return f"follow:{kind}", float(m.group(1)) if m else None
+
+
 async def _music_playing() -> bool:
     """Is a song playing right now (Windows media controls)? False if that can't be told quickly."""
     try:
@@ -780,6 +798,7 @@ async def _meant_for_arya(command: str, quiet: bool = False) -> bool:
     ok, why = await addressee.is_addressed(command, last_reply=last_reply, seconds_since_reply=since,
                                            recent=recent, pending_confirmation=expecting, asked_question=asked,
                                            music_playing=await _music_playing())
+    _last_verdict["why"] = why
     if ok:
         _ignored_in_a_row = 0
         return True
@@ -1018,7 +1037,8 @@ def _resume_music() -> None:
         print(f"Music: resume skipped ({type(exc).__name__})")
 
 
-async def _dispatch(message: str, wake_triggered: bool = False, announce_transcript: bool = False) -> None:
+async def _dispatch(message: str, wake_triggered: bool = False, announce_transcript: bool = False,
+                    origin: tuple[str, float | None] = ("typed", None)) -> None:
     """Cancel whatever ARYA is doing, then start the new turn."""
     global _current_turn
     await interrupt()
@@ -1036,11 +1056,12 @@ async def _dispatch(message: str, wake_triggered: bool = False, announce_transcr
         return
 
     _current_turn = asyncio.create_task(
-        _run_turn(message, wake_triggered=wake_triggered, announce_transcript=announce_transcript)
+        _run_turn(message, wake_triggered=wake_triggered, announce_transcript=announce_transcript, origin=origin)
     )
 
 
-async def _run_turn(message: str, wake_triggered: bool, announce_transcript: bool) -> None:
+async def _run_turn(message: str, wake_triggered: bool, announce_transcript: bool,
+                    origin: tuple[str, float | None] = ("typed", None)) -> None:
     if wake_triggered:
         await _send_all("ARYA_WAKE")
 
@@ -1068,6 +1089,7 @@ async def _run_turn(message: str, wake_triggered: bool, announce_transcript: boo
                 return          # "Okay." — nothing to answer; the conversation stays open
 
             print(f"Processing: {message[:60]}")
+            addressee.set_origin(*origin)
             try:
                 await _speak_stream(stream_with_tools(message), max_spoken=spoken_limit(message),
                                     started=time.monotonic())
@@ -1081,6 +1103,7 @@ async def _run_turn(message: str, wake_triggered: bool, announce_transcript: boo
                 print(f"Pipeline error: {exc}")
                 await _say(_error_message(exc))
         finally:
+            addressee.set_origin("typed")
             global _last_spoke_at
             _last_spoke_at = time.monotonic()
             wake_engine.set_speaking(False)
@@ -1209,11 +1232,13 @@ async def phone_turn(message: str) -> dict:
         flag = policy.remote_turn.set(True)
         try:
             print(f"Phone request: {message[:60]}")
+            addressee.set_origin("phone")
             sentences = [s async for s in stream_with_tools(message)]
         except Exception as exc:
             print(f"Phone pipeline error: {exc}")
             sentences = [_error_message(exc)]
         finally:
+            addressee.set_origin("typed")
             policy.remote_turn.reset(flag)
     reply = re.sub(r"[ \t]+\n", "\n", " ".join(s.strip() for s in sentences if s.strip()))
     return {"reply": reply or "Done.", "confirm": policy.has_pending()}
@@ -1282,7 +1307,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                     await websocket.send_text("ARYA_NO_SPEECH")
                     continue
                 print(f"Transcript: {transcript}")
-                await _dispatch(transcript, announce_transcript=True)
+                await _dispatch(transcript, announce_transcript=True, origin=("push-to-talk", None))
 
             # ── Text → typed message ─────────────────────────────────────────
             elif raw_text:
