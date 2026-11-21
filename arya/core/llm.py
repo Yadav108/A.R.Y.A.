@@ -2292,6 +2292,54 @@ _MEDIA_WITH_REASON = re.compile(r"^\W*(?:arya\W+)?(?P<cmd>play|resume|unpause|co
                                 r"\s+paused|\s+keeps)\b", re.IGNORECASE)
 
 
+# "It did not." / "Did you check?" / "it's still paused" right after ARYA said it did something. From the log
+# (2026-11-21): "resume the music" got "Okay, the music will now resume." with nothing pressed, then "Let me
+# check… I am checking right now" — the model can't check anything. ARYA looks back at the request instead.
+_COMPLAINT = re.compile(
+    r"^\W*(?:(?:no|nope|but|well|hey|nj|arya)\W+)*(?:"
+    r"(?:it|that|you|the music|music|the song)\s+(?:did\s*n[o']?t|didn'?t|does\s*n[o']?t|doesn'?t|has\s*n[o']?t|"
+    r"hasn'?t|is\s*n[o']?t|isn'?t|did not|does not|has not|is not)(?:\s+(?:work|play|resume|start|happen|do anything|"
+    r"change|pause|stop|playing|working|done))?(?:\s+(?:yet|anything))?"
+    r"|nothing(?:'s|\s+has|\s+is)?\s+(?:happened|happening|playing|changed)"
+    r"|(?:it'?s|it\s+is|the music is|music is|the song is)\s+still\s+(?:paused|stopped|not\s+playing|playing|off|on)"
+    r"|did\s+you\s+(?:check|do\s+it|actually\s+do\s+it|really\s+do\s+it)"
+    r"|(?:still\s+)?(?:not|no)\s+(?:playing|music)"
+    r")\W*$", re.IGNORECASE)
+
+
+async def _retry_after_complaint(message: str) -> str | None:
+    """Re-run the media command the complaint is about and say what is really playing; None otherwise."""
+    if not _COMPLAINT.match(message):
+        return None
+    from arya.core import addressee
+    recent = [m for m in get_history(limit=8) if m["role"] == "user"][-4:]
+    for item in reversed(recent):
+        said = str(item.get("content", ""))
+        if _COMPLAINT.match(said):
+            continue
+        quick = quick_media_command(addressee.strip_filler(said))
+        if quick is None:
+            return None                     # about something else: the model answers, with the claim guard
+        note_media(quick)
+        await _execute_tool("media_control", quick)
+        await asyncio.sleep(1.0)            # the player needs a moment to change state
+        from arya.tools import music
+        now = await music.now_playing()
+        action = quick.get("action")
+        if action in ("play", "next", "previous"):
+            if now and now.get("playing"):
+                what = (now.get("title") or "your music").split(" | ")[0].strip()   # "Taal Se Taal Mila | A.R …"
+                return f"Sorry, you're right. I've pressed play now, and {what} is playing."
+            return ("Sorry, you're right. I pressed play again, but nothing is playing. Is the YouTube Music tab "
+                    "still open? Say \"play some music\" and I'll open it.")
+        if action in ("pause", "stop"):
+            if now and now.get("playing"):
+                return "I pressed pause again, but it's still playing. The player may not take media keys."
+            return "Sorry about that. It's paused now."
+        return "Sorry, you're right. I've done it again now."
+    return None
+
+
 def quick_media_command(message: str) -> dict | None:
     """'Turn the volume up a bit' -> {'action': 'volume_up', 'steps': 3}; None if not a media command."""
     reason = _MEDIA_WITH_REASON.match(message)
@@ -2341,6 +2389,12 @@ _ACTION_CLAIM = re.compile(
     r"|\byou(?:'ve| have)\s+(?:now\s+|just\s+)?(?:opened|switched to|got)\s+(?:the|your|a)\b[^.?!]{0,60}\b"
     r"(?:tab|pdf|file|window|document|page)\b"
     r"|\b(?:\w+\.(?:pdf|docx?|pptx?|xlsx?|txt)|tab|window|document|pdf)\s+(?:is|are)\s+(?:now\s+)?open\b"
+    # "Okay, the music will now resume.", "The music should be playing shortly.", "Let me check that for you.",
+    # "I am checking right now" (2026-11-21: nothing was pressed or checked)
+    r"|\b(?:music|song|video|playback|track)\s+(?:will|should)\s+(?:now\s+)?(?:be\s+)?(?:resume|play|start|"
+    r"playing|resumed|paused|stop)"
+    r"|\blet me (?:just\s+)?(?:check|look into it|verify)(?:\s+(?:that|this|it|on that|again))?(?:\s+for you)?"
+    r"\s*(?:[.,!;]|$)|\bi(?:'m| am)\s+(?:now\s+)?(?:checking|looking into it|verifying)\b"
     # promises: "I will set a reminder for 13:00 tomorrow" (from the log — nothing was set)
     r"|\bi(?:'ll| will)\s+(?:now\s+|go ahead and\s+)?(?:set|add|create|schedule|start|play|open|send|save|book|"
     r"launch|search|minimi[sz]e|maximi[sz]e|close|turn (?:on|off|up|down)|put on|take (?:a )?note)\b"
@@ -3198,6 +3252,14 @@ async def stream_with_tools(message: str):
         save_message("user", message)
         save_message("assistant", result)
         yield result
+        return
+
+    retry = await _retry_after_complaint(message)
+    if retry is not None:
+        print("Instant answer: retried after 'it didn't work'")
+        save_message("user", message)
+        save_message("assistant", retry)
+        yield retry
         return
 
     quick = quick_media_command(message) or contextual_media_command(message)

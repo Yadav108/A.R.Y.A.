@@ -158,6 +158,12 @@ async def preload_models() -> None:
         """Called by WakeWordEngine for wake-word hits and follow-up speech.
         Follow-ups (no wake word) must pass the addressee check first."""
         named = False
+        if not wake_triggered and command and _bare_wake_until and time.time() < _bare_wake_until \
+                and addressee.lone_nj(command):
+            # "Hey NJ" … "Enjoy." — the name again, not a request (2026-11-21: the model answered it with a
+            # made-up "Nudges back on"). Keep waiting for the request.
+            print(f"WakeWord: just the name again: {command!r}")
+            return
         if not wake_triggered and command:
             # "Area." / "Uh, Aria?" = you called ARYA; "Area, play …" / "I'll play …" = a request to ARYA.
             command, named = addressee.split_name(command)
