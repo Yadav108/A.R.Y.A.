@@ -224,6 +224,7 @@ class TalkActivity : Activity() {
     }
 
     private var scroll: ScrollView? = null
+    @Volatile private var listeningSince = 0L
     private lateinit var stateLabel: TextView
 
     private fun show(s: State, text: String) = ui.post {
@@ -241,7 +242,8 @@ class TalkActivity : Activity() {
     private fun tapped() {
         when (state) {
             State.SPEAKING -> { player.stop(); releaseFocus(); listen(follow = false) }      // interrupt ARYA
-            State.LISTENING -> recorder?.finish()                                            // send now
+            State.LISTENING ->                                     // send now — but a tap in the first 1.5 s is a
+                if (System.currentTimeMillis() - listeningSince > 1500) recorder?.finish()   // stray thumb, not "done"
             State.THINKING -> { }
             State.IDLE -> { (orb.tag as? Runnable)?.let { ui.removeCallbacks(it) }; listen(follow = false) }
         }
@@ -263,6 +265,7 @@ class TalkActivity : Activity() {
         show(State.LISTENING, if (follow) "Anything else? (just speak)" else "Speak now — I'll send it when you pause.")
         val r = Recorder()
         recorder = r
+        listeningSince = System.currentTimeMillis()
         thread(name = "arya-listen") {
             val wav = r.record(startTimeoutMs = if (follow) 6000 else 8000)
             recorder = null

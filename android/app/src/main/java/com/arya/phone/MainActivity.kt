@@ -206,8 +206,22 @@ class MainActivity : Activity() {
             ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.END
         ).apply { setMargins(0, (10 * d).toInt(), (10 * d).toInt(), 0) })
         setContentView(frame)
+        shareLogin()
         // The pairing link logs the page in (it trades the key for a cookie); afterwards the plain address.
         w.loadUrl(if (firstTime && prefs.pairingUrl.isNotEmpty()) prefs.pairingUrl else prefs.urls.first())
+    }
+
+    /** The page logs in with a cookie, and a cookie belongs to one address. The app already holds the key, so it
+     *  gives the page that cookie on every address of the laptop (Tailscale and home Wi-Fi): switching between them,
+     *  or a cleared cookie, no longer shows "Not paired". */
+    private fun shareLogin() {
+        if (prefs.key.isEmpty()) return
+        val cookies = android.webkit.CookieManager.getInstance()
+        cookies.setAcceptCookie(true)
+        for (url in prefs.urls) {
+            cookies.setCookie(url, "arya_phone=${prefs.key}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Strict")
+        }
+        cookies.flush()
     }
 
     private var tried = 0
