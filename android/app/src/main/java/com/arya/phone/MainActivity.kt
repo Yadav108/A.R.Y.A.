@@ -3,7 +3,6 @@ package com.arya.phone
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Intent
-import android.graphics.Color
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -17,7 +16,6 @@ import android.webkit.WebChromeClient
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -51,35 +49,53 @@ class MainActivity : Activity() {
 
     private fun showPairing(message: String?) {
         web = null
-        val pad = (20 * resources.displayMetrics.density).toInt()
+        val d = resources.displayMetrics.density
+        val pad = (24 * d).toInt()
+        Theme.edgeToEdge(window)
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(pad, pad * 2, pad, pad)
-            setBackgroundColor(Color.parseColor("#0F1115"))
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(pad, pad, pad, pad)
+            fitsSystemWindows = true
         }
-        fun text(s: String, size: Float, color: String = "#E8E8EA") = TextView(this).apply {
-            this.text = s; textSize = size; setTextColor(Color.parseColor(color)); setPadding(0, 0, 0, pad / 2)
+        val screen = android.widget.ScrollView(this).apply {
+            background = Theme.backdrop()
+            isFillViewport = true
+            addView(box)
         }
-        box.addView(text("ARYA", 30f))
-        box.addView(text("On the laptop, say \"connect my phone\" (or open ARYA's phone page). Then scan the QR " +
+        fun text(s: String, size: Float, color: Int = Theme.TEXT) = TextView(this).apply {
+            this.text = s; textSize = size; setTextColor(color); gravity = Gravity.CENTER
+            setLineSpacing(0f, 1.2f); setPadding(0, 0, 0, pad / 2)
+        }
+        fun gap(dp: Int) = View(this).apply { layoutParams = LinearLayout.LayoutParams(1, (dp * d).toInt()) }
+        val wide = { LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT) }
+        box.addView(gap(40))
+        box.addView(OrbView(this), LinearLayout.LayoutParams((170 * d).toInt(), (170 * d).toInt()))
+        box.addView(gap(8))
+        box.addView(Theme.wordmark(this, 30f))
+        box.addView(gap(6))
+        box.addView(text("Your personal assistant, on your phone.", 16f, Theme.MUTED))
+        box.addView(gap(18))
+        box.addView(text("On the laptop, say \"connect my phone\" (or open ARYA's phone page), then scan the QR " +
                 "code it shows. With Tailscale on both devices this works from anywhere; without it, only on " +
-                "your home Wi-Fi.", 16f, "#9AA0AA"))
-        status = text(message ?: "", 15f, "#FFCF6E")
+                "your home Wi-Fi.", 14.5f, Theme.MUTED))
+        status = text(message ?: "", 14.5f, Theme.WARN)
         box.addView(status)
-        box.addView(Button(this).apply {
-            text = "Scan the QR code"
-            setOnClickListener { scan() }
-        })
+        box.addView(View(this), LinearLayout.LayoutParams(1, 0, 1f))      // push the buttons down
+        box.addView(Theme.pill(this, "Scan the QR code", primary = true) { scan() }, wide())
+        box.addView(gap(14))
         val link = EditText(this).apply {
             hint = "…or paste the link (http://…#k=…)"
-            setTextColor(Color.WHITE); setHintTextColor(Color.GRAY)
+            textSize = 15f
+            setTextColor(Theme.TEXT); setHintTextColor(Theme.MUTED)
+            background = Theme.glass(18 * d)
+            setPadding((18 * d).toInt(), (14 * d).toInt(), (18 * d).toInt(), (14 * d).toInt())
+            isSingleLine = true
         }
-        box.addView(link)
-        box.addView(Button(this).apply {
-            text = "Use this link"
-            setOnClickListener { pair(link.text.toString()) }
-        })
-        setContentView(box)
+        box.addView(link, wide())
+        box.addView(gap(10))
+        box.addView(Theme.pill(this, "Use this link", primary = false) { pair(link.text.toString()) }, wide())
+        setContentView(screen)
     }
 
     private fun scan() {
@@ -144,7 +160,7 @@ class MainActivity : Activity() {
     private fun showWeb(firstTime: Boolean) {
         val w = WebView(this).apply {
             layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
-            setBackgroundColor(Color.parseColor("#0F1115"))
+            setBackgroundColor(Theme.BG)
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
             settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
@@ -169,16 +185,21 @@ class MainActivity : Activity() {
             }
         }
         web = w
-        // 🎙 Talk: the voice screen, floating over the page's top-right corner.
+        Theme.edgeToEdge(window)
+        // 🎙 Talk: the voice screen, floating over the page's top-right corner — until the page says it has its own
+        // mic button (the new page calls AryaApp.pageHasTalk(); an older laptop page doesn't, so this stays).
         val d = resources.displayMetrics.density
-        val talk = Button(this).apply {
-            text = "🎙 Talk"
-            setTextColor(Color.WHITE)
-            background = android.graphics.drawable.GradientDrawable().apply {
-                cornerRadius = 24 * d; setColor(Color.parseColor("#3B6FE0"))
-            }
-            setOnClickListener { startActivity(Intent(this@MainActivity, TalkActivity::class.java)) }
-        }
+        val talk = Theme.pill(this, "🎙 Talk", primary = true) {
+            startActivity(Intent(this@MainActivity, TalkActivity::class.java))
+        }.apply { setPadding((16 * d).toInt(), (10 * d).toInt(), (16 * d).toInt(), (10 * d).toInt()) }
+        talkButton = talk
+        // The page may only open the talk screen or hide this button: nothing else crosses into the app.
+        w.addJavascriptInterface(object {
+            @android.webkit.JavascriptInterface
+            fun talk() { runOnUiThread { startActivity(Intent(this@MainActivity, TalkActivity::class.java)) } }
+            @android.webkit.JavascriptInterface
+            fun pageHasTalk() { runOnUiThread { talkButton?.visibility = View.GONE } }
+        }, "AryaApp")
         val frame = android.widget.FrameLayout(this)
         frame.addView(w)
         frame.addView(talk, android.widget.FrameLayout.LayoutParams(
@@ -190,16 +211,25 @@ class MainActivity : Activity() {
     }
 
     private var tried = 0
+    private var talkButton: View? = null
 
     private fun tryNextAddress(view: WebView) {
         val urls = prefs.urls
         tried++
         if (tried < urls.size) view.loadUrl(urls[tried]) else {
             tried = 0
-            view.loadData("<body style='background:#0F1115;color:#E8E8EA;font-family:sans-serif;padding:24px'>" +
-                    "<h2>Can't reach ARYA</h2><p>Is the laptop awake with ARYA running? Is Tailscale on on both " +
-                    "devices (or are you on the home Wi-Fi)?</p><p>Reminders still arrive as soon as the " +
-                    "connection is back.</p></body>", "text/html", "utf-8")
+            talkButton?.visibility = View.VISIBLE                 // the error page has no mic of its own
+            view.loadData("<meta name='viewport' content='width=device-width,initial-scale=1'>" +
+                    "<body style='margin:0;min-height:100vh;display:flex;flex-direction:column;justify-content:center;" +
+                    "padding:28px;box-sizing:border-box;background:radial-gradient(60% 40% at 15% 5%,#7c8cff33,transparent)," +
+                    "radial-gradient(50% 40% at 90% 95%,#b07cff26,transparent),#07080c;color:#eef0f6;" +
+                    "font:16px/1.5 system-ui,sans-serif'><div style='width:72px;height:72px;border-radius:50%;" +
+                    "margin-bottom:22px;background:radial-gradient(circle at 32% 28%,#fff 0 6%,#7c8cff 30%,#b07cff 62%,#1b1440);" +
+                    "opacity:.55;filter:grayscale(.4)'></div><h2 style='margin:0 0 10px;font-size:24px'>Can't reach ARYA</h2>" +
+                    "<p style='color:#8d93a5;margin:0 0 10px'>Is the laptop awake with ARYA running? Is Tailscale on on both " +
+                    "devices (or are you on the home Wi-Fi)?</p><p style='color:#8d93a5;margin:0'>Reminders still arrive as " +
+                    "soon as the connection is back. The 🎙 Talk button still works for phone tasks.</p></body>",
+                    "text/html", "utf-8")
         }
     }
 
