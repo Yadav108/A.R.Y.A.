@@ -397,9 +397,21 @@ function stopRing() {
   ringing = null;
   $("nudge").classList.remove("on");
 }
+// Share -> ARYA from another app: what was shared (and what you asked), then ARYA's answer.
+function shared(item) {
+  add("me", item.title || "📎 Shared");
+  const d = add("arya", item.text);
+  if (item.url && /^https?:\/\//i.test(item.url)) {
+    const a = document.createElement("a");
+    a.href = item.url; a.textContent = "\n" + item.url;
+    a.target = "_blank"; a.rel = "noopener noreferrer";
+    d.body.appendChild(a);
+  }
+}
 function onItem(item) {
   if (item.kind === "ring") ring(item);
   else if (item.kind === "message") fromLaptop(item);
+  else if (item.kind === "share") shared(item);
   else nudge(item);
 }
 
@@ -428,7 +440,8 @@ async function hello() {
     showMode(r.data.mode);
     state("online · laptop", true);
     (r.data.recent || []).filter((it) => it.kind !== "ring")       // an old ring doesn't ring again
-      .forEach((it) => it.kind === "message" ? fromLaptop(it) : add("note", it.at + " · " + it.text));
+      .forEach((it) => it.kind === "message" ? fromLaptop(it) : it.kind === "share" ? shared(it)
+        : add("note", it.at + " · " + it.text));
   } catch (e) {
     state("laptop not reachable", false);
   }
