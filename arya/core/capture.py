@@ -182,7 +182,8 @@ def matches(message: str) -> bool:
 async def handle(message: str, remote: bool = False) -> str | None:
     if _START_NOTE.match(message):
         if remote:
-            return "On the phone, tap 🎙 to record a voice note with your phone's recorder."
+            return ("In the ARYA app, say \"record a voice note\" on the talk screen, or tap + and then "
+                    "\"Record a voice note\".")
         if _engine is None or not hasattr(_engine, "start_note"):
             return "I can't record right now: the microphone isn't listening."
         if recording():

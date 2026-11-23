@@ -37,6 +37,9 @@ object PhoneCommands {
     private val VOLUME = Regex("$I$LEAD(?:(?:turn\\s+)?(?:the\\s+)?(?:volume|it|sound)\\s+(?<dir>up|down)|" +
         "(?<dir2>louder|quieter|softer)|(?<mute>mute|silence)\\s+(?:the\\s+|my\\s+)?phone|" +
         "(?:put\\s+)?(?:the\\s+|my\\s+)?phone\\s+(?:on\\s+)?(?<mode>silent|vibrate))\\W*$")
+    private val VOICE_NOTE = Regex("$I$LEAD(?:(?<rec>(?:record|take|start|make)\\s+(?:a\\s+|me\\s+a\\s+|another\\s+)?voice\\s+" +
+        "(?:note|memo)|record\\s+a\\s+(?:note|memo)|start\\s+recording(?:\\s+a\\s+(?:voice\\s+)?note)?)|" +
+        "(?:open|show)\\s+(?:me\\s+)?(?:my\\s+|the\\s+)?voice\\s+(?:notes|memos))(?:\\s+please)?\\W*$")
     private val PLAY = Regex("$I$LEAD" + "play\\s+(?<q>.+?)(?:\\s+on\\s+(?<app>spotify|youtube music|youtube))?\\W*$")
     private val OPEN = Regex("$I$LEAD(?:open|launch|start)\\s+(?:the\\s+|my\\s+)?(?<app>[\\w .'&+-]{2,30}?)(?:\\s+app)?\\W*$")
     private val NOT_AN_APP = Regex("$I\\b(?:tab|window|file|folder|document|pdf|link|website|page|door|mode|camera|" +
@@ -85,6 +88,11 @@ object PhoneCommands {
         if (TORCH.containsMatchIn(t) && t.split(Regex("\\s+")).size <= 8) {
             val on = !OFF.containsMatchIn(t)
             return Cmd("torch", mapOf("on" to on), if (on) "Flashlight on." else "Flashlight off.")
+        }
+        VOICE_NOTE.find(t)?.let { m ->
+            val rec = m.groups["rec"] != null
+            return Cmd("voice_note", mapOf("record" to rec),
+                if (rec) "Recording. Tap the square when you're done." else "Here are your voice notes.")
         }
         CAMERA.find(t)?.let { m ->
             val kind = m.groups["kind"]?.value?.lowercase() ?: ""

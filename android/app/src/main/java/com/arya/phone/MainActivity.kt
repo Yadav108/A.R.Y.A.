@@ -193,10 +193,12 @@ class MainActivity : Activity() {
             startActivity(Intent(this@MainActivity, TalkActivity::class.java))
         }.apply { setPadding((16 * d).toInt(), (10 * d).toInt(), (16 * d).toInt(), (10 * d).toInt()) }
         talkButton = talk
-        // The page may only open the talk screen or hide this button: nothing else crosses into the app.
+        // The page may only open the talk or voice-notes screen, or hide this button: nothing else crosses over.
         w.addJavascriptInterface(object {
             @android.webkit.JavascriptInterface
             fun talk() { runOnUiThread { startActivity(Intent(this@MainActivity, TalkActivity::class.java)) } }
+            @android.webkit.JavascriptInterface
+            fun voiceNotes(record: Boolean) { runOnUiThread { VoiceNotesActivity.open(this@MainActivity, record) } }
             @android.webkit.JavascriptInterface
             fun pageHasTalk() { runOnUiThread { talkButton?.visibility = View.GONE } }
         }, "AryaApp")

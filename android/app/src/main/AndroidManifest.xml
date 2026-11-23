@@ -132,5 +132,20 @@
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
+        <!-- Voice notes: recorded and kept in the app, sent to ARYA (VoiceNotesActivity.kt). -->
+        <activity
+            android:name=".VoiceNotesActivity"
+            android:exported="false"
+            android:launchMode="singleTop" />
+
+        <!-- Sharing a voice note with another app (only the voice-notes folder). -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="com.arya.phone.files"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/file_paths" />
+        </provider>
+
     </application>
 </manifest>

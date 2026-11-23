@@ -172,6 +172,7 @@
   #sheet button { display:flex; align-items:center; gap:12px; padding:10px 16px 10px 10px; border-radius:14px;
                   font-size:15px; text-align:left; }
   #sheet button:active { background:rgba(255,255,255,.06); }
+  #sheet button[hidden] { display:none; }
   #sheet .ic { width:36px; height:36px; border-radius:12px; display:grid; place-items:center;
                background:rgba(255,255,255,.06); color:color-mix(in srgb, var(--a1) 80%, #fff); }
 
@@ -191,6 +192,7 @@
   <symbol id="i-cam" viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></symbol>
   <symbol id="i-clip" viewBox="0 0 24 24"><path d="M20 11.5 12 19.5a5 5 0 0 1-7-7l8.5-8.5a3.3 3.3 0 0 1 4.7 4.7l-8.4 8.4a1.7 1.7 0 0 1-2.4-2.4L15 7"/></symbol>
   <symbol id="i-wave" viewBox="0 0 24 24"><path d="M4 10v4M8 6v12M12 3v18M16 7v10M20 10v4"/></symbol>
+  <symbol id="i-list" viewBox="0 0 24 24"><path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.5" cy="6" r="1"/><circle cx="4.5" cy="12" r="1"/><circle cx="4.5" cy="18" r="1"/></symbol>
   <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4zM10 21h4"/></symbol>
   <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
   <symbol id="i-cal" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15" rx="3"/><path d="M3.5 10h17M8 3v4M16 3v4"/></symbol>
@@ -259,6 +261,7 @@
       <button type="button" id="cam" role="menuitem"><span class="ic"><svg><use href="#i-cam"/></svg></span>Take a photo</button>
       <button type="button" id="clip" role="menuitem"><span class="ic"><svg><use href="#i-clip"/></svg></span>Send a file</button>
       <button type="button" id="mic" role="menuitem"><span class="ic"><svg><use href="#i-wave"/></svg></span>Record a voice note</button>
+      <button type="button" id="notes" role="menuitem" hidden><span class="ic"><svg><use href="#i-list"/></svg></span>My voice notes</button>
     </div>
     <button type="button" class="ib" id="plus" aria-label="Add a photo, file or voice note" aria-expanded="false"><svg><use href="#i-plus"/></svg></button>
     <input type="file" id="camIn" accept="image/*" capture="environment" hidden>
@@ -535,7 +538,11 @@ function upload(file, asNote) {
 }
 $("cam").addEventListener("click", () => { menu(false); $("camIn").click(); });
 $("clip").addEventListener("click", () => { menu(false); $("fileIn").click(); });
-$("mic").addEventListener("click", () => { menu(false); $("micIn").click(); });
+// Voice notes: the app records and keeps them itself (an older app: the phone's own recorder, via a file input).
+const appNotes = app && typeof app.voiceNotes === "function";
+if (appNotes) $("notes").hidden = false;
+$("mic").addEventListener("click", () => { menu(false); if (appNotes) app.voiceNotes(true); else $("micIn").click(); });
+$("notes").addEventListener("click", () => { menu(false); app.voiceNotes(false); });
 $("camIn").addEventListener("change", (e) => { upload(e.target.files[0]); e.target.value = ""; });
 $("micIn").addEventListener("change", (e) => { upload(e.target.files[0], true); e.target.value = ""; });
 $("fileIn").addEventListener("change", (e) => { upload(e.target.files[0]); e.target.value = ""; });

@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Long-press the ARYA icon: "Talk". -->
+<!-- Long-press the ARYA icon: "Talk", "Voice note". -->
 <shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
     <shortcut
         android:enabled="true"
@@ -10,6 +10,17 @@
         <intent
             android:action="android.intent.action.VIEW"
             android:targetClass="com.arya.phone.TalkActivity"
+            android:targetPackage="com.arya.phone" />
+    </shortcut>
+    <shortcut
+        android:enabled="true"
+        android:icon="@drawable/ic_arya"
+        android:shortcutId="voice_note"
+        android:shortcutLongLabel="@string/note_long"
+        android:shortcutShortLabel="@string/note_short">
+        <intent
+            android:action="com.arya.phone.RECORD_NOTE"
+            android:targetClass="com.arya.phone.VoiceNotesActivity"
             android:targetPackage="com.arya.phone" />
     </shortcut>
 </shortcuts>

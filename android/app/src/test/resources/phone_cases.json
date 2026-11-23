@@ -30,12 +30,18 @@
     {"say": "play Kesariya", "want": {"action": "play", "query": "Kesariya", "app": "youtube music"}},
     {"say": "play lofi beats on Spotify", "want": {"action": "play", "query": "lofi beats", "app": "spotify"}},
     {"say": "open WhatsApp", "want": {"action": "open_app", "app": "WhatsApp"}},
-    {"say": "NJ, launch Spotify", "want": {"action": "open_app", "app": "Spotify"}}
+    {"say": "NJ, launch Spotify", "want": {"action": "open_app", "app": "Spotify"}},
+    {"say": "record a voice note", "want": {"action": "voice_note", "record": true}},
+    {"say": "Arya, take a voice memo please", "want": {"action": "voice_note", "record": true}},
+    {"say": "start recording", "want": {"action": "voice_note", "record": true}},
+    {"say": "show my voice notes", "want": {"action": "voice_note", "record": false}},
+    {"say": "open voice notes", "want": {"action": "voice_note", "record": false}}
   ],
   "none": [
     "what time is it", "call me Aryan", "call it a day", "remind me at 7 to call mom", "what is a timer in electronics",
     "open a new tab", "open the Gmail tab", "call an Uber", "text me later", "I have to call Mom later",
     "open YouTube on the laptop", "set an alarm on the laptop for 7", "play it", "play the music", "message",
-    "explain the Coriolis acceleration", "how does a flashlight work in detail, explain the circuit please"
+    "explain the Coriolis acceleration", "how does a flashlight work in detail, explain the circuit please",
+    "record a voice note on the laptop", "what is a voice note"
   ]
 }
