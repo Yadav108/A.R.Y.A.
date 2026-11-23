@@ -26,7 +26,7 @@ import org.json.JSONObject
 object Actions {
     /** Actions that open another app: they run after ARYA has said "Calling Mom." */
     fun leavesApp(a: JSONObject) = a.optString("action") in
-        setOf("call", "sms", "navigate", "open_app", "camera", "settings", "play")
+        setOf("call", "sms", "navigate", "open_app", "camera", "settings", "play", "voice_note")
 
     fun run(act: Activity, a: JSONObject): String? = try {
         when (a.optString("action")) {
@@ -42,6 +42,7 @@ object Actions {
             "settings" -> settings(act, a.optString("what"))
             "volume" -> volume(act, a.optString("dir"))
             "play" -> play(act, a.optString("query"), a.optString("app"))
+            "voice_note" -> { VoiceNotesActivity.open(act, a.optBoolean("record")); null }
             "ask" -> null
             else -> "I can't do that on the phone yet."
         }

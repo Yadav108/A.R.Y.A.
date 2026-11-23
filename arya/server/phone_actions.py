@@ -15,6 +15,8 @@ become an *action* that the app carries out with Android's own apps (android/…
   "turn on Wi-Fi / Bluetooth / airplane mode"        -> the setting's panel (apps may not switch these alone)
   "volume up" / "mute the phone"                     -> the phone's volume
   "play Kesariya" / "play lofi on Spotify"           -> plays on the phone (YouTube Music unless you name an app)
+  "record a voice note" / "show my voice notes"      -> the app's own recorder; the note is kept on the phone and
+                                                        sent here to be transcribed and filed
 
 Names, numbers and message text never need the laptop's address book: the phone resolves "Mom" itself, so your
 contacts stay on the phone. Anything said "on the laptop" stays a laptop request. When unsure, parse() returns
@@ -59,6 +61,10 @@ _SETTING = re.compile(_LEAD + r"(?:turn|switch|put)\s+(?P<state>on|off)\s+(?:the
 _VOLUME = re.compile(_LEAD + r"(?:(?:turn\s+)?(?:the\s+)?(?:volume|it|sound)\s+(?P<dir>up|down)|"
                      r"(?P<dir2>louder|quieter|softer)|(?P<mute>mute|silence)\s+(?:the\s+|my\s+)?phone|"
                      r"(?:put\s+)?(?:the\s+|my\s+)?phone\s+(?:on\s+)?(?P<mode>silent|vibrate))\W*$", re.IGNORECASE)
+_VOICE_NOTE = re.compile(_LEAD + r"(?:(?P<rec>(?:record|take|start|make)\s+(?:a\s+|me\s+a\s+|another\s+)?voice\s+"
+                         r"(?:note|memo)|record\s+a\s+(?:note|memo)|start\s+recording(?:\s+a\s+(?:voice\s+)?note)?)|"
+                         r"(?:open|show)\s+(?:me\s+)?(?:my\s+|the\s+)?voice\s+(?:notes|memos))(?:\s+please)?\W*$",
+                         re.IGNORECASE)
 _PLAY = re.compile(_LEAD + r"play\s+(?P<q>.+?)(?:\s+on\s+(?P<app>spotify|youtube music|youtube))?\W*$", re.IGNORECASE)
 _OPEN = re.compile(_LEAD + r"(?:open|launch|start)\s+(?:the\s+|my\s+)?(?P<app>[\w .'&+-]{2,30}?)(?:\s+app)?\W*$",
                    re.IGNORECASE)
@@ -129,6 +135,11 @@ def parse(text: str, now: datetime | None = None) -> dict | None:
     if _TORCH.search(t) and len(t.split()) <= 8:
         on = not _TORCH_OFF.search(t)
         return {"action": "torch", "on": on, "say": "Flashlight on." if on else "Flashlight off."}
+    m = _VOICE_NOTE.match(t)
+    if m:
+        rec = bool(m.group("rec"))
+        return {"action": "voice_note", "record": rec,
+                "say": "Recording. Tap the square when you're done." if rec else "Here are your voice notes."}
     m = _CAMERA.match(t)
     if m:
         kind = (m.group("kind") or "").lower()

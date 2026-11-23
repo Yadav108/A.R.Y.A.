@@ -2,4 +2,6 @@
 <resources>
     <string name="talk_short">Talk</string>
     <string name="talk_long">Talk to ARYA</string>
+    <string name="note_short">Voice note</string>
+    <string name="note_long">Record a voice note</string>
 </resources>

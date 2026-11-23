@@ -177,7 +177,7 @@ def test_stop_when_not_recording():
 
 def test_start_without_a_microphone_and_from_the_phone():
     assert "microphone" in run(C.handle("record a voice note"))
-    assert "🎙" in run(C.handle("record a voice note", remote=True))
+    assert "ARYA app" in run(C.handle("record a voice note", remote=True))
 
 
 def test_empty_voice_note(monkeypatch):
