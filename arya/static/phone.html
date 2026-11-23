@@ -2,92 +2,325 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#0f1115">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="theme-color" content="#07080c">
+<meta name="color-scheme" content="dark">
 <link rel="manifest" href="/manifest.json">
 <title>ARYA</title>
 <style>
-  :root { --bg:#0f1115; --panel:#181b22; --line:#262a33; --text:#e8e8ea; --muted:#9aa0aa; --me:#2b5cff;
-          --accent:#7aa2ff; --warn:#ffcf6e; }
-  * { box-sizing:border-box; }
+  :root {
+    --bg:#07080c; --bg2:#0c0e15; --glass:rgba(22,25,36,.62); --glass-hi:rgba(34,38,54,.72);
+    --line:rgba(255,255,255,.08); --line-hi:rgba(255,255,255,.14);
+    --text:#eef0f6; --muted:#8d93a5; --faint:#5c6275;
+    --a1:#7c8cff; --a2:#b07cff; --a3:#4fd1c5;               /* accent trio; shifts with the mode */
+    --ok:#3ee0a0; --bad:#ff6b7a; --warn:#ffc46b;
+    --r:20px; --ease:cubic-bezier(.2,.8,.2,1);
+  }
+  body[data-mode="study"]      { --a1:#38d9c0; --a2:#5b9dff; --a3:#9cf27a; }
+  body[data-mode="work"]       { --a1:#5b9dff; --a2:#7c8cff; --a3:#38d9c0; }
+  body[data-mode="brainstorm"] { --a1:#ff8f6b; --a2:#ff6bb5; --a3:#ffd36b; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
   html, body { height:100%; margin:0; }
-  body { background:var(--bg); color:var(--text); font:16px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
-         display:flex; flex-direction:column; }
-  header { padding:12px 16px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:10px; }
-  header h1 { font-size:18px; margin:0; letter-spacing:.5px; }
-  #dot { width:9px; height:9px; border-radius:50%; background:var(--muted); }
-  #dot.ok { background:#3ecf8e; } #dot.bad { background:#ff6b6b; }
-  #state { color:var(--muted); font-size:13px; margin-left:auto; }
-  #nudge { display:none; margin:10px 16px 0; padding:10px 12px; border-radius:10px; background:#2a2312;
-           color:var(--warn); border:1px solid #4a3d18; }
-  #log { flex:1; overflow-y:auto; padding:12px 16px; display:flex; flex-direction:column; gap:8px; }
-  .msg { max-width:85%; padding:9px 12px; border-radius:14px; white-space:pre-wrap; overflow-wrap:anywhere; }
-  .me { align-self:flex-end; background:var(--me); color:#fff; border-bottom-right-radius:4px; }
-  .arya { align-self:flex-start; background:var(--panel); border:1px solid var(--line); border-bottom-left-radius:4px; }
-  .note { align-self:center; color:var(--warn); font-size:14px; text-align:center; }
-  .sys { align-self:center; color:var(--muted); font-size:13px; text-align:center; }
-  #chips, #yesno { display:flex; gap:8px; padding:0 16px 8px; overflow-x:auto; }
+  body { background:var(--bg); color:var(--text); display:flex; flex-direction:column; overflow:hidden;
+         font:16px/1.5 "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+         -webkit-font-smoothing:antialiased; }
+  /* Aurora: slow drifting light behind everything */
+  .aurora { position:fixed; inset:-20%; z-index:-1; pointer-events:none; filter:blur(60px); opacity:.55;
+            background:
+              radial-gradient(40% 35% at 20% 10%, color-mix(in srgb, var(--a1) 45%, transparent), transparent 70%),
+              radial-gradient(35% 30% at 85% 25%, color-mix(in srgb, var(--a2) 35%, transparent), transparent 70%),
+              radial-gradient(45% 35% at 50% 100%, color-mix(in srgb, var(--a3) 22%, transparent), transparent 70%);
+            animation:drift 22s ease-in-out infinite alternate; transition:background 1s; }
+  @keyframes drift { to { transform:translate3d(4%, 3%, 0) rotate(6deg) scale(1.08); } }
+
+  button { font:inherit; color:inherit; background:none; border:0; cursor:pointer; padding:0; }
+  button:focus-visible, textarea:focus-visible { outline:2px solid var(--a1); outline-offset:2px; }
+  svg { width:20px; height:20px; fill:none; stroke:currentColor; stroke-width:1.9; stroke-linecap:round;
+        stroke-linejoin:round; flex:none; }
+
+  /* ── Header ── */
+  header { display:flex; align-items:center; gap:12px; padding:calc(12px + env(safe-area-inset-top)) 18px 10px; }
+  .orb { width:38px; height:38px; border-radius:50%; flex:none; position:relative;
+         background:radial-gradient(circle at 32% 28%, #fff 0 6%, var(--a1) 30%, var(--a2) 62%, #1b1440 100%);
+         box-shadow:0 0 22px color-mix(in srgb, var(--a1) 55%, transparent), inset 0 -4px 10px rgba(0,0,0,.35);
+         animation:breathe 4.5s ease-in-out infinite; }
+  .orb::after { content:""; position:absolute; inset:-4px; border-radius:50%;
+                border:1px solid color-mix(in srgb, var(--a1) 40%, transparent); animation:halo 4.5s ease-out infinite; }
+  @keyframes breathe { 50% { transform:scale(1.06); filter:brightness(1.15); } }
+  @keyframes halo { from { transform:scale(.9); opacity:.9; } to { transform:scale(1.5); opacity:0; } }
+  body.thinking .orb { animation-duration:1.2s; }
+  .brand h1 { margin:0; font-size:19px; font-weight:700; letter-spacing:.22em; }
+  .brand h1 span { background:linear-gradient(90deg, var(--text), color-mix(in srgb, var(--a1) 70%, #fff));
+                   -webkit-background-clip:text; background-clip:text; color:transparent; }
+  #state { display:flex; align-items:center; gap:6px; font-size:12px; color:var(--muted); letter-spacing:.02em; }
+  #dot { width:7px; height:7px; border-radius:50%; background:var(--faint); transition:background .4s; }
+  #dot.ok { background:var(--ok); box-shadow:0 0 8px var(--ok); }
+  #dot.bad { background:var(--bad); box-shadow:0 0 8px var(--bad); }
+  #talkTop { margin-left:auto; display:none; width:42px; height:42px; border-radius:50%; place-items:center;
+             background:var(--glass); border:1px solid var(--line-hi); backdrop-filter:blur(14px); }
+  body.app #talkTop { display:grid; }
+
+  /* ── Mode switch (segmented, sliding pill) ── */
+  #modes { position:relative; display:grid; grid-template-columns:repeat(4, 1fr); margin:2px 16px 0; padding:4px;
+           background:var(--glass); border:1px solid var(--line); border-radius:16px; backdrop-filter:blur(16px); }
+  #modes button { position:relative; z-index:1; padding:8px 0; font-size:13.5px; font-weight:600; color:var(--muted);
+                  border-radius:12px; transition:color .3s; display:flex; gap:6px; justify-content:center; align-items:center; }
+  #modes button svg { width:15px; height:15px; }
+  #modes button[aria-pressed="true"] { color:#fff; }
+  #pill { position:absolute; top:4px; bottom:4px; left:4px; width:calc((100% - 8px) / 4); border-radius:12px;
+          background:linear-gradient(135deg, var(--a1), var(--a2));
+          box-shadow:0 4px 18px color-mix(in srgb, var(--a1) 45%, transparent);
+          transition:transform .45s var(--ease), background .6s; }
+
+  /* ── Banner (reminders, ring) ── */
+  #nudge { display:none; margin:10px 16px 0; padding:12px 14px; border-radius:16px; color:var(--text);
+           background:linear-gradient(135deg, rgba(255,196,107,.16), rgba(255,196,107,.06));
+           border:1px solid rgba(255,196,107,.35); backdrop-filter:blur(14px);
+           animation:drop .5s var(--ease); align-items:center; gap:10px; }
+  #nudge.on { display:flex; }
+  #nudge svg { color:var(--warn); }
+  #nudge button { margin-left:auto; }
+  @keyframes drop { from { transform:translateY(-12px); opacity:0; } }
+
+  /* ── Conversation ── */
+  main { flex:1; min-height:0; position:relative; }
+  #log { height:100%; overflow-y:auto; padding:18px 16px 12px; display:flex; flex-direction:column; gap:12px;
+         scroll-behavior:smooth; overscroll-behavior:contain;
+         mask-image:linear-gradient(transparent, #000 18px, #000 calc(100% - 10px), transparent); }
+  .msg { max-width:86%; white-space:pre-wrap; overflow-wrap:anywhere; animation:rise .38s var(--ease) both; }
+  @keyframes rise { from { transform:translateY(10px); opacity:0; } }
+  .me { align-self:flex-end; padding:10px 15px; border-radius:20px 20px 6px 20px; color:#fff;
+        background:linear-gradient(135deg, var(--a1), var(--a2));
+        box-shadow:0 6px 22px color-mix(in srgb, var(--a1) 30%, transparent); }
+  .arya { align-self:flex-start; display:flex; gap:10px; max-width:92%; }
+  .arya::before { content:""; width:24px; height:24px; margin-top:2px; border-radius:50%; flex:none;
+                  background:radial-gradient(circle at 32% 28%, #fff 0 6%, var(--a1) 32%, var(--a2) 70%, #1b1440);
+                  box-shadow:0 0 12px color-mix(in srgb, var(--a1) 45%, transparent); }
+  .arya .b { padding:10px 15px; border-radius:6px 20px 20px 20px; background:var(--glass);
+             border:1px solid var(--line); backdrop-filter:blur(14px); }
+  .arya .b a { color:color-mix(in srgb, var(--a1) 80%, #fff); }
+  .note { align-self:center; display:flex; gap:8px; align-items:center; font-size:14px; padding:8px 14px;
+          border-radius:14px; color:var(--warn); background:rgba(255,196,107,.08); border:1px solid rgba(255,196,107,.22); }
+  .note svg { width:16px; height:16px; }
+  .sys { align-self:center; color:var(--muted); font-size:13px; text-align:center; padding:2px 10px; }
+  .dots { display:inline-flex; gap:5px; padding:4px 0; }
+  .dots i { width:7px; height:7px; border-radius:50%; background:var(--muted); animation:blink 1.2s infinite; }
+  .dots i:nth-child(2) { animation-delay:.18s; } .dots i:nth-child(3) { animation-delay:.36s; }
+  @keyframes blink { 0%, 80%, 100% { opacity:.25; transform:translateY(0); } 40% { opacity:1; transform:translateY(-3px); } }
+  .bar { height:3px; border-radius:3px; margin-top:8px; background:var(--line); overflow:hidden; }
+  .bar i { display:block; height:100%; width:0; background:linear-gradient(90deg, var(--a1), var(--a2)); transition:width .2s; }
+
+  /* Welcome screen, until the first message */
+  #hello { position:absolute; inset:0; display:flex; flex-direction:column; justify-content:center; padding:0 20px 20px;
+           transition:opacity .35s, transform .35s var(--ease); }
+  #hello.gone { opacity:0; transform:translateY(-10px); pointer-events:none; }
+  #hello .big { width:84px; height:84px; margin:0 0 22px; }
+  #hello h2 { margin:0; font-size:30px; line-height:1.15; font-weight:700; letter-spacing:-.02em; }
+  #hello h2 em { font-style:normal; background:linear-gradient(90deg, var(--a1), var(--a2), var(--a3));
+                 -webkit-background-clip:text; background-clip:text; color:transparent; }
+  #hello p { margin:8px 0 24px; color:var(--muted); }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .card { text-align:left; padding:14px; border-radius:var(--r); background:var(--glass); border:1px solid var(--line);
+          backdrop-filter:blur(14px); display:flex; flex-direction:column; gap:10px; min-height:96px;
+          transition:transform .2s var(--ease), border-color .2s; }
+  .card:active { transform:scale(.97); border-color:var(--line-hi); }
+  .card .ic { width:34px; height:34px; border-radius:11px; display:grid; place-items:center; color:#fff;
+              background:linear-gradient(135deg, var(--a1), var(--a2)); }
+  .card:nth-child(2) .ic { background:linear-gradient(135deg, var(--a2), var(--a3)); }
+  .card:nth-child(3) .ic { background:linear-gradient(135deg, var(--a3), var(--a1)); }
+  .card:nth-child(4) .ic { background:linear-gradient(135deg, #ff8f6b, var(--a2)); }
+  .card .ic svg { width:18px; height:18px; }
+  .card b { font-size:14.5px; font-weight:600; } .card small { color:var(--muted); font-size:12.5px; margin-top:-8px; }
+
+  /* ── Bottom: chips, yes/no, composer ── */
+  footer { padding:0 12px calc(10px + env(safe-area-inset-bottom)); }
+  #chips, #yesno { display:flex; gap:8px; padding:4px 4px 10px; overflow-x:auto; scrollbar-width:none; }
+  #chips::-webkit-scrollbar { display:none; }
   #yesno { display:none; }
-  button { font:inherit; border:1px solid var(--line); background:var(--panel); color:var(--text);
-           border-radius:999px; padding:7px 13px; white-space:nowrap; }
-  button.primary { background:var(--me); border-color:var(--me); color:#fff; }
-  form { display:flex; gap:8px; padding:10px 16px calc(10px + env(safe-area-inset-bottom));
-         border-top:1px solid var(--line); }
-  textarea { flex:1; resize:none; font:inherit; color:var(--text); background:var(--panel);
-             border:1px solid var(--line); border-radius:12px; padding:9px 12px; max-height:120px; }
-  textarea:focus { outline:2px solid var(--accent); outline-offset:-1px; }
-  #unpaired { display:none; padding:40px 24px; text-align:center; color:var(--muted); }
-  #cam, #clip, #mic { padding:7px 10px; flex:none; }
-  #modes { display:flex; gap:6px; padding:8px 16px 0; }
-  #modes button { flex:1; padding:6px 0; font-size:14px; }
-  #modes button[aria-pressed="true"] { background:var(--me); border-color:var(--me); color:#fff; }
+  .chip { display:flex; align-items:center; gap:7px; padding:8px 14px; border-radius:999px; white-space:nowrap;
+          font-size:14px; background:var(--glass); border:1px solid var(--line); backdrop-filter:blur(14px);
+          transition:transform .15s, border-color .2s; }
+  .chip svg { width:15px; height:15px; color:color-mix(in srgb, var(--a1) 80%, #fff); }
+  .chip:active { transform:scale(.95); border-color:var(--line-hi); }
+  .primary { color:#fff; background:linear-gradient(135deg, var(--a1), var(--a2)); border-color:transparent; }
+  #yesno .chip { flex:1; justify-content:center; padding:12px; font-weight:600; font-size:15px; }
+
+  form { position:relative; display:flex; align-items:flex-end; gap:6px; padding:6px; border-radius:26px;
+         background:var(--glass-hi); border:1px solid var(--line-hi); backdrop-filter:blur(22px);
+         box-shadow:0 10px 40px rgba(0,0,0,.45); transition:border-color .25s, box-shadow .25s; }
+  form:focus-within { border-color:color-mix(in srgb, var(--a1) 55%, transparent);
+                      box-shadow:0 10px 40px rgba(0,0,0,.45), 0 0 0 4px color-mix(in srgb, var(--a1) 14%, transparent); }
+  .ib { width:42px; height:42px; border-radius:50%; display:grid; place-items:center; flex:none; color:var(--muted);
+        transition:background .2s, color .2s, transform .3s var(--ease); }
+  .ib:active { background:rgba(255,255,255,.06); }
+  #plus[aria-expanded="true"] { transform:rotate(45deg); color:var(--text); background:rgba(255,255,255,.08); }
+  textarea { flex:1; min-width:0; resize:none; font:inherit; color:var(--text); background:none; border:0; outline:0;
+             padding:10px 4px; max-height:132px; }
+  textarea::placeholder { color:var(--faint); }
+  #send, #talk { color:#fff; background:linear-gradient(135deg, var(--a1), var(--a2));
+                 box-shadow:0 4px 16px color-mix(in srgb, var(--a1) 40%, transparent); }
+  #send:disabled { opacity:.45; }
+  #talk { display:none; }
+  body.app form.empty #send { display:none; }
+  body.app form.empty #talk { display:grid; }
+
+  #sheet { position:absolute; left:6px; bottom:calc(100% + 10px); display:flex; flex-direction:column; gap:4px; padding:6px;
+           border-radius:20px; background:var(--glass-hi); border:1px solid var(--line-hi); backdrop-filter:blur(22px);
+           box-shadow:0 16px 50px rgba(0,0,0,.5); transform-origin:bottom left;
+           transform:scale(.9) translateY(8px); opacity:0; pointer-events:none; transition:all .25s var(--ease); }
+  #sheet.open { transform:none; opacity:1; pointer-events:auto; }
+  #sheet button { display:flex; align-items:center; gap:12px; padding:10px 16px 10px 10px; border-radius:14px;
+                  font-size:15px; text-align:left; }
+  #sheet button:active { background:rgba(255,255,255,.06); }
+  #sheet .ic { width:36px; height:36px; border-radius:12px; display:grid; place-items:center;
+               background:rgba(255,255,255,.06); color:color-mix(in srgb, var(--a1) 80%, #fff); }
+
+  #unpaired { display:none; margin:auto 20px; padding:32px 24px; text-align:center; border-radius:24px;
+              background:var(--glass); border:1px solid var(--line); backdrop-filter:blur(16px); color:var(--muted); }
+  #unpaired .orb { width:64px; height:64px; margin:0 auto 18px; }
+  #unpaired h2 { color:var(--text); margin:0 0 8px; font-size:20px; }
+  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation:none !important; transition:none !important; } }
 </style>
 </head>
-<body>
-<header><span id="dot"></span><h1>ARYA</h1><span id="state">connecting…</span></header>
-<div id="unpaired">This phone isn't paired.<br><br>At the laptop, say <b>“connect my phone”</b> and scan the QR code.</div>
+<body data-mode="default">
+<div class="aurora" aria-hidden="true"></div>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-cam" viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></symbol>
+  <symbol id="i-clip" viewBox="0 0 24 24"><path d="M20 11.5 12 19.5a5 5 0 0 1-7-7l8.5-8.5a3.3 3.3 0 0 1 4.7 4.7l-8.4 8.4a1.7 1.7 0 0 1-2.4-2.4L15 7"/></symbol>
+  <symbol id="i-wave" viewBox="0 0 24 24"><path d="M4 10v4M8 6v12M12 3v18M16 7v10M20 10v4"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4zM10 21h4"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+  <symbol id="i-cal" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15" rx="3"/><path d="M3.5 10h17M8 3v4M16 3v4"/></symbol>
+  <symbol id="i-cards" viewBox="0 0 24 24"><rect x="3" y="7" width="13" height="13" rx="2.5"/><path d="M8 4h10.5A2.5 2.5 0 0 1 21 6.5V17"/></symbol>
+  <symbol id="i-coffee" viewBox="0 0 24 24"><path d="M4 9h13v5a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5zM17 10h1.5a2.5 2.5 0 0 1 0 5H17M8 2.5v3M12 2.5v3"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><path d="M9 5v14M15 5v14"/></symbol>
+  <symbol id="i-chat" viewBox="0 0 24 24"><path d="M4 5h16v11H9l-5 4z"/></symbol>
+  <symbol id="i-book" viewBox="0 0 24 24"><path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2zM4 19V5"/></symbol>
+  <symbol id="i-brief" viewBox="0 0 24 24"><rect x="3" y="7" width="18" height="13" rx="2.5"/><path d="M9 7V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2M3 13h18"/></symbol>
+  <symbol id="i-bulb" viewBox="0 0 24 24"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9V16h7v-2.1A6 6 0 0 0 12 3z"/></symbol>
+</svg>
+
+<header>
+  <div class="orb" aria-hidden="true"></div>
+  <div class="brand">
+    <h1><span>ARYA</span></h1>
+    <div id="state"><span id="dot"></span><span id="stateText">connecting…</span></div>
+  </div>
+  <button id="talkTop" type="button" aria-label="Talk to ARYA"><svg><use href="#i-mic"/></svg></button>
+</header>
+
+<div id="unpaired">
+  <div class="orb" aria-hidden="true"></div>
+  <h2>Not paired yet</h2>
+  At the laptop, say <b>“connect my phone”</b> and scan the QR code.
+</div>
+
 <div id="modes" role="group" aria-label="Mode">
-  <button data-mode="default" aria-pressed="true">Normal</button>
-  <button data-mode="study" aria-pressed="false">Study</button>
-  <button data-mode="work" aria-pressed="false">Work</button>
-  <button data-mode="brainstorm" aria-pressed="false">Ideas</button>
+  <div id="pill" aria-hidden="true"></div>
+  <button data-mode="default" aria-pressed="true"><svg><use href="#i-chat"/></svg>Normal</button>
+  <button data-mode="study" aria-pressed="false"><svg><use href="#i-book"/></svg>Study</button>
+  <button data-mode="work" aria-pressed="false"><svg><use href="#i-brief"/></svg>Work</button>
+  <button data-mode="brainstorm" aria-pressed="false"><svg><use href="#i-bulb"/></svg>Ideas</button>
 </div>
 <div id="nudge" role="status"></div>
-<div id="log" aria-live="polite"></div>
-<div id="yesno"><button class="primary" data-say="yes">Yes</button><button data-say="no">No</button></div>
-<div id="chips">
-  <button data-say="What's next today?">What's next?</button>
-  <button data-say="Give me the briefing">Briefing</button>
-  <button data-say="How many cards are due?">Cards due</button>
-  <button data-say="Remind me in 30 minutes to take a break">Break in 30 min</button>
-  <button data-say="Pause the music">Pause music</button>
-</div>
-<form id="f" autocomplete="off">
-  <button type="button" id="cam" aria-label="Take a photo" title="Take a photo">📷</button>
-  <button type="button" id="clip" aria-label="Send a file" title="Send a document, photo, audio or video">📎</button>
-  <button type="button" id="mic" aria-label="Record a voice note" title="Record a voice note (your phone's recorder)">🎙</button>
-  <input type="file" id="camIn" accept="image/*" capture="environment" hidden>
-  <input type="file" id="micIn" accept="audio/*" capture hidden>
-  <input type="file" id="fileIn" hidden accept=".pdf,.docx,.pptx,.txt,.md,.png,.jpg,.jpeg,.webp,.gif,.bmp,.mp3,.m4a,.wav,.ogg,.flac,.aac,.mp4,.mkv,.webm,.mov,.avi,.wmv,image/*,audio/*,video/*">
-  <textarea id="t" rows="1" maxlength="1000" placeholder="Ask ARYA…" enterkeyhint="send"></textarea>
-  <button class="primary" id="send" type="submit">Send</button>
-</form>
+
+<main>
+  <div id="hello">
+    <div class="orb big" aria-hidden="true"></div>
+    <h2><span id="greet">Hello</span>,<br><em>what's on your mind?</em></h2>
+    <p>Ask anything, send a photo or a file, or tap the mic to talk.</p>
+    <div class="grid">
+      <button class="card" data-say="Give me the briefing"><span class="ic"><svg><use href="#i-sun"/></svg></span><b>Briefing</b><small>Your day at a glance</small></button>
+      <button class="card" data-say="What's next today?"><span class="ic"><svg><use href="#i-cal"/></svg></span><b>What's next?</b><small>Plans and reminders</small></button>
+      <button class="card" data-say="How many cards are due?"><span class="ic"><svg><use href="#i-cards"/></svg></span><b>Cards due</b><small>Study review</small></button>
+      <button class="card" data-say="Remind me in 30 minutes to take a break"><span class="ic"><svg><use href="#i-coffee"/></svg></span><b>Break in 30</b><small>Set a reminder</small></button>
+    </div>
+  </div>
+  <div id="log" aria-live="polite"></div>
+</main>
+
+<footer>
+  <div id="yesno">
+    <button class="chip primary" data-say="yes">Yes</button>
+    <button class="chip" data-say="no">No</button>
+  </div>
+  <div id="chips">
+    <button class="chip" data-say="What's next today?"><svg><use href="#i-cal"/></svg>What's next?</button>
+    <button class="chip" data-say="Give me the briefing"><svg><use href="#i-sun"/></svg>Briefing</button>
+    <button class="chip" data-say="How many cards are due?"><svg><use href="#i-cards"/></svg>Cards due</button>
+    <button class="chip" data-say="Remind me in 30 minutes to take a break"><svg><use href="#i-coffee"/></svg>Break in 30 min</button>
+    <button class="chip" data-say="Pause the music"><svg><use href="#i-pause"/></svg>Pause music</button>
+  </div>
+  <form id="f" class="empty" autocomplete="off">
+    <div id="sheet" role="menu">
+      <button type="button" id="cam" role="menuitem"><span class="ic"><svg><use href="#i-cam"/></svg></span>Take a photo</button>
+      <button type="button" id="clip" role="menuitem"><span class="ic"><svg><use href="#i-clip"/></svg></span>Send a file</button>
+      <button type="button" id="mic" role="menuitem"><span class="ic"><svg><use href="#i-wave"/></svg></span>Record a voice note</button>
+    </div>
+    <button type="button" class="ib" id="plus" aria-label="Add a photo, file or voice note" aria-expanded="false"><svg><use href="#i-plus"/></svg></button>
+    <input type="file" id="camIn" accept="image/*" capture="environment" hidden>
+    <input type="file" id="micIn" accept="audio/*" capture hidden>
+    <input type="file" id="fileIn" hidden accept=".pdf,.docx,.pptx,.txt,.md,.png,.jpg,.jpeg,.webp,.gif,.bmp,.mp3,.m4a,.wav,.ogg,.flac,.aac,.mp4,.mkv,.webm,.mov,.avi,.wmv,image/*,audio/*,video/*">
+    <textarea id="t" rows="1" maxlength="1000" placeholder="Ask ARYA…" enterkeyhint="send"></textarea>
+    <button type="button" class="ib" id="talk" aria-label="Talk to ARYA"><svg><use href="#i-mic"/></svg></button>
+    <button class="ib" id="send" type="submit" aria-label="Send"><svg><use href="#i-send"/></svg></button>
+  </form>
+</footer>
+
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
 const log = $("log");
+const SVG = (name) => `<svg><use href="#i-${name}"/></svg>`;
 let last = 0, busy = false, paired = false;
 
+// Inside the Android app: its talk screen opens from the mic (the app's own floating button then hides).
+const app = window.AryaApp && typeof window.AryaApp.talk === "function" ? window.AryaApp : null;
+if (app) {
+  document.body.classList.add("app");
+  try { app.pageHasTalk(); } catch (e) {}
+}
+const openTalk = () => { if (app) app.talk(); };
+$("talk").addEventListener("click", openTalk);
+$("talkTop").addEventListener("click", openTalk);
+
+const h = new Date().getHours();
+$("greet").textContent = h < 5 ? "Still up" : h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening";
+
+function hideHello() { $("hello").classList.add("gone"); }
+function scrollDown() { log.scrollTop = log.scrollHeight; }
 function add(cls, text) {
+  hideHello();
   const d = document.createElement("div");
   d.className = "msg " + cls;
-  d.textContent = text;
+  if (cls === "arya") {                                         // ARYA: avatar + glass bubble; text goes in .b
+    const b = document.createElement("div");
+    b.className = "b";
+    b.textContent = text;
+    d.appendChild(b);
+    Object.defineProperty(d, "textContent", { get: () => b.textContent, set: (v) => { b.textContent = v; } });
+    d.body = b;
+  } else if (cls === "note") {
+    d.innerHTML = SVG("bell");
+    d.appendChild(document.createTextNode(text));
+  } else {
+    d.textContent = text;
+  }
   log.appendChild(d);
-  log.scrollTop = log.scrollHeight;
+  scrollDown();
+  return d;
+}
+function typing() {
+  const d = add("arya", "");
+  d.body.innerHTML = '<span class="dots" aria-label="ARYA is thinking"><i></i><i></i><i></i></span>';
+  document.body.classList.add("thinking");
   return d;
 }
 function state(text, ok) {
-  $("state").textContent = text;
+  $("stateText").textContent = text;
   $("dot").className = ok === true ? "ok" : ok === false ? "bad" : "";
 }
 async function api(path, body) {
@@ -98,14 +331,19 @@ async function api(path, body) {
   try { data = await r.json(); } catch (e) {}
   return { status: r.status, data };
 }
+const MODES = ["default", "study", "work", "brainstorm"];
 function showMode(m) {
   if (!m) return;
   document.querySelectorAll("[data-mode]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.mode === m)));
+  const i = Math.max(0, MODES.indexOf(m));
+  $("pill").style.transform = `translateX(${i * 100}%)`;
+  document.body.dataset.mode = m;
 }
 function showUnpaired() {
   paired = false;
   $("unpaired").style.display = "block";
-  ["log", "chips", "f", "yesno", "modes"].forEach((id) => { $(id).style.display = "none"; });
+  ["log", "hello", "chips", "f", "yesno", "modes"].forEach((id) => { $(id).style.display = "none"; });
+  document.querySelector("main").style.display = "none";
   state("not paired", false);
 }
 // From the laptop: "send this to my phone" (text, maybe a link) and "ring my phone" (find my phone).
@@ -115,20 +353,24 @@ function fromLaptop(item) {
     d.textContent = "💻 ";
     const a = document.createElement("a");
     a.href = item.url; a.textContent = item.text === item.url ? item.url : item.text;
-    a.target = "_blank"; a.rel = "noopener noreferrer"; a.style.color = "var(--accent)";
-    d.appendChild(a);
+    a.target = "_blank"; a.rel = "noopener noreferrer";
+    d.body.appendChild(a);
   }
   if (navigator.vibrate) { try { navigator.vibrate(120); } catch (e) {} }
+}
+function banner(text, button) {
+  const n = $("nudge");
+  n.innerHTML = SVG("bell");
+  const s = document.createElement("span"); s.textContent = text; n.appendChild(s);
+  if (button) n.appendChild(button);
+  n.classList.add("on");
 }
 let ringing = null;
 function ring(item) {
   stopRing();
-  const n = $("nudge");
-  n.innerHTML = "";
-  n.appendChild(document.createTextNode("🔔 ARYA is ringing your phone "));
-  const b = document.createElement("button"); b.textContent = "Found it"; b.className = "primary";
-  b.addEventListener("click", stopRing); n.appendChild(b);
-  n.style.display = "block";
+  const b = document.createElement("button"); b.textContent = "Found it"; b.className = "chip primary";
+  b.addEventListener("click", stopRing);
+  banner("ARYA is ringing your phone", b);
   let ctx = null;
   try { ctx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {}
   const beep = () => {
@@ -150,7 +392,7 @@ function stopRing() {
   clearInterval(ringing.timer); clearTimeout(ringing.until);
   try { ringing.ctx && ringing.ctx.close(); } catch (e) {}
   ringing = null;
-  $("nudge").style.display = "none";
+  $("nudge").classList.remove("on");
 }
 function onItem(item) {
   if (item.kind === "ring") ring(item);
@@ -159,13 +401,11 @@ function onItem(item) {
 }
 
 function nudge(item) {
-  const n = $("nudge");
-  n.textContent = item.at + " — " + item.text;
-  n.style.display = "block";
-  add("note", "🔔 " + item.at + " · " + item.text);
+  banner(item.at + " — " + item.text);
+  add("note", item.at + " · " + item.text);
   if (navigator.vibrate) { try { navigator.vibrate([150, 80, 150]); } catch (e) {} }
   clearTimeout(nudge.t);
-  nudge.t = setTimeout(() => { n.style.display = "none"; }, 15000);
+  nudge.t = setTimeout(() => { if (!ringing) $("nudge").classList.remove("on"); }, 15000);
 }
 
 async function pairFromLink() {
@@ -183,9 +423,9 @@ async function hello() {
     paired = true;
     last = r.data.last || 0;
     showMode(r.data.mode);
-    state("connected", true);
+    state("online · laptop", true);
     (r.data.recent || []).filter((it) => it.kind !== "ring")       // an old ring doesn't ring again
-      .forEach((it) => it.kind === "message" ? fromLaptop(it) : add("note", "🔔 " + it.at + " · " + it.text));
+      .forEach((it) => it.kind === "message" ? fromLaptop(it) : add("note", it.at + " · " + it.text));
   } catch (e) {
     state("laptop not reachable", false);
   }
@@ -197,7 +437,7 @@ async function poll() {
   try {
     const r = await api("/api/feed?after=" + last);
     if (r.status === 401) return showUnpaired();
-    state("connected", true);
+    state("online · laptop", true);
     showMode(r.data.mode);
     for (const it of r.data.items || []) { last = Math.max(last, it.id); onItem(it); }
   } catch (e) {
@@ -211,27 +451,42 @@ async function send(text) {
   busy = true;
   $("send").disabled = true;
   $("yesno").style.display = "none";
+  $("chips").style.display = "";
   add("me", text);
-  const thinking = add("arya", "…");
+  const thinking = typing();
   try {
     const r = await api("/api/say", { text });
     if (r.status === 401) { thinking.remove(); return showUnpaired(); }
     thinking.textContent = r.data.reply || r.data.error || "Something went wrong.";
-    if (r.data.confirm) $("yesno").style.display = "flex";
-    state("connected", true);
+    if (r.data.confirm) { $("yesno").style.display = "flex"; $("chips").style.display = "none"; }
+    state("online · laptop", true);
   } catch (e) {
     thinking.textContent = "I can't reach the laptop. Is it awake and on the same Wi-Fi?";
     state("laptop not reachable", false);
   } finally {
     busy = false;
     $("send").disabled = false;
+    document.body.classList.remove("thinking");
+    scrollDown();
   }
 }
 
-$("f").addEventListener("submit", (e) => { e.preventDefault(); const t = $("t"); send(t.value); t.value = ""; t.style.height = ""; });
-$("t").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("f").requestSubmit(); } });
-$("t").addEventListener("input", (e) => { e.target.style.height = ""; e.target.style.height = e.target.scrollHeight + "px"; });
+const t = $("t"), form = $("f");
+const syncEmpty = () => form.classList.toggle("empty", !t.value.trim());
+form.addEventListener("submit", (e) => { e.preventDefault(); send(t.value); t.value = ""; t.style.height = ""; syncEmpty(); });
+t.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); form.requestSubmit(); } });
+t.addEventListener("input", () => { t.style.height = ""; t.style.height = t.scrollHeight + "px"; syncEmpty(); });
+t.addEventListener("focus", () => setTimeout(scrollDown, 300));      // keyboard opened
 document.querySelectorAll("[data-say]").forEach((b) => b.addEventListener("click", () => send(b.dataset.say)));
+
+// The + menu: photo, file, voice note.
+function menu(open) {
+  $("sheet").classList.toggle("open", open);
+  $("plus").setAttribute("aria-expanded", String(open));
+}
+$("plus").addEventListener("click", (e) => { e.stopPropagation(); menu(!$("sheet").classList.contains("open")); });
+document.addEventListener("click", (e) => { if (!$("sheet").contains(e.target)) menu(false); });
+
 // ── Sending a photo or file TO ARYA (the phone never reads the laptop's files) ──
 const KINDS = {
   document: [".pdf", ".docx", ".pptx", ".txt", ".md"],
@@ -253,13 +508,20 @@ function upload(file, asNote) {
   if (file.size > MAX_MB[kind] * 1024 * 1024) { add("sys", `That file is larger than ${MAX_MB[kind]} MB.`); return; }
   const note = add("me", (asNote ? "🎙 " : kind === "photo" ? "📷 " : "📎 ") + name);
   const status = add("sys", "Sending…");
+  const bar = document.createElement("div"); bar.className = "bar"; bar.innerHTML = "<i></i>"; note.appendChild(bar);
   const xhr = new XMLHttpRequest();
   xhr.open("POST", "/api/upload?name=" + encodeURIComponent(name) + (asNote ? "&note=1" : ""));
   xhr.setRequestHeader("X-ARYA", "1");
-  xhr.upload.onprogress = (e) => { if (e.lengthComputable) status.textContent = `Sending… ${Math.round(100 * e.loaded / e.total)}%`; };
+  xhr.upload.onprogress = (e) => {
+    if (!e.lengthComputable) return;
+    const pct = Math.round(100 * e.loaded / e.total);
+    status.textContent = `Sending… ${pct}%`;
+    bar.firstChild.style.width = pct + "%";
+  };
   xhr.onload = () => {
     let info = {};
     try { info = JSON.parse(xhr.responseText); } catch (e) {}
+    bar.remove();
     if (xhr.status === 401) { status.remove(); note.remove(); return showUnpaired(); }
     if (xhr.status !== 200) { status.textContent = info.error || "Couldn't read that file."; return; }
     status.remove();
@@ -268,17 +530,18 @@ function upload(file, asNote) {
     else if (info.kind === "recording" && info.note) add("sys", "Transcribing your voice note; I'll file it and tell you where.");
     else if (info.kind === "recording") add("sys", `Transcribing ${info.title} (${info.minutes} min). I'll tell you here when it's ready.`);
   };
-  xhr.onerror = () => { status.textContent = "I can't reach the laptop. Is it awake and on the same Wi-Fi?"; };
+  xhr.onerror = () => { bar.remove(); status.textContent = "I can't reach the laptop. Is it awake and on the same Wi-Fi?"; };
   xhr.send(file);
 }
-$("cam").addEventListener("click", () => $("camIn").click());
-$("clip").addEventListener("click", () => $("fileIn").click());
+$("cam").addEventListener("click", () => { menu(false); $("camIn").click(); });
+$("clip").addEventListener("click", () => { menu(false); $("fileIn").click(); });
+$("mic").addEventListener("click", () => { menu(false); $("micIn").click(); });
 $("camIn").addEventListener("change", (e) => { upload(e.target.files[0]); e.target.value = ""; });
-$("mic").addEventListener("click", () => $("micIn").click());
 $("micIn").addEventListener("change", (e) => { upload(e.target.files[0], true); e.target.value = ""; });
 $("fileIn").addEventListener("change", (e) => { upload(e.target.files[0]); e.target.value = ""; });
 
 document.querySelectorAll("[data-mode]").forEach((b) => b.addEventListener("click", async () => {
+  showMode(b.dataset.mode);                                         // the pill moves at once; the laptop confirms
   try {
     const r = await api("/api/mode", { mode: b.dataset.mode });
     if (r.status === 401) return showUnpaired();

@@ -2,8 +2,6 @@ package com.arya.phone
 
 import android.app.Activity
 import android.content.pm.PackageManager
-import android.graphics.Color
-import android.graphics.drawable.GradientDrawable
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
@@ -16,6 +14,7 @@ import android.speech.tts.UtteranceProgressListener
 import android.os.Looper
 import android.util.Base64
 import android.view.Gravity
+import android.view.View
 import android.view.WindowManager
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -31,7 +30,7 @@ class TalkActivity : Activity() {
     private enum class State { IDLE, LISTENING, THINKING, SPEAKING }
 
     private lateinit var prefs: Prefs
-    private lateinit var orb: TextView
+    private lateinit var orb: OrbView
     private lateinit var hint: TextView
     private lateinit var heard: TextView
     private lateinit var reply: TextView
@@ -163,44 +162,79 @@ class TalkActivity : Activity() {
     }
 
     private fun build() {
-        val pad = (20 * resources.displayMetrics.density).toInt()
-        val size = (170 * resources.displayMetrics.density).toInt()
+        val d = resources.displayMetrics.density
+        val pad = (20 * d).toInt()
+        Theme.edgeToEdge(window)
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
-            setPadding(pad, pad * 3, pad, pad)
-            setBackgroundColor(Color.parseColor("#0F1115"))
+            setPadding(pad, pad, pad, pad)
+            background = Theme.backdrop()
+            fitsSystemWindows = true
         }
-        orb = TextView(this).apply {
-            gravity = Gravity.CENTER
-            textSize = 22f
-            setTextColor(Color.WHITE)
-            background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(Color.parseColor("#2A3350")) }
-            layoutParams = LinearLayout.LayoutParams(size, size)
-            setOnClickListener { tapped() }
-        }
-        hint = TextView(this).apply {
-            gravity = Gravity.CENTER; textSize = 15f; setTextColor(Color.parseColor("#9AA0AA")); setPadding(0, pad, 0, pad)
-        }
-        heard = TextView(this).apply { textSize = 16f; setTextColor(Color.parseColor("#7AA2FF")) }
-        reply = TextView(this).apply { textSize = 18f; setTextColor(Color.parseColor("#E8E8EA")); setPadding(0, pad / 2, 0, 0) }
-        val scroll = ScrollView(this).apply {
-            addView(LinearLayout(this@TalkActivity).apply {
-                orientation = LinearLayout.VERTICAL; addView(heard); addView(reply)
+        // Top bar: ARYA wordmark, and a close button.
+        val top = android.widget.FrameLayout(this)
+        top.addView(Theme.wordmark(this), android.widget.FrameLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
+        top.addView(Theme.iconButton(this, "✕", "Close") { finish() }, android.widget.FrameLayout.LayoutParams(
+            (40 * d).toInt(), (40 * d).toInt(), Gravity.END or Gravity.CENTER_VERTICAL))
+        root.addView(top, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, (48 * d).toInt()))
+
+        // The conversation: what you said (right), ARYA's answer (left), as bubbles.
+        heard = Theme.bubble(this, mine = true)
+        reply = Theme.bubble(this, mine = false)
+        for (b in listOf(heard, reply)) {                         // hidden while empty; "You: " is said by the side
+            b.visibility = View.GONE
+            b.addTextChangedListener(object : android.text.TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, a: Int, c: Int, e: Int) {}
+                override fun onTextChanged(s: CharSequence?, a: Int, c: Int, e: Int) {}
+                override fun afterTextChanged(s: android.text.Editable) {
+                    if (b === heard && s.startsWith("You: ")) { s.delete(0, 5); return }
+                    b.visibility = if (s.isBlank()) View.GONE else View.VISIBLE
+                    scroll?.post { scroll?.fullScroll(View.FOCUS_DOWN) }
+                }
             })
         }
-        root.addView(orb)
-        root.addView(hint)
+        val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, pad, 0, pad) }
+        list.addView(heard, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT).apply { gravity = Gravity.END; bottomMargin = (12 * d).toInt() })
+        list.addView(reply, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT).apply { gravity = Gravity.START })
+        scroll = ScrollView(this).apply { isVerticalScrollBarEnabled = false; addView(list) }
         root.addView(scroll, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
+
+        // The orb: tap to interrupt, to send now, or to talk again.
+        orb = OrbView(this).apply {
+            level = { recorder?.level ?: 0f }
+            isClickable = true
+            contentDescription = "Talk"
+            setOnClickListener { tapped() }
+        }
+        root.addView(orb, LinearLayout.LayoutParams((230 * d).toInt(), (230 * d).toInt()))
+        stateLabel = TextView(this).apply {
+            gravity = Gravity.CENTER; textSize = 13f; letterSpacing = 0.25f
+            setTextColor(Theme.ACCENT); typeface = android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL)
+        }
+        root.addView(stateLabel)
+        hint = TextView(this).apply {
+            gravity = Gravity.CENTER; textSize = 15f; setTextColor(Theme.MUTED); setPadding(0, (6 * d).toInt(), 0, pad)
+        }
+        root.addView(hint)
         setContentView(root)
     }
 
+    private var scroll: ScrollView? = null
+    private lateinit var stateLabel: TextView
+
     private fun show(s: State, text: String) = ui.post {
         state = s
-        orb.text = when (s) { State.LISTENING -> "Listening"; State.THINKING -> "…"; State.SPEAKING -> "ARYA"; State.IDLE -> "Talk" }
-        (orb.background as GradientDrawable).setColor(Color.parseColor(when (s) {
-            State.LISTENING -> "#3B6FE0"; State.THINKING -> "#4B4F7A"; State.SPEAKING -> "#2E8B6E"; State.IDLE -> "#2A3350"
-        }))
+        orb.mode = when (s) {
+            State.LISTENING -> OrbView.Mode.LISTENING; State.THINKING -> OrbView.Mode.THINKING
+            State.SPEAKING -> OrbView.Mode.SPEAKING; State.IDLE -> OrbView.Mode.IDLE
+        }
+        stateLabel.text = when (s) {
+            State.LISTENING -> "LISTENING"; State.THINKING -> "THINKING"; State.SPEAKING -> "SPEAKING"; State.IDLE -> "TAP TO TALK"
+        }
         hint.text = text
     }
 
