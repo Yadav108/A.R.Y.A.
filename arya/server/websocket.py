@@ -266,6 +266,7 @@ async def preload_models() -> None:
     phone.set_turn_handler(phone_turn)
     phone.set_upload_handler(receive_upload)         # photos and files sent from the phone
     phone.set_voice_handler(phone_voice_turn)        # talking to ARYA in the phone app: heard, then spoken replies
+    phone.set_speak_handler(phone_speak)             # "Listen" on a shared answer: ARYA's own voice
     add_status_listener(phone.note_event)
     asyncio.create_task(phone.run())
 
@@ -1259,6 +1260,18 @@ async def phone_voice_turn(audio) -> AsyncIterator[dict]:
         finally:
             policy.remote_turn.reset(flag)
     yield {"type": "done", "confirm": policy.has_pending()}
+
+
+async def phone_speak(text: str) -> list[bytes]:
+    """ARYA's voice for a text the phone shows (Share -> ARYA, "Listen"): one WAV per sentence, nothing played
+    on the laptop."""
+    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+|\n+", text) if re.search(r"\w", s)]
+    out = []
+    for sentence in sentences[:40]:
+        audio = await _synthesize(sentence)
+        if audio:
+            out.append(audio)
+    return out
 
 
 async def phone_turn(message: str) -> dict:

@@ -192,6 +192,16 @@ def set_voice_handler(handler: Callable) -> None:
     _voice = handler
 
 
+_speak: Callable | None = None
+SPEAK_MAX = 3000                  # characters read aloud for one shared answer
+
+
+def set_speak_handler(handler: Callable) -> None:
+    """websocket.py: phone_speak(text) -> one WAV per sentence, in ARYA's voice."""
+    global _speak
+    _speak = handler
+
+
 def wav_to_array(data: bytes):
     """The app's recording (WAV, 16 kHz, mono, 16-bit) -> float32 samples. ValueError if it's anything else."""
     import wave
@@ -558,6 +568,56 @@ async def say(request: Request) -> JSONResponse:
     except asyncio.TimeoutError:
         return JSONResponse({"reply": "That took too long — try again, or ask at the laptop.", "confirm": False})
     return JSONResponse(result)
+
+
+@app.post("/api/share")
+async def share(request: Request) -> JSONResponse:
+    """Share -> ARYA in the phone app: a link, text, or a file uploaded just before, plus an action (arya/core/share.py).
+    The answer is also put on the phone's feed (kind 'share', no notification), so it shows in the phone chat."""
+    from arya.core import share as sharing
+    from arya.core.audit import log_event
+
+    if not _paired(request):
+        return JSONResponse({"error": "unpaired"}, status_code=401)
+    try:
+        body = await request.json()
+    except ValueError:
+        body = None
+    if not isinstance(body, dict):
+        return JSONResponse({"error": "expected JSON"}, status_code=400)
+    if _turn is None:
+        return JSONResponse({"error": "ARYA is still starting"}, status_code=503)
+    kind = "link" if body.get("url") else "file" if body.get("upload") else "text"
+    log_event("phone_share", what=kind, action=str(body.get("action", ""))[:12])    # never the link or the text
+    try:
+        result = await asyncio.wait_for(sharing.handle(body, _turn), timeout=TURN_TIMEOUT_S + 30)
+    except sharing.ShareError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    except asyncio.TimeoutError:
+        return JSONResponse({"error": "That took too long — try again, or ask at the laptop."}, status_code=504)
+    label = sharing.LABELS.get(result["action"], "Shared")
+    push(result["reply"], kind="share", url=result.get("url") or None, title=f"📎 {result['title']} · {label}")
+    return JSONResponse(result)
+
+
+@app.post("/api/speak")
+async def speak(request: Request) -> JSONResponse:
+    """ARYA's voice for a text already on the phone ("Listen" on a shared answer): base64 WAVs, one per sentence."""
+    import base64
+
+    if not _paired(request):
+        return JSONResponse({"error": "unpaired"}, status_code=401)
+    try:
+        body = await request.json()
+    except ValueError:
+        body = None
+    text = str(body.get("text", "") if isinstance(body, dict) else "").strip()[:SPEAK_MAX]
+    if not text:
+        return JSONResponse({"error": "empty"}, status_code=400)
+    if _speak is None:
+        return JSONResponse({"error": "ARYA is still starting"}, status_code=503)
+    audio = await _speak(text)
+    return JSONResponse({"audio": [base64.b64encode(a).decode() for a in audio], "mime": "audio/wav"})
 
 
 @app.post("/api/upload")
