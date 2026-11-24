@@ -6,6 +6,8 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.PowerManager
 import android.provider.Settings
 import android.view.Gravity
@@ -156,8 +158,26 @@ class MainActivity : Activity() {
 
     // ── ARYA's phone page ───────────────────────────────────────────────────
 
+    // The page lives under a native cover (orb + "Connecting…"). The cover goes away only once the page has really
+    // loaded; when the laptop can't be reached it turns into an offline home screen with Talk / Voice notes / Try
+    // again — never a black WebView with a lone Talk button (what an asleep laptop on Tailscale used to give: the
+    // load just hung, and no error ever came).
+    private val ui = Handler(Looper.getMainLooper())
+    private var cover: LinearLayout? = null
+    private var coverTitle: TextView? = null
+    private var coverText: TextView? = null
+    private var coverButtons: LinearLayout? = null
+    private var loadedOk = false
+    private var offline = false
+    private var connecting = false
+    private var loadToken = 0
+    private var firstLoad = false
+    private val autoRetry = Runnable { if (offline && !isFinishing) connect() }
+
     @SuppressLint("SetJavaScriptEnabled")
     private fun showWeb(firstTime: Boolean) {
+        firstLoad = firstTime
+        loadedOk = false
         val w = WebView(this).apply {
             layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
             setBackgroundColor(Theme.BG)
@@ -167,7 +187,25 @@ class MainActivity : Activity() {
             webViewClient = object : WebViewClient() {
                 override fun onReceivedError(view: WebView, request: android.webkit.WebResourceRequest,
                                              error: android.webkit.WebResourceError) {
-                    if (request.isForMainFrame) tryNextAddress(view)
+                    if (request.isForMainFrame) tryNextAddress()
+                }
+
+                // A laptop that answers with a server error (ARYA starting up, crashed handler) is not "loaded".
+                override fun onReceivedHttpError(view: WebView, request: android.webkit.WebResourceRequest,
+                                                 response: android.webkit.WebResourceResponse) {
+                    if (request.isForMainFrame && response.statusCode >= 500) tryNextAddress()
+                }
+
+                override fun onPageFinished(view: WebView, url: String) {
+                    if (offline || url.startsWith("about:") || url.startsWith("data:")) return
+                    pageLoaded()
+                }
+
+                // The WebView's renderer can be killed when the phone is short of memory: without this the app
+                // either crashes or is left with a dead, black view. Build a fresh one instead.
+                override fun onRenderProcessGone(view: WebView, detail: android.webkit.RenderProcessGoneDetail): Boolean {
+                    if (view === web) { web = null; view.destroy(); ui.post { showWeb(firstTime = false) } }
+                    return true
                 }
             }
             webChromeClient = object : WebChromeClient() {
@@ -183,6 +221,7 @@ class MainActivity : Activity() {
                     }
                 }
             }
+            visibility = View.INVISIBLE
         }
         web = w
         Theme.edgeToEdge(window)
@@ -191,7 +230,10 @@ class MainActivity : Activity() {
         val d = resources.displayMetrics.density
         val talk = Theme.pill(this, "🎙 Talk", primary = true) {
             startActivity(Intent(this@MainActivity, TalkActivity::class.java))
-        }.apply { setPadding((16 * d).toInt(), (10 * d).toInt(), (16 * d).toInt(), (10 * d).toInt()) }
+        }.apply {
+            setPadding((16 * d).toInt(), (10 * d).toInt(), (16 * d).toInt(), (10 * d).toInt())
+            visibility = View.GONE                                   // the cover has its own Talk button
+        }
         talkButton = talk
         // The page may only open the talk or voice-notes screen, or hide this button: nothing else crosses over.
         w.addJavascriptInterface(object {
@@ -200,18 +242,21 @@ class MainActivity : Activity() {
             @android.webkit.JavascriptInterface
             fun voiceNotes(record: Boolean) { runOnUiThread { VoiceNotesActivity.open(this@MainActivity, record) } }
             @android.webkit.JavascriptInterface
-            fun pageHasTalk() { runOnUiThread { talkButton?.visibility = View.GONE } }
+            fun pageHasTalk() { runOnUiThread { pageHasTalk = true; talkButton?.visibility = View.GONE } }
         }, "AryaApp")
-        val frame = android.widget.FrameLayout(this)
+        val frame = android.widget.FrameLayout(this).apply { setBackgroundColor(Theme.BG) }
         frame.addView(w)
+        frame.addView(buildCover(), android.widget.FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         frame.addView(talk, android.widget.FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.END
         ).apply { setMargins(0, (10 * d).toInt(), (10 * d).toInt(), 0) })
         setContentView(frame)
         shareLogin()
-        // The pairing link logs the page in (it trades the key for a cookie); afterwards the plain address.
-        w.loadUrl(if (firstTime && prefs.pairingUrl.isNotEmpty()) prefs.pairingUrl else prefs.urls.first())
+        connect()
     }
+
+    private var pageHasTalk = false
 
     /** The page logs in with a cookie, and a cookie belongs to one address. The app already holds the key, so it
      *  gives the page that cookie on every address of the laptop (Tailscale and home Wi-Fi): switching between them,
@@ -226,27 +271,120 @@ class MainActivity : Activity() {
         cookies.flush()
     }
 
+    private fun buildCover(): View {
+        val d = resources.displayMetrics.density
+        val pad = (28 * d).toInt()
+        fun text(size: Float, color: Int) = TextView(this).apply {
+            textSize = size; setTextColor(color); gravity = Gravity.CENTER; setLineSpacing(0f, 1.2f)
+        }
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(pad, pad, pad, pad)
+            background = Theme.backdrop()
+            fitsSystemWindows = true
+            isClickable = true                                       // taps don't fall through to the hidden page
+        }
+        box.addView(OrbView(this), LinearLayout.LayoutParams((130 * d).toInt(), (130 * d).toInt()))
+        box.addView(View(this), LinearLayout.LayoutParams(1, (18 * d).toInt()))
+        coverTitle = text(22f, Theme.TEXT).also { box.addView(it) }
+        box.addView(View(this), LinearLayout.LayoutParams(1, (8 * d).toInt()))
+        coverText = text(15f, Theme.MUTED).also { box.addView(it) }
+        box.addView(View(this), LinearLayout.LayoutParams(1, (24 * d).toInt()))
+        val buttons = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
+        val wide = { LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+            .apply { bottomMargin = (12 * d).toInt() } }
+        buttons.addView(Theme.pill(this, "🎙 Talk to ARYA", primary = true) {
+            startActivity(Intent(this, TalkActivity::class.java))
+        }, wide())
+        buttons.addView(Theme.pill(this, "🗒 Voice notes", primary = false) {
+            VoiceNotesActivity.open(this, false)
+        }, wide())
+        buttons.addView(Theme.pill(this, "↻ Try again", primary = false) { connect() }, wide())
+        coverButtons = buttons
+        box.addView(buttons, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+        cover = box
+        showConnecting()
+        return box
+    }
+
+    private fun showConnecting() {
+        coverTitle?.text = "Connecting to ARYA…"
+        coverText?.text = "Looking for your laptop."
+        coverButtons?.visibility = View.GONE
+        cover?.visibility = View.VISIBLE
+    }
+
+    /** Ask each laptop address with short timeouts (about a second each), then load the first one that answers. */
+    private fun connect() {
+        if (connecting) return
+        val w = web ?: return
+        connecting = true
+        offline = false
+        loadedOk = false
+        ui.removeCallbacks(autoRetry)
+        showConnecting()
+        val urls = prefs.urls
+        val key = prefs.key
+        thread {
+            val index = urls.indexOfFirst { Api.reachable(it, key) }
+            runOnUiThread {
+                connecting = false
+                if (isFinishing || web !== w) return@runOnUiThread
+                if (index < 0) showOffline() else load(index)
+            }
+        }
+    }
+
+    private fun load(index: Int) {
+        val w = web ?: return
+        tried = index
+        val url = prefs.urls[index]
+        val token = ++loadToken
+        // The pairing link logs the page in (it trades the key for a cookie); afterwards the plain address.
+        w.loadUrl(if (firstLoad && index == 0 && prefs.pairingUrl.isNotEmpty()) prefs.pairingUrl else url)
+        firstLoad = false
+        // Watchdog: a laptop that accepts the connection but never answers must not leave the screen hanging.
+        ui.postDelayed({ if (token == loadToken && !loadedOk && !offline) tryNextAddress() }, LOAD_TIMEOUT_MS)
+    }
+
+    private fun pageLoaded() {
+        if (loadedOk) return
+        loadedOk = true
+        loadToken++
+        web?.visibility = View.VISIBLE
+        cover?.animate()?.alpha(0f)?.setDuration(220)?.withEndAction {
+            cover?.visibility = View.GONE; cover?.alpha = 1f
+        }?.start()
+        if (!pageHasTalk) talkButton?.visibility = View.VISIBLE      // an older laptop page without its own mic
+    }
+
     private var tried = 0
     private var talkButton: View? = null
 
-    private fun tryNextAddress(view: WebView) {
+    private fun tryNextAddress() {
+        if (offline || connecting) return
         val urls = prefs.urls
-        tried++
-        if (tried < urls.size) view.loadUrl(urls[tried]) else {
-            tried = 0
-            talkButton?.visibility = View.VISIBLE                 // the error page has no mic of its own
-            view.loadData("<meta name='viewport' content='width=device-width,initial-scale=1'>" +
-                    "<body style='margin:0;min-height:100vh;display:flex;flex-direction:column;justify-content:center;" +
-                    "padding:28px;box-sizing:border-box;background:radial-gradient(60% 40% at 15% 5%,#7c8cff33,transparent)," +
-                    "radial-gradient(50% 40% at 90% 95%,#b07cff26,transparent),#07080c;color:#eef0f6;" +
-                    "font:16px/1.5 system-ui,sans-serif'><div style='width:72px;height:72px;border-radius:50%;" +
-                    "margin-bottom:22px;background:radial-gradient(circle at 32% 28%,#fff 0 6%,#7c8cff 30%,#b07cff 62%,#1b1440);" +
-                    "opacity:.55;filter:grayscale(.4)'></div><h2 style='margin:0 0 10px;font-size:24px'>Can't reach ARYA</h2>" +
-                    "<p style='color:#8d93a5;margin:0 0 10px'>Is the laptop awake with ARYA running? Is Tailscale on on both " +
-                    "devices (or are you on the home Wi-Fi)?</p><p style='color:#8d93a5;margin:0'>Reminders still arrive as " +
-                    "soon as the connection is back. The 🎙 Talk button still works for phone tasks.</p></body>",
-                    "text/html", "utf-8")
-        }
+        loadToken++
+        if (tried + 1 < urls.size) { load(tried + 1); return }
+        showOffline()
+    }
+
+    private fun showOffline() {
+        offline = true
+        loadedOk = false
+        loadToken++
+        web?.apply { stopLoading(); visibility = View.INVISIBLE }
+        talkButton?.visibility = View.GONE
+        coverTitle?.text = "Can't reach ARYA"
+        coverText?.text = "Is the laptop awake with ARYA running, and Tailscale on on both devices (or are you on " +
+                "the home Wi-Fi)?\n\nPhone tasks — alarms, timers, calls, messages, maps — still work by voice, and " +
+                "voice notes are kept until the laptop is back. I'll keep trying."
+        coverButtons?.visibility = View.VISIBLE
+        cover?.alpha = 1f
+        cover?.visibility = View.VISIBLE
+        ui.removeCallbacks(autoRetry)
+        ui.postDelayed(autoRetry, RETRY_MS)
     }
 
     @Deprecated("Activity API")
@@ -262,7 +400,18 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
-        if (!prefs.paired && web != null) showPairing("Not paired any more: scan the new QR code.")
+        if (!prefs.paired && web != null) { showPairing("Not paired any more: scan the new QR code."); return }
+        if (web != null && offline) connect()                    // back in the app: try the laptop again right away
+    }
+
+    override fun onPause() {
+        super.onPause()
+        ui.removeCallbacks(autoRetry)                             // no retries while the app is in the background
+    }
+
+    override fun onDestroy() {
+        ui.removeCallbacksAndMessages(null)
+        super.onDestroy()
     }
 
     @Deprecated("Activity API")
@@ -273,5 +422,7 @@ class MainActivity : Activity() {
 
     companion object {
         private const val FILE_REQUEST = 7
+        private const val LOAD_TIMEOUT_MS = 15_000L
+        private const val RETRY_MS = 15_000L
     }
 }

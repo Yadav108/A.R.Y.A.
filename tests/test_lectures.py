@@ -110,3 +110,15 @@ def test_worker_waits_while_you_are_here(course, monkeypatch):
         except asyncio.CancelledError:
             pass
     asyncio.run(go())
+
+
+def test_broken_recording_is_skipped_until_it_changes(tmp_path):
+    from arya.knowledge import lectures
+    bad = tmp_path / "broken.mp4"
+    bad.write_bytes(b"not a video")
+    lectures._failed.clear()
+    assert not lectures._failed_before(bad)
+    lectures._mark_failed(bad)
+    assert lectures._failed_before(bad)
+    bad.write_bytes(b"a repaired, longer download")
+    assert not lectures._failed_before(bad)
