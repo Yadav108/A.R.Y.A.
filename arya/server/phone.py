@@ -317,6 +317,13 @@ def last_id() -> int:
 
 # Long-polling (/api/wait): the app's background service waits here; a new event answers at once.
 _waiters: set = set()
+places_version = {"n": 0}                              # bumped when places / place reminders change
+
+
+def places_changed() -> None:
+    """The phone's long poll returns now with the new version; the app then fetches /api/places."""
+    places_version["n"] += 1
+    _wake_waiters_threadsafe()
 
 
 def _wake_waiters() -> None:
@@ -483,7 +490,43 @@ async def wait(request: Request, after: int = 0, timeout: float = 50.0) -> JSONR
         finally:
             _waiters.discard(fut)
         items = feed_after(after)
-    return JSONResponse({"items": items, "last": last_id()})
+    return JSONResponse({"items": items, "last": last_id(), "places_v": places_version["n"]})
+
+
+@app.get("/api/places")
+async def get_places(request: Request) -> JSONResponse:
+    """Continuity: the places you named (Wi-Fi names) and the reminders the phone fires on arrival / departure."""
+    if not _paired(request):
+        return JSONResponse({"error": "unpaired"}, status_code=401)
+    from arya.core import places
+    return JSONResponse({**await asyncio.to_thread(places.snapshot), "v": places_version["n"]})
+
+
+@app.post("/api/places")
+async def post_places(request: Request) -> JSONResponse:
+    """From the phone: where it is now, reminders it fired, or a place named there ("this is the lab")."""
+    if not _paired(request):
+        return JSONResponse({"error": "unpaired"}, status_code=401)
+    try:
+        body = await request.json()
+    except ValueError:
+        body = {}
+    if not isinstance(body, dict):
+        return JSONResponse({"error": "bad request"}, status_code=400)
+    from arya.core import places
+    named = body.get("name")
+    if isinstance(named, dict):
+        try:
+            label = await asyncio.to_thread(places.name_place, str(named.get("label", ""))[:40],
+                                            str(named.get("ssid", ""))[:64])
+        except ValueError:
+            return JSONResponse({"error": "no Wi-Fi name"}, status_code=400)
+        return JSONResponse({"ok": True, "label": label, **await asyncio.to_thread(places.snapshot)})
+    place = body.get("place")
+    fired = [int(i) for i in body.get("fired", []) if isinstance(i, int)][:50]
+    await asyncio.to_thread(places.report, str(place)[:40] if isinstance(place, str) else None,
+                            bool(body.get("near_laptop")), fired)
+    return JSONResponse({"ok": True})
 
 
 SNOOZABLE = {"reminder", "timer", "alarm"}

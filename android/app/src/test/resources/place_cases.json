@@ -1,0 +1,17 @@
+{
+  "reminders": [
+    {"id": 1, "text": "take the probe", "place": "home", "event": "leave"},
+    {"id": 2, "text": "ask Max about the detector", "place": "lab", "event": "arrive"},
+    {"id": 3, "text": "water the plants", "place": "home", "event": "arrive"},
+    {"id": 4, "text": "return the key", "place": "lab", "event": "leave"}
+  ],
+  "moves": [
+    {"prev": "home", "new": null, "fires": [1]},
+    {"prev": null, "new": "lab", "fires": [2]},
+    {"prev": "home", "new": "lab", "fires": [1, 2]},
+    {"prev": "lab", "new": "home", "fires": [3, 4]},
+    {"prev": "home", "new": "home", "fires": []},
+    {"prev": null, "new": null, "fires": []},
+    {"prev": "gym", "new": null, "fires": []}
+  ]
+}
