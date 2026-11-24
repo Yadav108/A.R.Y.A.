@@ -17,6 +17,7 @@ become an *action* that the app carries out with Android's own apps (android/…
   "play Kesariya" / "play lofi on Spotify"           -> plays on the phone (YouTube Music unless you name an app)
   "record a voice note" / "show my voice notes"      -> the app's own recorder; the note is kept on the phone and
                                                         sent here to be transcribed and filed
+  "this is the lab" / "call this place the gym"      -> the phone's current Wi-Fi gets that name (arya/core/places.py)
 
 Names, numbers and message text never need the laptop's address book: the phone resolves "Mom" itself, so your
 contacts stay on the phone. Anything said "on the laptop" stays a laptop request. When unsure, parse() returns
@@ -91,6 +92,12 @@ def parse(text: str, now: datetime | None = None) -> dict | None:
         return None
     now = now or datetime.now()
     from arya.tools import alarms
+
+    from arya.core import places                       # "this is the lab": the phone's own Wi-Fi gets the name
+    label = places.parse_name(t)
+    if label:
+        where = "home" if label == places.HOME else f"the {label}"
+        return {"action": "name_place", "label": label, "say": f"Got it — this Wi-Fi is {where}."}
 
     waiting = _awaiting["kind"] if time.monotonic() < _awaiting["until"] else ""
     _awaiting["kind"] = ""

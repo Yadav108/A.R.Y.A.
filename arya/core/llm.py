@@ -2618,6 +2618,20 @@ async def _turn_pipeline(message: str):
         yield controlled
         return
 
+    try:                                                # "remind me … when I leave home", "this is the lab"
+        from arya.core import places as _places
+        placed = (_places.handle(message, remote=policy.remote_turn.get())
+                  if _places.matches(message) else None)
+    except Exception as exc:
+        print(f"Places skipped: {type(exc).__name__}: {exc}")
+        placed = None
+    if placed:
+        _instant("places")
+        save_message("user", message)
+        save_message("assistant", placed)
+        yield placed
+        return
+
     try:                                                # "wrap up my day", "how was my week?", "wrap-up at 9"
         from arya.core import activity as _activity
         day = (_activity.handle(message, remote=policy.remote_turn.get())

@@ -68,6 +68,13 @@ object Api {
         }
     }
 
+    /** Continuity: named places (Wi-Fi names) and reminders for arriving / leaving. */
+    fun places(base: String, key: String): JSONObject = call(request(base, "/api/places", key).get().build())
+
+    /** Where the phone is now (place label or null), reminders it fired, or {"name": {label, ssid}}. */
+    fun postPlaces(base: String, key: String, body: JSONObject): JSONObject =
+        call(request(base, "/api/places", key).post(body.toString().toRequestBody("application/json".toMediaType())).build())
+
     fun action(base: String, key: String, id: Long, action: String, minutes: Int = 10): JSONObject {
         val body = JSONObject().put("id", id).put("action", action).put("minutes", minutes).toString()
         return call(request(base, "/api/action", key)

@@ -43,6 +43,7 @@ object Actions {
             "volume" -> volume(act, a.optString("dir"))
             "play" -> play(act, a.optString("query"), a.optString("app"))
             "voice_note" -> { VoiceNotesActivity.open(act, a.optBoolean("record")); null }
+            "name_place" -> namePlace(act, a.optString("label"))
             "ask" -> null
             else -> "I can't do that on the phone yet."
         }
@@ -50,6 +51,28 @@ object Actions {
         "Android didn't allow that. Check ARYA's permissions in Settings."
     } catch (e: Exception) {
         "That didn't work on the phone."
+    }
+
+    /** "this is the lab": the phone's Wi-Fi name gets that label on the laptop (which then sends the list back). */
+    private fun namePlace(act: Activity, label: String): String? {
+        if (!Places.canReadWifiName(act)) {
+            act.requestPermissions(arrayOf(android.Manifest.permission.ACCESS_FINE_LOCATION), 41)
+            return "Android only tells apps the Wi-Fi name with location allowed. Allow it, then say that again."
+        }
+        val ssid = Places.currentSsid(act)
+            ?: return "I can't see a Wi-Fi name. Are you on Wi-Fi, with location switched on?"
+        val prefs = Prefs(act)
+        val urls = prefs.urls
+        kotlin.concurrent.thread {
+            for (base in urls) {
+                try {
+                    val body = org.json.JSONObject().put("name", org.json.JSONObject().put("label", label).put("ssid", ssid))
+                    Places.store(act, Api.postPlaces(base, prefs.key, body))
+                    break
+                } catch (e: Exception) { /* next address */ }
+            }
+        }
+        return null
     }
 
     private fun start(act: Activity, i: Intent, failure: String): String? = try {

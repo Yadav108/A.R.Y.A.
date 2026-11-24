@@ -49,7 +49,7 @@ object Notifier {
     }
 
     private fun channelFor(kind: String) = when (kind) {
-        "reminder", "timer", "alarm" -> CH_REMINDERS
+        "reminder", "timer", "alarm", "place" -> CH_REMINDERS
         "calendar", "meeting" -> CH_CALENDAR
         "briefing", "wrapup" -> CH_DAILY
         else -> CH_MESSAGES

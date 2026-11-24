@@ -25,8 +25,17 @@ class AryaService : Service() {
         Notifier.channels(this)
         // Started again (app opened, notification tapped): show the real state, not "Connecting…" again.
         val note = Notifier.connection(this, currentStatus)
-        ServiceCompat.startForeground(this, Notifier.CONNECTION_ID, note,
-            if (Build.VERSION.SDK_INT >= 34) ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING else 0)
+        // With location allowed, the service may also read the Wi-Fi name in the background (places); if Android
+        // refuses that type (e.g. started from the background), it runs as before without it.
+        val messaging = if (Build.VERSION.SDK_INT >= 34) ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING else 0
+        val withLocation = if (Build.VERSION.SDK_INT >= 34 && Places.canReadWifiName(this))
+            messaging or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION else messaging
+        try {
+            ServiceCompat.startForeground(this, Notifier.CONNECTION_ID, note, withLocation)
+        } catch (e: Exception) {
+            ServiceCompat.startForeground(this, Notifier.CONNECTION_ID, note, messaging)
+        }
+        Places.watch(this) { label -> thread { reportPlace(label) } }
         if (!running) {
             running = true
             worker = thread(name = "arya-poll", isDaemon = true) { loop() }
@@ -35,6 +44,7 @@ class AryaService : Service() {
     }
 
     override fun onDestroy() {
+        Places.stop(this)
         running = false
         worker?.interrupt()
         super.onDestroy()
@@ -63,9 +73,13 @@ class AryaService : Service() {
                     Api.hello(base, prefs.key)
                     status("Connected to your laptop" + if (base.contains("://100.")) " (Tailscale)" else " (home Wi-Fi)")
                     connected = true
+                    lastBase = base
+                    syncPlaces(base, prefs.key, force = true)
+                    reportPlace(Places.current)
                 }
                 val r = Api.waitFor(base, prefs.key, prefs.lastId)
                 backoff = 2_000L
+                if (r.optInt("places_v", -1) != Places.version(this)) syncPlaces(base, prefs.key, force = true)
                 val items = r.optJSONArray("items")
                 val kinds = NOTIFY
                 var last = prefs.lastId
@@ -93,6 +107,26 @@ class AryaService : Service() {
                 backoff = minOf(backoff * 2, 60_000L)
             }
         }
+    }
+
+    @Volatile private var lastBase: String? = null
+
+    private fun syncPlaces(base: String, key: String, force: Boolean) {
+        if (!force) return
+        try { Places.store(this, Api.places(base, key)) } catch (e: Exception) { Log.w("ARYA", "places: ${e.message}") }
+    }
+
+    /** Tell the laptop where the phone is and which place reminders went off (kept until it hears it). */
+    private fun reportPlace(label: String?) {
+        val base = lastBase ?: return
+        val prefs = Prefs(this)
+        val fired = Places.unreported(this)
+        val body = org.json.JSONObject().put("place", label ?: org.json.JSONObject.NULL)
+            .put("near_laptop", !base.contains("://100.")).put("fired", org.json.JSONArray(fired))
+        try {
+            Api.postPlaces(base, prefs.key, body)
+            Places.clearUnreported(this, fired)
+        } catch (e: Exception) { /* next time */ }
     }
 
     companion object {
