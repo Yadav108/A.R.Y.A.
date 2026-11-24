@@ -6,6 +6,8 @@ Proactive nudges (Phase B): ARYA speaks up on its own — rarely, and only when 
     whose pomodoros already have breaks).
   - Practice: once a day, if cards are due and you haven't practised yet.
   - Calendar: a heads-up ten minutes before a timed event (arya/tools/agenda.py).
+  - Habits: once an evening (after 19:00), a daily habit you haven't logged yet (arya/core/habits.py) — on the
+    phone instead if you're away from the laptop.
 
 ARYA stays quiet when it would be rude: during quiet hours (22:00-08:00, ARYA_QUIET_HOURS="22-8"),
 when you're away from the laptop, while ARYA is already talking, and whenever Windows says not to
@@ -28,6 +30,7 @@ BREAK_AFTER_S = 90 * 60                # continuous activity before suggesting a
 BREAK_RESET_IDLE_S = 5 * 60            # this much idle time counts as a break
 AWAY_IDLE_S = 10 * 60                  # nobody there to hear it
 CARDS_AFTER_HOUR = 10                  # the daily practice nudge comes after 10:00
+HABITS_AFTER_HOUR = 19                 # the evening nudge for a daily habit not logged yet
 MIN_GAP_S = 10 * 60
 MORNING_FROM, MORNING_UNTIL = 7, 12    # the morning briefing: first activity in this window (after quiet hours)
 MORNING_AWAY_S = 30 * 60
@@ -46,6 +49,7 @@ class Sensors:
     practised_today: bool = False
     upcoming: tuple[str, str, datetime] | None = None   # (key, spoken description, start) of an event soon
     nudges: frozenset = frozenset({"battery", "calendar", "break", "cards"})   # what the mode allows (modes.py)
+    habits_open: tuple = ()                      # daily habits not logged yet today (habits.py)
 
 
 @dataclass
@@ -61,6 +65,7 @@ class Nudger:
     events_told: set = field(default_factory=set)       # calendar events already announced
     briefing_day: str = ""                              # date of the last morning briefing
     morning_off: bool = False                           # "no morning briefing"
+    habits_day: str = ""                                # date of the last evening habit nudge
     _was_away: bool = False
     _morning_last: float = 0.0
     _morning_seen: str = ""
@@ -135,6 +140,25 @@ class Nudger:
             return (f"You have {n} practice card{'s' if n != 1 else ''} due today. "
                     "Say \"quiz me\" when you have ten minutes.")
         return None
+
+
+    def habits(self, s: Sensors) -> tuple[str, bool] | None:
+        """(text, away) once an evening for daily habits not logged yet; away = send it to the phone only.
+        Not in quiet hours, muted, or when the mode doesn't want it; at the laptop also not in full screen and
+        not within ten minutes of another nudge."""
+        t, today = s.now.timestamp(), s.now.date().isoformat()
+        if (not s.habits_open or "habits" not in s.nudges or self.habits_day == today
+                or s.now.hour < HABITS_AFTER_HOUR or t < self.muted_until or self._quiet(s.now.hour)):
+            return None
+        away = s.idle_s >= AWAY_IDLE_S
+        if not away and (not s.windows_ok or t - self.last_spoken < MIN_GAP_S):
+            return None
+        self.habits_day = today
+        if not away:
+            self.last_spoken = t
+        left = list(s.habits_open)
+        what = left[0] if len(left) == 1 else ", ".join(left[:-1]) + " and " + left[-1]
+        return f"Quick check on your habits: {what} isn't logged today. Tell me once it's done.", away
 
 
 def _spoken(minutes: int) -> str:
@@ -224,9 +248,16 @@ def read_sensors() -> Sensors:
             upcoming = (ev.key, ev.title + (f" in {ev.location}" if ev.location else ""), ev.start)
     except Exception as exc:
         print(f"Nudges: calendar check failed ({type(exc).__name__}: {exc})")
+    try:
+        from arya.core import habits
+        habits_open = tuple(habits.open_today()) if now.hour >= HABITS_AFTER_HOUR else ()
+    except Exception as exc:
+        habits_open = ()
+        print(f"Nudges: habit check failed ({type(exc).__name__})")
     return Sensors(now=now, battery=battery, idle_s=_idle_seconds(),
                    windows_ok=_windows_accepts_notifications(), studying=studying,
-                   due_cards=due, practised_today=practised, upcoming=upcoming, nudges=_mode_nudges())
+                   due_cards=due, practised_today=practised, upcoming=upcoming, nudges=_mode_nudges(),
+                   habits_open=habits_open)
 
 
 # ── State that survives a restart (mute, today's practice nudge) ─────────────
@@ -246,13 +277,15 @@ def _load(n: Nudger) -> None:
     n.cards_day = rows.get("cards_day", "")
     n.briefing_day = rows.get("briefing_day", "")
     n.morning_off = rows.get("morning_off", "0") == "1" or not MORNING
+    n.habits_day = rows.get("habits_day", "")
 
 
 def _save(n: Nudger) -> None:
     with _db() as c:
         c.executemany("INSERT OR REPLACE INTO proactive_state (key, value) VALUES (?, ?)",
                       [("muted_until", str(n.muted_until)), ("cards_day", n.cards_day),
-                       ("briefing_day", n.briefing_day), ("morning_off", "1" if n.morning_off else "0")])
+                       ("briefing_day", n.briefing_day), ("morning_off", "1" if n.morning_off else "0"),
+                       ("habits_day", n.habits_day)])
 
 
 def _quiet_hours() -> tuple[int, int]:
@@ -374,5 +407,15 @@ async def run(say, busy) -> None:
                 if text.startswith("Heads-up:"):                    # a calendar event soon: the phone rings too
                     _to_phone("calendar", "Coming up", text)
                 await say(text)
+                continue
+            habit = nudger.habits(sensors)
+            if habit:
+                text, away = habit
+                print(f"Nudge: {text}" + (" (to the phone: you're away)" if away else ""))
+                await asyncio.to_thread(_save, nudger)
+                if away:                                            # the phone notifies (its daily channel)
+                    _to_phone("wrapup", "Habits", text)
+                else:
+                    await say(text)
         except Exception as exc:
             print(f"Nudge check failed: {type(exc).__name__}: {exc}")

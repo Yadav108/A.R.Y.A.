@@ -67,7 +67,7 @@ MODES: dict[str, Mode] = {
         capabilities="I'm your personal assistant. " + _COMMON_CAPS
         + " In study mode I'm your tutor for your courses; in work mode a concise partner for research and code.",
         floors={"notes": "base", "uploads": "base", "core": "base", "course": 0.55, "work": 0.55},
-        nudges=frozenset({"battery", "calendar", "break"}),
+        nudges=frozenset({"battery", "calendar", "break", "habits"}),
         briefing="the time, the weather, today's calendar, reminders and timers, and any to-dos",
     ),
     "study": Mode(
@@ -85,7 +85,7 @@ MODES: dict[str, Mode] = {
             "and a course for pomodoros, and I quiz you on practice cards and run timed mock exams. "
             + _COMMON_CAPS),
         floors={"notes": "base", "uploads": "base", "core": "base", "course": "base", "work": 0.55},
-        nudges=frozenset({"battery", "calendar", "break", "cards"}),
+        nudges=frozenset({"battery", "calendar", "break", "cards", "habits"}),
         briefing="the time, the weather, the study line (next exam, cards due), today's calendar and timers",
     ),
     "work": Mode(
@@ -101,7 +101,7 @@ MODES: dict[str, Mode] = {
                      "work tasks, prepare you for meetings from your calendar, and keep answers short and "
                      "technical. " + _COMMON_CAPS,
         floors={"notes": "base", "uploads": "base", "work": "base", "core": "base", "course": 0.55},
-        nudges=frozenset({"battery", "calendar", "break"}),
+        nudges=frozenset({"battery", "calendar", "break", "habits"}),
         briefing="the time, the weather, today's meetings, open to-dos and unread mail that looks important",
     ),
     "brainstorm": Mode(

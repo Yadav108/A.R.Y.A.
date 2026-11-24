@@ -149,6 +149,13 @@ routes:
   - {say: "what do you remember about me?", route: learning}   # told + learned (PR 3)
   - {say: "when I say start my day, give me the briefing and play focus music", route: routines}
   - {say: "what routines do I have?", route: routines}
+  - {say: "run start my day every weekday at 8", route: routines}       # on a schedule
+  - {say: "what runs automatically?", route: routines}
+  - {say: "stop running start my day automatically", route: routines}
+  - {say: "track a habit: drink 2 litres of water every day", route: habits}
+  - {say: "done with water", route: habits}
+  - {say: "how are my habits?", route: habits}
+  - {say: "what are good habits for studying?", route: model}
   - {say: "no morning briefing", route: nudge settings}
   - {say: "remember this: the lab is in room B12", route: model}
   - {say: "pause transcribing", route: lectures}

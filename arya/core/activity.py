@@ -239,6 +239,15 @@ def wrap_up(today: date | None = None, now: datetime | None = None) -> str:
     s = streak(today)
     if s >= 2:
         parts.append(f"That's a {s}-day study streak.")
+    from arya.core import habits, routines
+    for name, line_of in (("habits", habits.wrap_up_line), ("routines", routines.wrap_up_line)):
+        try:                                                # habits done / to do; scheduled routines that were skipped
+            line = line_of(today)
+        except Exception as exc:
+            line = ""
+            print(f"Wrap-up: {name} skipped ({type(exc).__name__})")
+        if line:
+            parts.append(line)
     if now.hour >= 20:
         parts.append("Good night when you get there.")
     return " ".join(parts)
