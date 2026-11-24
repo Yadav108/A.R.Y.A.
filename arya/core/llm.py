@@ -2605,9 +2605,11 @@ async def _turn_pipeline(message: str):
 
     try:                                                # meeting mode; laptop remote control (lock, sleep, what's open)
         from arya.core import quiet as _quiet
+        from arya.core import health as _health
         from arya.tools import remote as _remote
         controlled = (_quiet.handle(message) if _quiet.matches(message)
-                      else await _remote.handle(message) if _remote.matches(message) else None)
+                      else await _remote.handle(message) if _remote.matches(message)
+                      else await _health.handle(message) if _health.matches(message) else None)
     except Exception as exc:
         print(f"Remote / meeting skipped: {type(exc).__name__}: {exc}")
         controlled = None

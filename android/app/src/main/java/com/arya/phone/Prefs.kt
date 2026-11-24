@@ -29,6 +29,24 @@ class Prefs(context: Context) {
         get() = p.getBoolean("asked_people", false)
         set(v) = p.edit().putBoolean("asked_people", v).apply()
 
+    /** The laptop's network card (Wake-on-LAN): MAC and the home network's broadcast address, from /api/hello. */
+    var wakeMac: String
+        get() = p.getString("wake_mac", "")!!
+        set(v) = p.edit().putString("wake_mac", v).apply()
+
+    var wakeBroadcast: String
+        get() = p.getString("wake_broadcast", "")!!
+        set(v) = p.edit().putString("wake_broadcast", v).apply()
+
+    /** Remember the wake target from a /api/hello answer (kept when the answer has none). */
+    fun rememberWake(hello: org.json.JSONObject) {
+        val wake = hello.optJSONObject("wake") ?: return
+        val mac = wake.optString("mac")
+        if (Wake.magicPacket(mac) == null) return
+        wakeMac = mac
+        wakeBroadcast = wake.optString("broadcast", "255.255.255.255")
+    }
+
     val paired: Boolean get() = key.isNotEmpty() && urls.isNotEmpty()
 
     fun forget() = p.edit().clear().apply()

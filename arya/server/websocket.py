@@ -230,6 +230,9 @@ async def preload_models() -> None:
     from arya.core import upkeep                     # daily backup of arya.db and your notes (last 7 days)
     asyncio.create_task(upkeep.run())
 
+    from arya.core import health                     # waking from sleep, disk nearly full; "health check"
+    asyncio.create_task(health.run(announce, busy=_voice_lock.locked))
+
     from arya.core import intercom                   # "say … on the laptop" from the phone, "where's my laptop?"
     intercom.set_speaker(speak_on_laptop)
 

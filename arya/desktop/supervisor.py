@@ -7,7 +7,8 @@ which starts ARYA itself as a child process and
     and a start that failed early waits 30 s before the next try (usually memory),
   - restarts it if its server stops answering for 3 minutes while the window lives on (a hung model or
     GPU driver), checked once a minute at http://127.0.0.1:<port>/healthz,
-  - gives up after 5 restarts in 30 minutes instead of looping, and logs every restart.
+  - after 5 restarts in 30 minutes it pauses for 15 minutes instead of looping (memory or a driver usually
+    recovers by then) and tries again, so a bad hour never leaves ARYA off for good; every restart is logged.
 
 "Quit ARYA" exits normally (code 0) and the watchdog quits with it. ARYA_SUPERVISE=0 turns it off.
 """
@@ -29,6 +30,7 @@ STARTUP_GRACE_S = 180            # models take a while to load
 HUNG_AFTER_FAILS = 3             # 3 missed checks in a row -> hung
 MAX_RESTARTS, WINDOW_S = 5, 30 * 60
 BACKOFF_S = 5
+COOLDOWN_S = 15 * 60             # after too many restarts: pause, then try again (not give up for good)
 # A start that failed within the grace period was usually short of memory (2026-11-16: "mkl_malloc: failed
 # to allocate memory" while another model was still loaded) — give memory time to free up first.
 FAILED_START_BACKOFF_S = 30
@@ -68,10 +70,11 @@ def _child_command(args: list[str]) -> list[str]:
 
 
 def supervise(args: list[str], *, spawn=_spawn, check=healthy, sleep=time.sleep, clock=time.monotonic,
-              port: int | None = None) -> int:
+              port: int | None = None, max_cooldowns: int | None = None) -> int:
     """Run ARYA and keep it running. Returns the exit code to leave with."""
     port = port or int(os.getenv("ARYA_PORT", "8000"))
     restarts: deque[float] = deque()
+    cooldowns = 0
     while True:
         started = clock()
         child = spawn(_child_command(args), cwd=str(ROOT))
@@ -105,8 +108,14 @@ def supervise(args: list[str], *, spawn=_spawn, check=healthy, sleep=time.sleep,
         while restarts and now - restarts[0] > WINDOW_S:
             restarts.popleft()
         if len(restarts) >= MAX_RESTARTS:
-            _log(f"ARYA {reason}; {MAX_RESTARTS} restarts in 30 minutes — giving up")
-            return 1
+            if max_cooldowns is not None and cooldowns >= max_cooldowns:
+                _log(f"ARYA {reason}; {MAX_RESTARTS} restarts in 30 minutes — giving up")
+                return 1
+            cooldowns += 1
+            _log(f"ARYA {reason}; {MAX_RESTARTS} restarts in 30 minutes — pausing {COOLDOWN_S // 60} min, then trying again")
+            sleep(COOLDOWN_S)
+            restarts.clear()
+            continue
         restarts.append(now)
         wait = FAILED_START_BACKOFF_S if now - started < STARTUP_GRACE_S else BACKOFF_S
         _log(f"ARYA {reason} — restarting in {wait} s")
