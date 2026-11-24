@@ -239,6 +239,15 @@ async def preload_models() -> None:
     from arya.core import activity                   # time at the laptop, "remind me when I'm back", evening wrap-up
     asyncio.create_task(activity.run(announce, busy=_voice_lock.locked))
 
+    from arya.core import routines                   # "run start my day every weekday at 8": as if you'd said it
+
+    async def run_routine(trigger: str, late_s: float) -> None:
+        await _dispatch(trigger, announce_transcript=True)
+
+    def mid_turn() -> bool:                          # never cut into a turn: the routine waits for it
+        return _voice_lock.locked() or (_current_turn is not None and not _current_turn.done())
+    asyncio.create_task(routines.run(run_routine, busy=mid_turn))
+
     from arya.core import quiet                      # meeting mode, and quiet during Teams / Zoom calls
     def meeting_notice(text: str) -> None:           # "looks like you're in a call" / "call over": app + phone
         from arya.server import phone as _phone
