@@ -15,6 +15,18 @@ class ActionReceiver : BroadcastReceiver() {
         val pending = goAsync()
         Notifier.stopSound()
         Notifier.cancel(context, id)
+        if (id < 0) {                                       // a reminder set on the phone while the laptop was away
+            if (action == "snooze") {
+                val p = context.getSharedPreferences("arya", Context.MODE_PRIVATE)
+                val list = try { org.json.JSONArray(p.getString("reminders", "[]")) } catch (e: Exception) { org.json.JSONArray() }
+                val text = (0 until list.length()).map { list.getJSONObject(it) }.firstOrNull { it.optLong("id") == id }
+                    ?.optString("text") ?: "Reminder"
+                OfflineServices.schedule(context, id, System.currentTimeMillis() + 10 * 60_000L, text)
+            }
+            Toast.makeText(context, if (action == "snooze") "Snoozed for 10 minutes." else "Done.", Toast.LENGTH_SHORT).show()
+            pending.finish()
+            return
+        }
         thread {
             var reply = "Couldn't reach the laptop"
             for (base in prefs.urls) {
@@ -34,6 +46,7 @@ class ActionReceiver : BroadcastReceiver() {
 /** After a reboot (or an app update), reconnect without opening the app. */
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
+        OfflineServices.rescheduleAll(context)              // phone reminders survive a reboot
         if (Prefs(context).paired) AryaService.start(context)
     }
 }

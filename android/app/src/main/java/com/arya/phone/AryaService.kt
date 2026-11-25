@@ -63,6 +63,8 @@ class AryaService : Service() {
                     Api.hello(base, prefs.key)
                     status("Connected to your laptop" + if (base.contains("://100.")) " (Tailscale)" else " (home Wi-Fi)")
                     connected = true
+                    // Back in reach: notes said meanwhile go to the laptop; its home city / cloud settings come back.
+                    OfflineServices.syncWithLaptop(this, base, prefs.key)
                 }
                 val r = Api.waitFor(base, prefs.key, prefs.lastId)
                 backoff = 2_000L
