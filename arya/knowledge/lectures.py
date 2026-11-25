@@ -233,6 +233,27 @@ def _user_away() -> bool:
     return _idle_seconds() >= IDLE_MINUTES * 60
 
 
+_failed: dict[str, tuple[float, int]] = {}      # path -> (mtime, size) of a recording that could not be decoded
+
+
+def _signature(path: Path) -> tuple[float, int]:
+    try:
+        st = path.stat()
+        return (st.st_mtime, st.st_size)
+    except OSError:
+        return (0.0, -1)
+
+
+def _mark_failed(path: Path) -> None:
+    _failed[str(path)] = _signature(path)
+
+
+def _failed_before(path: Path) -> bool:
+    """True while a recording that failed is unchanged; a re-downloaded or repaired file is tried again."""
+    sig = _failed.get(str(path))
+    return sig is not None and sig == _signature(path)
+
+
 async def run(busy) -> None:
     """Started by the server: transcribes while you're away (or when asked), one window at a time."""
     if not ENABLED:
@@ -249,10 +270,18 @@ async def run(busy) -> None:
                 todo = [p for p in await asyncio.to_thread(recordings, roots) if not transcript_ready(p)]
                 if not todo:
                     _force.clear()
+                todo = [p for p in todo if not _failed_before(p)]
                 for path in todo:
                     if not allowed():
                         break
-                    done = await asyncio.to_thread(transcribe, path, allowed, roots)
+                    try:
+                        done = await asyncio.to_thread(transcribe, path, allowed, roots)
+                    except Exception as exc:
+                        # A broken recording (half-downloaded, corrupt) used to stop every later file and log the
+                        # same error every 30 s for hours. Skip it until the file changes.
+                        _mark_failed(path)
+                        print(f"Lectures: skipping {path.name} until it changes — {type(exc).__name__}: {exc}")
+                        continue
                     if done:
                         await asyncio.to_thread(library.index_file, path)
         except Exception as exc:
