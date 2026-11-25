@@ -131,6 +131,15 @@
             android:name=".ReminderReceiver"
             android:exported="false" />
 
+        <!-- The offline brain's download finished (PhoneBrainEngine.kt): check the file, say it's ready. -->
+        <receiver
+            android:name=".BrainDownloadReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.DOWNLOAD_COMPLETE" />
+            </intent-filter>
+        </receiver>
+
         <receiver
             android:name=".BootReceiver"
             android:exported="true">

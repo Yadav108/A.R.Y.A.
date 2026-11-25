@@ -17,6 +17,9 @@ become an *action* that the app carries out with Android's own apps (android/…
   "play Kesariya" / "play lofi on Spotify"           -> plays on the phone (YouTube Music unless you name an app)
   "record a voice note" / "show my voice notes"      -> the app's own recorder; the note is kept on the phone and
                                                         sent here to be transcribed and filed
+  "download the offline brain" / "delete the phone model" / "is the offline brain ready?"
+                                                     -> the phone's own small AI, for when this laptop is out of
+                                                        reach (android/.../PhoneBrain.kt); the phone says how it went
 
 Names, numbers and message text never need the laptop's address book: the phone resolves "Mom" itself, so your
 contacts stay on the phone. Anything said "on the laptop" stays a laptop request. When unsure, parse() returns
@@ -65,6 +68,12 @@ _VOICE_NOTE = re.compile(_LEAD + r"(?:(?P<rec>(?:record|take|start|make)\s+(?:a\
                          r"(?:note|memo)|record\s+a\s+(?:note|memo)|start\s+recording(?:\s+a\s+(?:voice\s+)?note)?)|"
                          r"(?:open|show)\s+(?:me\s+)?(?:my\s+|the\s+)?voice\s+(?:notes|memos))(?:\s+please)?\W*$",
                          re.IGNORECASE)
+_BRAIN = r"(?:offline|phone|local|on-device|on device)\s+(?:brain|model|ai|a\.i\.?)"
+_PHONE_BRAIN = re.compile(_LEAD + r"(?:(?P<get>download|get|install|set up|setup)\s+(?:the\s+|your\s+|an?\s+)?" + _BRAIN +
+                          r"|(?P<del>delete|remove|uninstall)\s+(?:the\s+|your\s+)?" + _BRAIN +
+                          r"|is\s+(?:the\s+|your\s+)?" + _BRAIN + r"\s+(?:ready|there|downloaded|installed)"
+                          r"|how(?:'s| is)\s+(?:the\s+)?(?:download\s+of\s+the\s+)?" + _BRAIN +
+                          r"(?:\s+download)?(?:\s+going)?)\W*$", re.IGNORECASE)
 _PLAY = re.compile(_LEAD + r"play\s+(?P<q>.+?)(?:\s+on\s+(?P<app>spotify|youtube music|youtube))?\W*$", re.IGNORECASE)
 _OPEN = re.compile(_LEAD + r"(?:open|launch|start)\s+(?:the\s+|my\s+)?(?P<app>[\w .'&+-]{2,30}?)(?:\s+app)?\W*$",
                    re.IGNORECASE)
@@ -135,6 +144,10 @@ def parse(text: str, now: datetime | None = None) -> dict | None:
     if _TORCH.search(t) and len(t.split()) <= 8:
         on = not _TORCH_OFF.search(t)
         return {"action": "torch", "on": on, "say": "Flashlight on." if on else "Flashlight off."}
+    m = _PHONE_BRAIN.match(t)
+    if m:
+        do = "download" if m.group("get") else "delete" if m.group("del") else "status"
+        return {"action": "phone_brain", "do": do, "say": "Okay, on the phone."}
     m = _VOICE_NOTE.match(t)
     if m:
         rec = bool(m.group("rec"))
