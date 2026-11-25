@@ -144,20 +144,66 @@ class TalkActivity : Activity() {
         }
     }
 
+    @Volatile private var cloudQuestion: String? = null           // waiting for "yes" before asking the cloud
+
     private fun offlineTurn(text: String) {
         ui.post { heard.text = "You: $text"; reply.text = "" }
         taskDone = false
-        val cmd = PhoneCommands.parse(text)
-        if (cmd == null) {
-            say("The laptop is out of reach, so right now I can only do phone tasks: alarms, timers, calls, " +
-                "messages, maps, apps, music and the flashlight.")
+        cloudQuestion?.let { q ->                                   // the answer to "Shall I ask the cloud?"
+            cloudQuestion = null
+            if (Regex("(?i)^\\W*(?:yes|yeah|yep|yup|sure|ok|okay|go ahead|do it|please|ask)\\b").containsMatchIn(text)) {
+                show(State.THINKING, "Asking the cloud…")
+                thread(name = "arya-cloud") {
+                    val answer = OfflineServices.askCloud(this, q)
+                    ui.post { say(answer) { listenOffline(follow = true) } }
+                }
+            } else say("Okay, it stays on the phone. Ask me again when the laptop is back.")
             return
         }
-        val a = JSONObject(cmd.fields).put("action", cmd.action)
-        when {
-            cmd.action == "ask" -> say(cmd.say) { listenOffline(follow = true) }
-            Actions.leavesApp(a) -> say(cmd.say) { perform(a) }               // "Calling Mom." then the call
-            else -> { perform(a); say(cmd.say) { if (taskDone) closeSoon() } }
+        val now = java.time.ZonedDateTime.now()
+        when (val d = OfflineBrain.decide(text, now)) {
+            is OfflineBrain.Decision.Task -> {
+                val cmd = d.cmd
+                val a = JSONObject(cmd.fields).put("action", cmd.action)
+                when {
+                    cmd.action == "ask" -> say(cmd.say) { listenOffline(follow = true) }
+                    Actions.leavesApp(a) -> say(cmd.say) { perform(a) }      // "Calling Mom." then the call
+                    else -> { perform(a); say(cmd.say) { if (taskDone) closeSoon() } }
+                }
+            }
+            is OfflineBrain.Decision.Say -> say(d.text) { listenOffline(follow = true) }
+            is OfflineBrain.Decision.Weather -> {
+                show(State.THINKING, "Checking the weather…")
+                thread(name = "arya-weather") {
+                    val w = OfflineServices.weather(this, d.q)
+                    ui.post { say(w) { listenOffline(follow = true) } }
+                }
+            }
+            is OfflineBrain.Decision.Note -> when (val c = d.cmd) {
+                is Notes.Cmd.Capture -> {
+                    OfflineServices.capture(this, c.text)
+                    taskDone = true
+                    say("Noted. I'll hand it to the laptop when it's back.") { closeSoon() }
+                }
+                is Notes.Cmd.Remind -> {
+                    OfflineServices.remind(this, c.atMs, c.text)
+                    taskDone = true
+                    val at = java.time.Instant.ofEpochMilli(c.atMs).atZone(now.zone)
+                    val day = if (at.toLocalDate() == now.toLocalDate()) "" else " tomorrow"
+                    say("I'll remind you at %02d:%02d%s to %s.".format(at.hour, at.minute, day, c.text)) { closeSoon() }
+                }
+                Notes.Cmd.List -> {
+                    val items = OfflineServices.pending(this)
+                    say(if (items.isEmpty()) "Nothing saved on the phone. Your full list is on the laptop."
+                        else "Saved on the phone while the laptop was away: " + items.joinToString("; ") + ".")
+                }
+            }
+            is OfflineBrain.Decision.AskCloud -> {
+                cloudQuestion = d.question
+                say("The laptop is out of reach. Shall I ask the cloud? Only your question is sent.") {
+                    listenOffline(follow = true)
+                }
+            }
         }
     }
 
@@ -255,7 +301,9 @@ class TalkActivity : Activity() {
         if (offline == null) {                                     // first: is the laptop there? (≈1 s at most)
             show(State.THINKING, "Connecting…")
             thread(name = "arya-reach") {
-                offline = urls.none { Api.reachable(it, prefs.key) }
+                val reach = urls.firstOrNull { Api.reachable(it, prefs.key) }
+                offline = reach == null
+                if (reach != null) thread { OfflineServices.syncWithLaptop(this, reach, prefs.key) }
                 ui.post { listen(follow) }
             }
             return

@@ -610,6 +610,68 @@ async def voice(request: Request):
     return StreamingResponse(lines(), media_type="application/x-ndjson")
 
 
+PHONE_CLOUD = os.getenv("ARYA_PHONE_CLOUD", "1") != "0"
+PHONE_CLOUD_MODEL = os.getenv("ARYA_PHONE_CLOUD_MODEL", "openai/gpt-oss-20b")
+_inbox_seen: set[int] = set()
+
+
+@app.get("/api/offline-config")
+async def offline_config(request: Request) -> JSONResponse:
+    """What the phone needs when this laptop is out of reach (android/…/OfflineServices.kt): the home city and its
+    coordinates for the weather, and — because the cloud was chosen for questions while the laptop is away (asked
+    each time on the phone) — the Groq key and model. Only to a paired phone; ARYA_PHONE_CLOUD=0 leaves the key out."""
+    from arya.core.audit import log_event
+
+    if not _paired(request):
+        return JSONResponse({"error": "unpaired"}, status_code=401)
+    cfg: dict = {"city": os.getenv("DEFAULT_CITY", "Berlin"), "cloud_model": PHONE_CLOUD_MODEL}
+    for key, env in (("lat", "DEFAULT_LAT"), ("lon", "DEFAULT_LON")):
+        try:
+            cfg[key] = float(os.getenv(env, ""))
+        except ValueError:
+            pass
+    groq = os.getenv("GROQ_API_KEY", "").strip()
+    if PHONE_CLOUD and groq:
+        cfg["groq_key"] = groq
+    log_event("phone_offline_config", cloud=bool(cfg.get("groq_key")))      # never the key itself
+    return JSONResponse(cfg)
+
+
+@app.post("/api/inbox")
+async def inbox(request: Request) -> JSONResponse:
+    """Notes and to-dos said to the phone while this laptop was out of reach: filed like any capture (your to-dos,
+    ideas or notes — arya/core/capture.py). Each item once, even if the phone sends it again."""
+    from arya.core import capture
+    from arya.core.audit import log_event
+
+    if not _paired(request):
+        return JSONResponse({"error": "unpaired"}, status_code=401)
+    try:
+        body = await request.json()
+    except ValueError:
+        body = {}
+    items = body.get("items", []) if isinstance(body, dict) else []
+    filed = 0
+    for item in items[:200]:
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("text", "")).strip()[:MAX_TEXT]
+        try:
+            iid = int(item.get("id", 0))
+        except (TypeError, ValueError):
+            iid = 0
+        if not text or (iid and iid in _inbox_seen):
+            continue
+        await capture.file(text, source="phone-offline")
+        if iid:
+            _inbox_seen.add(iid)
+        filed += 1
+    log_event("phone_inbox", items=filed)
+    if filed:
+        print(f"Phone: filed {filed} note(s) said while the laptop was away")
+    return JSONResponse({"filed": filed})
+
+
 @app.post("/api/mode")
 async def mode(request: Request) -> JSONResponse:
     """The mode switch on the phone page: default / study / work (arya/core/modes.py)."""
