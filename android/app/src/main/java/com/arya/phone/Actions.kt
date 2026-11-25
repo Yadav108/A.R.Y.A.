@@ -43,6 +43,10 @@ object Actions {
             "volume" -> volume(act, a.optString("dir"))
             "play" -> play(act, a.optString("query"), a.optString("app"))
             "voice_note" -> { VoiceNotesActivity.open(act, a.optBoolean("record")); null }
+            "phone_brain" -> PhoneBrainEngine.manage(act, when (a.optString("do")) {   // the phone says how it went
+                "delete" -> PhoneBrain.Manage.DELETE; "status" -> PhoneBrain.Manage.STATUS
+                else -> PhoneBrain.Manage.DOWNLOAD
+            })
             "ask" -> null
             else -> "I can't do that on the phone yet."
         }

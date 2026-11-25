@@ -61,3 +61,23 @@ def test_inbox_files_each_note_once(monkeypatch):
     assert c.post("/api/inbox", json={"items": items}, headers=AUTH).json() == {"filed": 2}
     assert c.post("/api/inbox", json={"items": items[:2]}, headers=AUTH).json() == {"filed": 0}     # sent again
     assert filed == [("remember to buy milk", "phone-offline"), ("the parking spot is B12", "phone-offline")]
+
+
+# ── The offline brain (android/.../PhoneBrain.kt): managed from the laptop too ──────────────────────────────────
+
+@pytest.mark.parametrize("text, do", [
+    ("download the offline brain", "download"), ("Hey ARYA, set up the phone AI", "download"),
+    ("delete the phone model", "delete"), ("is the offline brain ready?", "status"),
+    ("how is the offline brain download going", "status"),
+])
+def test_phone_brain_action(text, do):
+    from arya.server import phone_actions
+    a = phone_actions.parse(text)
+    assert a["action"] == "phone_brain" and a["do"] == do
+
+
+@pytest.mark.parametrize("text", ["download the lecture", "what is a phone model", "delete the offline notes"])
+def test_not_phone_brain(text):
+    from arya.server import phone_actions
+    a = phone_actions.parse(text)
+    assert a is None or a["action"] != "phone_brain"

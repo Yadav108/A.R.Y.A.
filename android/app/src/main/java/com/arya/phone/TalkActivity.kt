@@ -151,13 +151,23 @@ class TalkActivity : Activity() {
         taskDone = false
         cloudQuestion?.let { q ->                                   // the answer to "Shall I ask the cloud?"
             cloudQuestion = null
-            if (Regex("(?i)^\\W*(?:yes|yeah|yep|yup|sure|ok|okay|go ahead|do it|please|ask)\\b").containsMatchIn(text)) {
+            if (q.isEmpty() || Regex("(?i)^\\W*(?:yes|yeah|yep|yup|sure|ok|okay|go ahead|do it|please|ask)\\b").containsMatchIn(text)) {
                 show(State.THINKING, "Asking the cloud…")
                 thread(name = "arya-cloud") {
-                    val answer = OfflineServices.askCloud(this, q)
+                    val answer = OfflineServices.askCloud(this, q.ifEmpty { text })   // empty: "What shall I ask?"
                     ui.post { say(answer) { listenOffline(follow = true) } }
                 }
             } else say("Okay, it stays on the phone. Ask me again when the laptop is back.")
+            return
+        }
+        PhoneBrain.manage(text)?.let { say(PhoneBrainEngine.manage(this, it)) { listenOffline(follow = true) }; return }
+        PhoneBrain.cloudRequest(text)?.let { q ->                    // "ask the cloud: …" — asked for by name
+            if (q.isEmpty()) { cloudQuestion = ""; say("What shall I ask the cloud?") { listenOffline(follow = true) }; return }
+            show(State.THINKING, "Asking the cloud…")
+            thread(name = "arya-cloud") {
+                val answer = OfflineServices.askCloud(this, q)
+                ui.post { say(answer) { listenOffline(follow = true) } }
+            }
             return
         }
         val now = java.time.ZonedDateTime.now()
@@ -199,12 +209,60 @@ class TalkActivity : Activity() {
                 }
             }
             is OfflineBrain.Decision.AskCloud -> {
+                if (PhoneBrainEngine.status(this) == PhoneBrainEngine.Status.READY) { think(d.question); return }
                 cloudQuestion = d.question
-                say("The laptop is out of reach. Shall I ask the cloud? Only your question is sent.") {
+                val tip = if (PhoneBrainEngine.status(this) == PhoneBrainEngine.Status.MISSING)
+                    " Or, on Wi-Fi, say \"download the offline brain\" and I'll answer these on the phone." else ""
+                say("The laptop is out of reach. Shall I ask the cloud? Only your question is sent.$tip") {
                     listenOffline(follow = true)
                 }
             }
         }
+    }
+
+    // ── The offline brain: a small model on the phone (PhoneBrain.kt) ─────────────────────────────────────────
+
+    private val history = ArrayList<PhoneBrain.Turn>()              // this conversation, for follow-up questions
+    @Volatile private var thinking = false
+
+    private fun think(question: String) {
+        show(State.THINKING, "Thinking on the phone…")
+        thinking = true
+        var spoke = 0
+        val city = OfflineServices.config(this).optString("city", "").ifEmpty { null }
+        PhoneBrainEngine.answer(this, question, history.toList(), city,
+            onSentence = { s ->
+                ui.post {
+                    if (!thinking) return@post                          // interrupted
+                    if (spoke++ == 0) { show(State.SPEAKING, "On the phone — tap to stop."); reply.text = s }
+                    else reply.text = "${reply.text} $s"
+                    tts?.speak(s, TextToSpeech.QUEUE_ADD, null, "arya-brain-${utterances++}")
+                }
+            },
+            onDone = { answer ->
+                ui.post {
+                    if (!thinking) return@post
+                    thinking = false
+                    if (answer == null) {
+                        say("The offline brain couldn't answer that. Try asking again, or ask the cloud.") {
+                            listenOffline(follow = true)
+                        }
+                        return@post
+                    }
+                    history.add(PhoneBrain.Turn(question, answer))
+                    val id = "arya-local-${utterances++}"                   // after the last sentence: listen again
+                    afterSpeech[id] = { listenOffline(follow = true) }
+                    if (tts?.playSilentUtterance(50, TextToSpeech.QUEUE_ADD, id) != TextToSpeech.SUCCESS)
+                        afterSpeech.remove(id)?.let { ui.post(it) }
+                }
+            })
+    }
+
+    private fun stopThinking() {
+        if (!thinking) return
+        thinking = false
+        PhoneBrainEngine.stop()
+        tts?.stop()
     }
 
     private fun build() {
@@ -287,7 +345,7 @@ class TalkActivity : Activity() {
 
     private fun tapped() {
         when (state) {
-            State.SPEAKING -> { player.stop(); releaseFocus(); listen(follow = false) }      // interrupt ARYA
+            State.SPEAKING -> { stopThinking(); player.stop(); releaseFocus(); listen(follow = false) }   // interrupt ARYA
             State.LISTENING ->                                     // send now — but a tap in the first 1.5 s is a
                 if (System.currentTimeMillis() - listeningSince > 1500) recorder?.finish()   // stray thumb, not "done"
             State.THINKING -> { }
@@ -304,6 +362,7 @@ class TalkActivity : Activity() {
                 val reach = urls.firstOrNull { Api.reachable(it, prefs.key) }
                 offline = reach == null
                 if (reach != null) thread { OfflineServices.syncWithLaptop(this, reach, prefs.key) }
+                else thread(name = "arya-brain-warm") { PhoneBrainEngine.warm(this) }   // load while you speak
                 ui.post { listen(follow) }
             }
             return
@@ -426,6 +485,8 @@ class TalkActivity : Activity() {
     }
 
     override fun onDestroy() {
+        stopThinking()
+        thread(name = "arya-brain-close") { PhoneBrainEngine.close() }    // give the 1.6 GB back to the phone
         tts?.shutdown()
         super.onDestroy()
     }

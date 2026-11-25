@@ -56,6 +56,8 @@ dependencies {
     // ARYA's own offline speech recognition (Vosk, Apache-2.0) when the laptop is out of reach (Offline.kt).
     implementation("com.alphacephei:vosk-android:0.3.47@aar")
     implementation("net.java.dev.jna:jna:5.13.0@aar")
+    // The offline brain: Google's on-device LLM engine (Apache-2.0) runs a small model on the phone (PhoneBrainEngine.kt).
+    implementation("com.google.mediapipe:tasks-genai:0.10.27")
 
     // Unit tests of the offline parser (PhoneCommandsTest): real org.json instead of Android's stubs.
     testImplementation("junit:junit:4.13.2")
