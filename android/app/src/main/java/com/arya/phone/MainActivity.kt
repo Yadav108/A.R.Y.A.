@@ -126,6 +126,7 @@ class MainActivity : Activity() {
                 prefs.key = key
                 prefs.lastId = hello.optLong("last")                 // don't replay old events as notifications
                 prefs.pairingUrl = text.trim()
+                prefs.rememberWake(hello)
                 runOnUiThread { paired() }
             } catch (e: Api.Unpaired) {
                 runOnUiThread { status?.text = "This code is old. Say \"connect my phone\" on the laptop for a new one." }
@@ -300,6 +301,8 @@ class MainActivity : Activity() {
         buttons.addView(Theme.pill(this, "🗒 Voice notes", primary = false) {
             VoiceNotesActivity.open(this, false)
         }, wide())
+        wakeButton = Theme.pill(this, "⏻ Wake the laptop", primary = false) { wakeLaptop() }
+        buttons.addView(wakeButton, wide())
         buttons.addView(Theme.pill(this, "↻ Try again", primary = false) { connect() }, wide())
         coverButtons = buttons
         box.addView(buttons, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
@@ -357,6 +360,32 @@ class MainActivity : Activity() {
             cover?.visibility = View.GONE; cover?.alpha = 1f
         }?.start()
         if (!pageHasTalk) talkButton?.visibility = View.VISIBLE      // an older laptop page without its own mic
+        val url = prefs.urls.getOrNull(tried) ?: return
+        val key = prefs.key
+        thread {                                                    // keep the Wake-on-LAN address up to date
+            try { prefs.rememberWake(Api.hello(url, key)) } catch (e: Exception) { /* next time */ }
+        }
+    }
+
+    private var wakeButton: View? = null
+
+    /** Magic packet to the laptop (home Wi-Fi only), then look for it again once it has had time to wake. */
+    private fun wakeLaptop() {
+        val mac = prefs.wakeMac
+        val broadcast = prefs.wakeBroadcast
+        coverText?.text = "Waking the laptop…"
+        thread {
+            val sent = try { Wake.send(mac, broadcast) } catch (e: Exception) { false }
+            runOnUiThread {
+                if (!sent) {
+                    coverText?.text = "Couldn't send the wake signal. It only works on the same Wi-Fi as the laptop."
+                    return@runOnUiThread
+                }
+                coverText?.text = "Wake signal sent. If the laptop is asleep on this Wi-Fi, it wakes in a few seconds…"
+                ui.removeCallbacks(autoRetry)
+                ui.postDelayed({ if (offline && !isFinishing) connect() }, WAKE_WAIT_MS)
+            }
+        }
     }
 
     private var tried = 0
@@ -381,6 +410,7 @@ class MainActivity : Activity() {
                 "the home Wi-Fi)?\n\nPhone tasks — alarms, timers, calls, messages, maps — still work by voice, and " +
                 "voice notes are kept until the laptop is back. I'll keep trying."
         coverButtons?.visibility = View.VISIBLE
+        wakeButton?.visibility = if (prefs.wakeMac.isNotEmpty()) View.VISIBLE else View.GONE
         cover?.alpha = 1f
         cover?.visibility = View.VISIBLE
         ui.removeCallbacks(autoRetry)
@@ -424,5 +454,6 @@ class MainActivity : Activity() {
         private const val FILE_REQUEST = 7
         private const val LOAD_TIMEOUT_MS = 15_000L
         private const val RETRY_MS = 15_000L
+        private const val WAKE_WAIT_MS = 12_000L
     }
 }

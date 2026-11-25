@@ -111,9 +111,28 @@ def test_desktop_app_exits_for_the_watchdog_only_when_supervised(monkeypatch):
     assert timers == [(3.0, app.os._exit, (S.SERVER_STOPPED,))]
 
 
-def test_gives_up_after_too_many_crashes():
-    code, started = _run([FakeChild([1]) for _ in range(10)])
-    assert code == 1 and len(started) == S.MAX_RESTARTS + 1
+def test_too_many_crashes_pause_then_try_again():
+    """24 Nov: ARYA stayed off for hours. After a burst of crashes the watchdog now waits and comes back."""
+    starts, t = [], [0.0]
+    children = [FakeChild([1]) for _ in range(S.MAX_RESTARTS + 1)] + [FakeChild([None, 0])]
+
+    def spawn(cmd, cwd=None):
+        starts.append(t[0])
+        return children.pop(0)
+
+    def sleep(s):
+        t[0] += s
+    code = S.supervise([], spawn=spawn, check=lambda port: True, sleep=sleep, clock=lambda: t[0], port=8000)
+    assert code == 0 and len(starts) == S.MAX_RESTARTS + 2
+    assert starts[-1] - starts[-2] >= S.COOLDOWN_S                 # the pause came before the last start
+
+
+def test_gives_up_only_when_told_to():
+    starts = []
+    children = [FakeChild([1]) for _ in range(20)]
+    code = S.supervise([], spawn=lambda cmd, cwd=None: starts.append(cmd) or children.pop(0),
+                       check=lambda port: True, sleep=lambda s: None, clock=lambda: 0.0, port=8000, max_cooldowns=1)
+    assert code == 1 and len(starts) == 2 * (S.MAX_RESTARTS + 1)
 
 
 # ── Backups ────────────────────────────────────────────────────────────────

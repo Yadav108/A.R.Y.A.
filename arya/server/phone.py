@@ -458,11 +458,13 @@ async def pair(request: Request) -> JSONResponse:
 async def hello(request: Request) -> JSONResponse:
     if not _paired(request):
         return JSONResponse({"paired": False}, status_code=401)
-    from arya.core import modes
+    from arya.core import health, modes
     with _state.lock:
         recent = list(_state.feed)[-5:]
+    servers = sorted(_state.servers)
     return JSONResponse({"paired": True, "last": last_id(), "recent": recent, "mode": modes.current_name(),
-                         "addresses": sorted(_state.servers), "notify_kinds": sorted(NOTIFY_KINDS)})
+                         "addresses": servers, "notify_kinds": sorted(NOTIFY_KINDS),
+                         "wake": health.wake_target(servers)})     # the app's "Wake the laptop" (home Wi-Fi)
 
 
 @app.get("/api/wait")
