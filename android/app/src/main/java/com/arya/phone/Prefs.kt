@@ -47,11 +47,32 @@ class Prefs(context: Context) {
         wakeBroadcast = wake.optString("broadcast", "255.255.255.255")
     }
 
+    /** The laptop's addresses from a /api/hello answer: on a new Wi-Fi it has a new one, and the app learns it
+     *  whenever it reaches the laptop (by Tailscale or the old address), so next time it can go straight there. */
+    fun learnAddresses(base: String, hello: org.json.JSONObject) {
+        val a = hello.optJSONArray("addresses") ?: return
+        val now = (0 until a.length()).map { a.optString(it) }.filter { it.isNotBlank() }
+        val merged = mergeUrls(urls, now, Uri.parse(base).port)
+        if (merged != urls) urls = merged
+    }
+
     val paired: Boolean get() = key.isNotEmpty() && urls.isNotEmpty()
 
     fun forget() = p.edit().clear().apply()
 
     companion object {
+        const val MAX_URLS = 6
+
+        /** Tailscale (100.x) first, then the laptop's addresses right now, then older ones; at most MAX_URLS. */
+        fun mergeUrls(old: List<String>, addresses: List<String>, port: Int): List<String> {
+            val p = if (port > 0) ":$port" else ""
+            val fresh = addresses.map { "http://$it$p" }
+            val all = (old + fresh).distinct()
+            val tailscale = all.filter { it.contains("://100.") }
+            val rest = (fresh + old).distinct().filter { it !in tailscale }
+            return (tailscale + rest).take(MAX_URLS)
+        }
+
         /** "http://100.88.1.7:8001/#k=KEY" -> ("http://100.88.1.7:8001", "KEY"), else null. */
         fun parsePairing(text: String): Pair<String, String>? {
             val uri = try { Uri.parse(text.trim()) } catch (e: Exception) { return null }

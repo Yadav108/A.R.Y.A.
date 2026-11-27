@@ -60,8 +60,8 @@ class AryaService : Service() {
                 if (!connected) {
                     // A quick hello first: the long wait below can take 50 s to answer when nothing happens, and
                     // the status line would say "Connecting…" all that time although the laptop is reachable.
-                    Api.hello(base, prefs.key)
-                    status("Connected to your laptop" + if (base.contains("://100.")) " (Tailscale)" else " (home Wi-Fi)")
+                    prefs.learnAddresses(base, Api.hello(base, prefs.key))        // its address on this Wi-Fi
+                    status("Connected to your laptop" + if (base.contains("://100.")) " (Tailscale)" else " (Wi-Fi)")
                     connected = true
                     // Back in reach: notes said meanwhile go to the laptop; its home city / cloud settings come back.
                     OfflineServices.syncWithLaptop(this, base, prefs.key)

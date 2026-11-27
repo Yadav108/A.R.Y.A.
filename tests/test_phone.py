@@ -233,3 +233,58 @@ def test_network_checks(monkeypatch):
     with pytest.raises(ValueError):
         P.network_profile("1.2.3.4'; rm -rf")                     # never reaches the command line
     assert len(calls) == 1
+
+
+# ── Any Wi-Fi that needs a password or login (not only "Private") ───────────────────────────────────────────
+
+REAL_WHERE = P.where_to_listen                 # the autouse fixture above replaces it for every test
+
+NETSH = """
+There is 1 interface on the system:
+
+    Name                   : Wi-Fi
+    Description            : Intel(R) Wi-Fi 6 AX200 160MHz
+    State                  : connected
+    SSID                   : FRITZ!Box 5530 TP
+    Authentication         : {auth}
+    Cipher                 : CCMP
+    Profile                : FRITZ!Box 5530 TP
+"""
+
+
+@pytest.mark.parametrize("auth, ok", [
+    ("WPA2-Personal", True), ("WPA3-Personal", True), ("WPA2-Enterprise", True), ("WPA3-Enterprise", True),
+    ("WPA-Personal", True), ("Open", False), ("OWE", False), ("Shared", False), ("WEP", False), ("", False),
+])
+def test_secured_wifi(auth, ok):
+    got = P.wifi_security(NETSH.format(auth=auth), "Wi-Fi")
+    assert got == (auth, "FRITZ!Box 5530 TP")
+    assert P.secured(got[0]) is ok
+
+
+def test_other_interface_or_disconnected():
+    assert P.wifi_security(NETSH.format(auth="WPA2-Personal"), "Ethernet") is None
+    assert P.wifi_security(NETSH.format(auth="WPA2-Personal").replace("connected", "disconnected"), "Wi-Fi") is None
+
+
+@pytest.mark.parametrize("category, wifi, want", [
+    ("Private", None, ("192.168.178.40", "")),
+    ("Public", ("WPA2-Personal", "FRITZ!Box 5530 TP"), ("192.168.178.40", "")),
+    ("Public", ("Open", "Cafe"), (None, "open")),
+    ("Public", None, (None, "public")),                       # wired, or not Wi-Fi: no way to tell who's on it
+    ("", None, (None, "unknown")),
+])
+def test_where_to_listen(monkeypatch, category, wifi, want):
+    monkeypatch.setattr(P, "lan_ip", lambda: "192.168.178.40")
+    monkeypatch.setattr(P, "network_profile", lambda ip: (category, "FRITZ!Box 5530 TP 2"))
+    monkeypatch.setattr(P, "_wifi_security", lambda ip: wifi)
+    w = REAL_WHERE()
+    assert (w.ip, w.why_not) == want
+
+
+def test_private_only_when_asked(monkeypatch):
+    monkeypatch.setattr(P, "ANY_SECURED_WIFI", False)
+    monkeypatch.setattr(P, "lan_ip", lambda: "192.168.178.40")
+    monkeypatch.setattr(P, "network_profile", lambda ip: ("Public", "FRITZ!Box"))
+    monkeypatch.setattr(P, "_wifi_security", lambda ip: ("WPA2-Personal", "FRITZ!Box"))
+    assert REAL_WHERE().why_not == "public"

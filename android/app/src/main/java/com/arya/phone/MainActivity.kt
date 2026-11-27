@@ -369,7 +369,7 @@ class MainActivity : Activity() {
         val url = prefs.urls.getOrNull(tried) ?: return
         val key = prefs.key
         thread {                                                    // keep the Wake-on-LAN address up to date
-            try { prefs.rememberWake(Api.hello(url, key)) } catch (e: Exception) { /* next time */ }
+            try { Api.hello(url, key).let { prefs.rememberWake(it); prefs.learnAddresses(url, it) } } catch (e: Exception) { /* next time */ }
         }
     }
 
