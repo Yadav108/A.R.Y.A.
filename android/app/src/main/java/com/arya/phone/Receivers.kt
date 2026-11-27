@@ -29,7 +29,7 @@ class ActionReceiver : BroadcastReceiver() {
         }
         thread {
             var reply = "Couldn't reach the laptop"
-            for (base in prefs.urls) {
+            for (base in prefs.urls.asSequence().filter { Finder.trusted(it, prefs.key) }) {
                 try {
                     reply = Api.action(base, prefs.key, id, action).optString("reply", "Done.")
                     break

@@ -359,7 +359,7 @@ class TalkActivity : Activity() {
         if (offline == null) {                                     // first: is the laptop there? (≈1 s at most)
             show(State.THINKING, "Connecting…")
             thread(name = "arya-reach") {
-                val reach = urls.firstOrNull { Api.reachable(it, prefs.key) }
+                val reach = Finder.laptop(this, prefs)             // trusted address, or found on this Wi-Fi
                 offline = reach == null
                 if (reach != null) thread { OfflineServices.syncWithLaptop(this, reach, prefs.key) }
                 else thread(name = "arya-brain-warm") { PhoneBrainEngine.warm(this) }   // load while you speak
@@ -391,7 +391,7 @@ class TalkActivity : Activity() {
         taskDone = false
         lastError = false
         var lastFailure: Exception? = null
-        for (base in prefs.urls) {
+        for (base in prefs.urls.asSequence().filter { Finder.trusted(it, prefs.key) }) {
             try {
                 Api.voice(base, prefs.key, wav) { e -> event(e) }
                 lastFailure = null

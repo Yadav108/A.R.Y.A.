@@ -60,6 +60,7 @@ class AryaService : Service() {
                 if (!connected) {
                     // A quick hello first: the long wait below can take 50 s to answer when nothing happens, and
                     // the status line would say "Connecting…" all that time although the laptop is reachable.
+                    if (!Finder.trusted(base, prefs.key)) throw java.io.IOException("$base isn't the laptop")
                     prefs.learnAddresses(base, Api.hello(base, prefs.key))        // its address on this Wi-Fi
                     status("Connected to your laptop" + if (base.contains("://100.")) " (Tailscale)" else " (Wi-Fi)")
                     connected = true
@@ -91,6 +92,10 @@ class AryaService : Service() {
                 if (connected) status("Reconnecting… (is the laptop awake and Tailscale on?)")
                 connected = false
                 index++                                         // next address next time
+                if (index % urls.size == 0) {                   // none of them: look for it on this Wi-Fi
+                    val found = Finder.laptop(this, prefs)
+                    if (found != null) { index = prefs.urls.indexOf(found).coerceAtLeast(0); backoff = 2_000L; continue }
+                }
                 try { Thread.sleep(backoff) } catch (ie: InterruptedException) { return }
                 backoff = minOf(backoff * 2, 60_000L)
             }

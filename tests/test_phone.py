@@ -288,3 +288,27 @@ def test_private_only_when_asked(monkeypatch):
     monkeypatch.setattr(P, "network_profile", lambda ip: ("Public", "FRITZ!Box"))
     monkeypatch.setattr(P, "_wifi_security", lambda ip: ("WPA2-Personal", "FRITZ!Box"))
     assert REAL_WHERE().why_not == "public"
+
+
+# ── The laptop proves itself before the app sends its key (android/…/Finder.kt) ─────────────────────────────
+
+def test_prove_without_the_key_crossing():
+    P.set_enabled(True)
+    c = TestClient(P.app)
+    n = "00112233445566778899aabbccddeeff"
+    r = c.get("/api/prove", params={"n": n})
+    assert r.status_code == 200
+    assert r.json() == {"proof": P.prove(n)}
+    assert P.token() not in r.text
+
+
+@pytest.mark.parametrize("n", ["", "xyz", "0" * 31, "0" * 65, "G" * 32])
+def test_prove_rejects_odd_challenges(n):
+    P.set_enabled(True)
+    r = TestClient(P.app).get("/api/prove", params={"n": n})
+    assert r.status_code == 400
+
+
+def test_no_proof_while_phone_access_is_off():
+    P.set_enabled(False)
+    assert TestClient(P.app).get("/api/prove", params={"n": "0" * 32}).status_code == 400

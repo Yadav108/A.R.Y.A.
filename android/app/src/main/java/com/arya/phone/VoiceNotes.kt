@@ -81,7 +81,7 @@ object VoiceNotes {
         if (!prefs.paired) return false
         update(ctx, note.file, Status.SENDING)
         var detail = "The laptop is out of reach: it will be sent later."
-        for (base in prefs.urls) {
+        for (base in prefs.urls.asSequence().filter { Finder.trusted(it, prefs.key) }) {
             try {
                 val name = "Voice note " + note.file.name
                 val url = base.trimEnd('/') + "/api/upload?name=" + android.net.Uri.encode(name) + "&note=1"
