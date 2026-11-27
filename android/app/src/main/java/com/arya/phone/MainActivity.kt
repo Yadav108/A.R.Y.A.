@@ -336,10 +336,12 @@ class MainActivity : Activity() {
         val urls = prefs.urls
         val key = prefs.key
         thread {
-            val index = urls.indexOfFirst { Api.reachable(it, key) }
+            val found = Finder.laptop(this, prefs)                  // proves itself before the key is sent
+            val index = if (found == null) -1 else prefs.urls.indexOf(found)
             runOnUiThread {
                 connecting = false
                 if (isFinishing || web !== w) return@runOnUiThread
+                if (index >= 0) shareLogin()                            // a newly found address gets the login too
                 if (index < 0) showOffline() else load(index)
             }
         }
@@ -401,7 +403,14 @@ class MainActivity : Activity() {
         if (offline || connecting) return
         val urls = prefs.urls
         loadToken++
-        if (tried + 1 < urls.size) { load(tried + 1); return }
+        val next = tried + 1
+        if (next < urls.size) {                                     // only an address that proves it's the laptop
+            thread {
+                val ok = Finder.trusted(urls[next], prefs.key)
+                runOnUiThread { if (ok) load(next) else { tried = next; tryNextAddress() } }
+            }
+            return
+        }
         showOffline()
     }
 

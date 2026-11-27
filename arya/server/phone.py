@@ -515,6 +515,25 @@ async def pair(request: Request) -> JSONResponse:
     return response
 
 
+_NONCE = re.compile(r"^[0-9a-f]{32,64}$")
+
+
+def prove(nonce: str, key: str | None = None) -> str:
+    """HMAC-SHA256 of the phone's random challenge with the pairing key: shows this is the phone's own laptop
+    without the key ever crossing the network (android/…/Finder.kt checks it before sending the key)."""
+    import hashlib
+    return hmac.new((key or token()).encode(), b"arya-prove:" + nonce.encode(), hashlib.sha256).hexdigest()
+
+
+@app.get("/api/prove")
+async def prove_endpoint(n: str = "") -> JSONResponse:
+    """No key needed (that's the point): the app asks before it trusts an address on a Wi-Fi — an old home address
+    on someone else's network, or one it found by looking around the Wi-Fi it's on. Phone access must be on."""
+    if not _NONCE.match(n) or not enabled():
+        return JSONResponse({"error": "bad request"}, status_code=400)
+    return JSONResponse({"proof": prove(n)})
+
+
 @app.get("/api/hello")
 async def hello(request: Request) -> JSONResponse:
     if not _paired(request):
