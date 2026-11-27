@@ -104,3 +104,44 @@ def test_phone_reports_its_brain(monkeypatch, capsys):
     c.get("/api/offline-config", headers=AUTH, params={"brain": "DOWNLOADING 42% (waiting for Wi-Fi)<script>"})
     out = capsys.readouterr().out
     assert out.count("Phone: offline brain DOWNLOADING 42% (waiting for Wi-Fi)script") == 1   # logged once, cleaned
+
+
+# ── The offline brain's model file from the laptop (PhoneBrainEngine.kt downloads it over Wi-Fi) ────────────────
+
+@pytest.fixture
+def brain(tmp_path, monkeypatch):
+    import hashlib
+    data = b"model bytes " * 1000
+    monkeypatch.setattr(P, "BRAIN_FILE", tmp_path / "brain" / P.BRAIN_NAME)
+    monkeypatch.setattr(P.security, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(P, "BRAIN_SIZE", len(data))
+    monkeypatch.setattr(P, "BRAIN_SHA256", hashlib.sha256(data).hexdigest())
+    monkeypatch.setattr(P, "_brain_fetch", {"running": False, "error": ""})
+    return data
+
+
+def test_brain_file_needs_the_key(brain):
+    r = TestClient(P.app).get("/api/brain-file", headers={"X-ARYA": "1"})
+    assert r.status_code == 401
+
+
+def test_brain_file_is_fetched_once_then_served_resumably(brain, monkeypatch):
+    started, real_fetch = [], P._fetch_brain
+    monkeypatch.setattr(P, "_fetch_brain", lambda: started.append(1))
+    c = TestClient(P.app)
+    assert c.head("/api/brain-file", headers=AUTH).status_code == 202          # laptop starts fetching it
+    assert started == [1]
+    P.BRAIN_FILE.parent.mkdir(parents=True)
+    P.BRAIN_FILE.write_bytes(brain)                                            # as if the fetch got it whole
+    real_fetch()                                                               # checks it, keeps it
+    assert P._brain_ready()
+    r = c.get("/api/brain-file", headers={**AUTH, "Range": "bytes=12-23"})
+    assert r.status_code == 206 and r.content == brain[12:24]
+
+
+def test_damaged_brain_file_is_thrown_away(brain):
+    P.BRAIN_FILE.parent.mkdir(parents=True)
+    P.BRAIN_FILE.write_bytes(b"x" * len(brain))
+    P._fetch_brain()
+    assert not P._brain_ready() and not P.BRAIN_FILE.exists()
+    assert "checksum" in P._brain_fetch["error"]
