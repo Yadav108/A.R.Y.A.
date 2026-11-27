@@ -81,3 +81,26 @@ def test_not_phone_brain(text):
     from arya.server import phone_actions
     a = phone_actions.parse(text)
     assert a is None or a["action"] != "phone_brain"
+
+
+def test_typed_brain_command_goes_to_the_app(monkeypatch):
+    called = []
+
+    async def turn(text):
+        called.append(text)
+        return {"reply": "chat", "confirm": False}
+    monkeypatch.setattr(P, "_turn", turn)
+    r = TestClient(P.app).post("/api/say", headers=AUTH, json={"text": "Download offline brain"}).json()
+    assert r["action"] == {"action": "phone_brain", "do": "download"}
+    assert called == []                                    # not answered by the chat model
+    r = TestClient(P.app).post("/api/say", headers=AUTH, json={"text": "what is a phone model"}).json()
+    assert "action" not in r and called == ["what is a phone model"]
+
+
+def test_phone_reports_its_brain(monkeypatch, capsys):
+    monkeypatch.setattr(P, "_last_brain", [""])
+    c = TestClient(P.app)
+    c.get("/api/offline-config", headers=AUTH, params={"brain": "DOWNLOADING 42% (waiting for Wi-Fi)<script>"})
+    c.get("/api/offline-config", headers=AUTH, params={"brain": "DOWNLOADING 42% (waiting for Wi-Fi)<script>"})
+    out = capsys.readouterr().out
+    assert out.count("Phone: offline brain DOWNLOADING 42% (waiting for Wi-Fi)script") == 1   # logged once, cleaned

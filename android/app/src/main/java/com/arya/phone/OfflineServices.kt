@@ -71,7 +71,8 @@ object OfflineServices {
     /** When the laptop answers: take its latest config and hand over the notes. Never throws. */
     fun syncWithLaptop(ctx: Context, base: String, key: String) {
         try {
-            val r = Request.Builder().url(base.trimEnd('/') + "/api/offline-config")
+            val brain = try { PhoneBrainEngine.report(ctx) } catch (e: Exception) { "?" }       // for the laptop's log
+            val r = Request.Builder().url(base.trimEnd('/') + "/api/offline-config?brain=" + android.net.Uri.encode(brain))
                 .header("Authorization", "Bearer $key").header("X-ARYA", "1").get().build()
             http.newCall(r).execute().use { if (it.isSuccessful) saveConfig(ctx, JSONObject(it.body!!.string())) }
         } catch (e: Exception) { }

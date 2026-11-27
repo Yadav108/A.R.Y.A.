@@ -236,12 +236,18 @@ class MainActivity : Activity() {
             visibility = View.GONE                                   // the cover has its own Talk button
         }
         talkButton = talk
-        // The page may only open the talk or voice-notes screen, or hide this button: nothing else crosses over.
+        // The page may only open the talk or voice-notes screen, manage the offline brain (download / delete /
+        // status), or hide this button: nothing else crosses over.
         w.addJavascriptInterface(object {
             @android.webkit.JavascriptInterface
             fun talk() { runOnUiThread { startActivity(Intent(this@MainActivity, TalkActivity::class.java)) } }
             @android.webkit.JavascriptInterface
             fun voiceNotes(record: Boolean) { runOnUiThread { VoiceNotesActivity.open(this@MainActivity, record) } }
+            @android.webkit.JavascriptInterface
+            fun phoneBrain(what: String): String = PhoneBrainEngine.manage(this@MainActivity, when (what) {
+                "delete" -> PhoneBrain.Manage.DELETE; "status" -> PhoneBrain.Manage.STATUS
+                else -> PhoneBrain.Manage.DOWNLOAD
+            })
             @android.webkit.JavascriptInterface
             fun pageHasTalk() { runOnUiThread { pageHasTalk = true; talkButton?.visibility = View.GONE } }
         }, "AryaApp")

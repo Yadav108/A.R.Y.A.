@@ -461,6 +461,10 @@ async function send(text) {
     const r = await api("/api/say", { text });
     if (r.status === 401) { thinking.remove(); return showUnpaired(); }
     thinking.textContent = r.data.reply || r.data.error || "Something went wrong.";
+    // The offline brain lives on the phone: the app does it and says how it went (PhoneBrainEngine.manage).
+    if (r.data.action && r.data.action.action === "phone_brain" && app && typeof app.phoneBrain === "function") {
+      try { thinking.textContent = app.phoneBrain(r.data.action.do || "download"); } catch (e) { }
+    }
     if (r.data.confirm) { $("yesno").style.display = "flex"; $("chips").style.display = "none"; }
     state("online · laptop", true);
   } catch (e) {

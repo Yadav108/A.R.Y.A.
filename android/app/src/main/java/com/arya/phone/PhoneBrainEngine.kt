@@ -35,7 +35,7 @@ object PhoneBrainEngine {
             when (downloadState(ctx, id)) {
                 DownloadManager.STATUS_PENDING, DownloadManager.STATUS_RUNNING, DownloadManager.STATUS_PAUSED ->
                     return Status.DOWNLOADING
-                DownloadManager.STATUS_FAILED -> { p.edit().remove("download").apply(); return Status.FAILED }
+                DownloadManager.STATUS_FAILED -> { p.edit().remove("download").putLong("failed", id).apply(); return Status.FAILED }
             }
         }
         if (f.length() == PhoneBrain.SIZE) { verify(ctx); return Status.CHECKING }
@@ -75,13 +75,53 @@ object PhoneBrainEngine {
             .setTitle("ARYA offline brain")
             .setDescription("${PhoneBrain.SIZE_TEXT}, Wi-Fi only — runs on the phone when the laptop is out of reach")
             .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-            .setAllowedNetworkTypes(DownloadManager.Request.NETWORK_WIFI)
-            .setAllowedOverMetered(false)
-            .setAllowedOverRoaming(false)
-            .setDestinationUri(Uri.fromFile(f))
-        val id = app.getSystemService(DownloadManager::class.java).enqueue(req)
+            .setAllowedNetworkTypes(DownloadManager.Request.NETWORK_WIFI)    // Wi-Fi only (some phones call home
+            .setAllowedOverRoaming(false)                                     // Wi-Fi "metered": that's still fine)
+            .setDestinationInExternalFilesDir(app, null, "brain/${PhoneBrain.FILE}")
+        val id = try { app.getSystemService(DownloadManager::class.java).enqueue(req) }
+                 catch (e: Exception) { lastError = "download refused: ${e.javaClass.simpleName}"; return false }
         prefs(app).edit().putLong("download", id).remove("verified").apply()
         return true
+    }
+
+    @Volatile var lastError: String? = null; private set
+
+    /** One line for the laptop's log (sent with /api/offline-config): "READY", "DOWNLOADING 42% (waiting for Wi-Fi)" … */
+    fun report(ctx: Context): String {
+        val s = status(ctx)
+        val extra = when (s) {
+            Status.DOWNLOADING -> " ${progress(ctx) ?: 0}%" + (downloadReason(ctx)?.let { " ($it)" } ?: "")
+            Status.FAILED -> downloadReason(ctx)?.let { " ($it)" } ?: ""
+            else -> ""
+        }
+        return s.name + extra + (lastError?.let { " — $it" } ?: "")
+    }
+
+    /** Why the download manager is waiting or failed, in words. */
+    private fun downloadReason(ctx: Context): String? {
+        val id = prefs(ctx).getLong("download", -1L).takeIf { it >= 0 } ?: prefs(ctx).getLong("failed", -1L)
+        if (id < 0) return null
+        val dm = ctx.getSystemService(DownloadManager::class.java) ?: return null
+        dm.query(DownloadManager.Query().setFilterById(id))?.use { c ->
+            if (!c.moveToFirst()) return null
+            val st = c.getInt(c.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
+            val r = c.getInt(c.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON))
+            return when (st) {
+                DownloadManager.STATUS_PAUSED -> when (r) {
+                    DownloadManager.PAUSED_QUEUED_FOR_WIFI, DownloadManager.PAUSED_WAITING_FOR_NETWORK -> "waiting for Wi-Fi"
+                    DownloadManager.PAUSED_WAITING_TO_RETRY -> "retrying"
+                    else -> "paused $r"
+                }
+                DownloadManager.STATUS_PENDING -> "queued"
+                DownloadManager.STATUS_FAILED -> when (r) {
+                    DownloadManager.ERROR_INSUFFICIENT_SPACE -> "not enough space"
+                    DownloadManager.ERROR_HTTP_DATA_ERROR, DownloadManager.ERROR_CANNOT_RESUME -> "connection dropped"
+                    else -> "error $r"
+                }
+                else -> null
+            }
+        }
+        return null
     }
 
     /** Checks the downloaded file against its published SHA-256 (in the background; ≈ 10–20 s). */
@@ -163,6 +203,10 @@ object PhoneBrainEngine {
     fun warm(ctx: Context): Boolean = synchronized(lock) {
         if (llm != null) return true
         if (status(ctx) != Status.READY) return false
+        val p = prefs(ctx)
+        if (p.getBoolean("loading", false))                     // the app died while loading it last time
+            lastError = "the app closed while loading the model last time (out of memory?)"
+        p.edit().putBoolean("loading", true).commit()
         return try {
             llm = LlmInference.createFromOptions(ctx.applicationContext, LlmInference.LlmInferenceOptions.builder()
                 .setModelPath(file(ctx).absolutePath)
@@ -170,8 +214,13 @@ object PhoneBrainEngine {
                 .setMaxTopK(40)
                 .setPreferredBackend(LlmInference.Backend.CPU)
                 .build())
+            lastError = null
             true
-        } catch (e: Throwable) { llm = null; false }
+        } catch (e: Throwable) {
+            llm = null
+            lastError = "couldn't load the model: ${e.javaClass.simpleName}: ${e.message?.take(80)}"
+            false
+        } finally { p.edit().putBoolean("loading", false).apply() }
     }
 
     fun close() = synchronized(lock) {

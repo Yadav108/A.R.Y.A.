@@ -555,6 +555,16 @@ async def say(request: Request) -> JSONResponse:
     if _turn is None:
         return JSONResponse({"error": "ARYA is still starting"}, status_code=503)
     log_event("phone_request", chars=len(text))
+    # The offline brain lives on the phone (android/…/PhoneBrain.kt): typed "download the offline brain" goes to the
+    # app, which does it and shows how it went; in a plain browser there is no phone side to do it.
+    from arya.server import phone_actions
+    action = phone_actions.parse(text)
+    if action and action.get("action") == "phone_brain":
+        print(f"Phone request: {text[:60]} -> phone action phone_brain ({action['do']})")
+        log_event("phone_action", action="phone_brain", do=action["do"])
+        return JSONResponse({"reply": "Open the ARYA app on the phone and type or say this there: the offline brain "
+                                      "lives on the phone.", "confirm": False,
+                             "action": {"action": "phone_brain", "do": action["do"]}})
     try:
         result = await asyncio.wait_for(_turn(text), timeout=TURN_TIMEOUT_S)
     except asyncio.TimeoutError:
@@ -615,6 +625,7 @@ async def voice(request: Request):
 PHONE_CLOUD = os.getenv("ARYA_PHONE_CLOUD", "1") != "0"
 PHONE_CLOUD_MODEL = os.getenv("ARYA_PHONE_CLOUD_MODEL", "openai/gpt-oss-20b")
 _inbox_seen: set[int] = set()
+_last_brain = [""]                 # the phone's last reported offline-brain status (logged when it changes)
 
 
 @app.get("/api/offline-config")
@@ -635,7 +646,12 @@ async def offline_config(request: Request) -> JSONResponse:
     groq = os.getenv("GROQ_API_KEY", "").strip()
     if PHONE_CLOUD and groq:
         cfg["groq_key"] = groq
-    log_event("phone_offline_config", cloud=bool(cfg.get("groq_key")))      # never the key itself
+    # The phone says how its offline brain is (PhoneBrainEngine.kt): MISSING / DOWNLOADING 42% / READY / FAILED …
+    brain = re.sub(r"[^\w %:.,()?'/—-]", "",request.query_params.get("brain", ""))[:120]
+    if brain and brain != _last_brain[0]:
+        _last_brain[0] = brain
+        print(f"Phone: offline brain {brain}")
+    log_event("phone_offline_config", cloud=bool(cfg.get("groq_key")), brain=brain or None)   # never the key itself
     return JSONResponse(cfg)
 
 
