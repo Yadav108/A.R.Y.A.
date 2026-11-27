@@ -10,9 +10,11 @@ How it stays safe — the laptop's main server (port 8000) is untouched and stil
 
   * A second, small server (port 8001, ARYA_PHONE_PORT) with only what the phone needs: send a message, get
     the answer as text, read the nudges (timers, reminders, pomodoro, breaks, calendar heads-ups).
-  * It listens only on the laptop's home-network address, and only while Windows calls that network
-    *Private*. On a Public network (café, campus, a hotspot) it does not listen at all; checked every two
-    minutes, so it switches itself off when you leave.
+  * It listens only on the laptop's address on the current network, and only when that network is one
+    Windows calls *Private*, or a Wi-Fi that needs a password or login to join (WPA2 / WPA3, personal or
+    enterprise like eduroam — ARYA_PHONE_ANY_WIFI=0 for Private only). On open Wi-Fi or a Public wired
+    network it does not listen at all; checked every two minutes, so it switches itself off when you leave.
+    (Tailscale, when it's up, works on any network and is encrypted end to end.)
   * Only devices on a private network (192.168.x / 10.x / 172.16-31.x) are answered, and only when the
     Host is the laptop's address (no DNS rebinding).
   * Its own key, separate from the laptop's. Pairing puts it in the QR code after '#', which the browser
@@ -50,6 +52,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingRes
 from arya.server import security
 
 PORT = int(os.getenv("ARYA_PHONE_PORT", "8001"))
+ANY_SECURED_WIFI = os.getenv("ARYA_PHONE_ANY_WIFI", "1") != "0"   # 0: home (Private) Wi-Fi only, as before
 SETTINGS_FILE = security.DATA_DIR / "phone.json"
 TOKEN_FILE = security.DATA_DIR / "phone_token"
 COOKIE = "arya_phone"
@@ -128,20 +131,78 @@ def network_profile(ip: str) -> tuple[str, str]:
     return category.strip(), name.strip()
 
 
+def interface_alias(ip: str) -> str:
+    """The Windows interface name ('Wi-Fi', 'Ethernet') that has this address; '' if unknown."""
+    ip = str(ipaddress.ip_address(ip))                   # validated: it goes into a command line
+    try:
+        return subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                               f"(Get-NetIPAddress -IPAddress '{ip}' -ErrorAction Stop).InterfaceAlias"],
+                              capture_output=True, text=True, timeout=30,
+                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+# Wi-Fi that only people with the password (or a university / work login) can join. Not open Wi-Fi, not OWE
+# ("Enhanced Open": encrypted, but anyone can join), not WEP (broken).
+_SECURED = re.compile(r"^(?:WPA2|WPA3|WPA)(?:-?\w+)*$", re.IGNORECASE)
+
+
+def wifi_security(netsh_output: str, alias: str) -> tuple[str, str] | None:
+    """(authentication, SSID) of the connected Wi-Fi interface named `alias` in `netsh wlan show interfaces`;
+    None when that interface isn't Wi-Fi, isn't connected, or the output can't be read."""
+    for block in re.split(r"\n\s*\n(?=\s*Name\s*:)", netsh_output):
+        fields: dict[str, str] = {}
+        for line in block.splitlines():
+            key, sep, value = line.partition(":")
+            if sep and key.strip() and key.strip() not in fields:
+                fields[key.strip()] = value.strip()
+        if fields.get("Name") == alias and fields.get("State", "").lower() == "connected":
+            return fields.get("Authentication", ""), fields.get("SSID", "")
+    return None
+
+
+def secured(authentication: str) -> bool:
+    return bool(_SECURED.match(authentication.strip())) and "OWE" not in authentication.upper()
+
+
+def _wifi_security(ip: str) -> tuple[str, str] | None:
+    alias = interface_alias(ip)
+    if not alias:
+        return None
+    try:
+        out = subprocess.run(["netsh", "wlan", "show", "interfaces"], capture_output=True, text=True, timeout=15,
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return wifi_security(out, alias)
+
+
 @dataclass
 class Where:
     ip: str | None
-    why_not: str = ""            # '' = fine; 'no-network' / 'public' / 'unknown'
+    why_not: str = ""            # '' = fine; 'no-network' / 'public' / 'open' / 'unknown'
     network: str = ""
+    how: str = ""                # why it's fine: 'Private' / 'WPA2-Personal' …
 
 
 def where_to_listen() -> Where:
+    """Home Wi-Fi Windows calls Private (as before), or any Wi-Fi that needs a password or login to join (WPA2 /
+    WPA3, personal or enterprise like eduroam) even when Windows calls it Public — a café's FRITZ!Box, a
+    friend's flat, the university. Never open Wi-Fi, and never a Public wired network (no way to tell who's on
+    it). The phone still needs the pairing key for everything."""
     ip = lan_ip()
     if ip is None:
         return Where(None, "no-network")
     category, name = network_profile(ip)
     if category in ("Private", "DomainAuthenticated"):
-        return Where(ip, "", name)
+        return Where(ip, "", name, category)
+    if category == "Public" and ANY_SECURED_WIFI:
+        wifi = _wifi_security(ip)
+        if wifi and secured(wifi[0]):
+            return Where(ip, "", wifi[1] or name, wifi[0])
+        if wifi:
+            return Where(None, "open", wifi[1] or name)
     return Where(None, "public" if category == "Public" else "unknown", name)
 
 
@@ -770,7 +831,7 @@ async def run() -> None:
                     continue
                 server = _make_server(ip)
                 _state.servers[ip] = (server, asyncio.create_task(_serve(server, sock)))
-                how = "Tailscale" if ip == ts else f"network {where.network!r}, Private"
+                how = "Tailscale" if ip == ts else f"network {where.network!r}, {where.how or 'Private'}"
                 print(f"Phone: listening on http://{ip}:{PORT} ({how})")
             _state.hosts = set(_state.servers)
             # The address for pairing: Tailscale when there is one (it works at home too, and everywhere else).
@@ -811,6 +872,9 @@ def pairing_page() -> str:
                 f"<b>Public</b> network, so ARYA won't listen on it.</p><p>If this is your home Wi-Fi: Settings → "
                 f"Network &amp; internet → Wi-Fi → {html.escape(where.network or 'your network')} → "
                 f"Network profile type → <b>Private</b>. Then reload this page.</p>")
+    elif where.why_not == "open":
+        body = (f"<p class='warn'><b>{html.escape(where.network or 'This Wi-Fi')}</b> is open Wi-Fi (no password), "
+                f"so ARYA won't listen on it. Turn on Tailscale on the laptop and phone to reach ARYA from here.</p>")
     elif where.why_not == "no-network":
         body = "<p class='warn'>The laptop isn't on a home network right now.</p>"
     else:
@@ -860,6 +924,9 @@ def _why(where: Where) -> str:
         net = f"“{where.network}”" if where.network else "this Wi-Fi"
         return (f"Windows treats {net} as a public network, so I'm not listening on it. If it's your home Wi-Fi, "
                 f"set it to Private in Settings, Network and internet, Wi-Fi, then the network")
+    if where.why_not == "open":
+        net = f"“{where.network}”" if where.network else "this Wi-Fi"
+        return f"{net} is open Wi-Fi with no password, so I'm not listening on it. Tailscale still works"
     if where.why_not == "no-network":
         return "the laptop isn't on a home network right now"
     return "I couldn't tell what kind of network this is, so I'm staying off it"
