@@ -702,6 +702,76 @@ async def voice(request: Request):
     return StreamingResponse(lines(), media_type="application/x-ndjson")
 
 
+# ── The offline brain's model file, handed to the phone over Wi-Fi (android/…/PhoneBrainEngine.kt) ─────────────
+# The phone's own download from the internet can stall for ever on some phones; from the laptop it's fast. The
+# laptop fetches the file once (from the same public source), checks it against the published SHA-256, keeps it.
+
+BRAIN_NAME = "Qwen2.5-1.5B-Instruct_multi-prefill-seq_q8_ekv1280.task"
+BRAIN_URL = f"https://huggingface.co/litert-community/Qwen2.5-1.5B-Instruct/resolve/main/{BRAIN_NAME}"
+BRAIN_SIZE = 1_597_913_616
+BRAIN_SHA256 = "8d867a7c93a6acf2892f08e0174e2f6f351ad256b7e3cfb6d6cd9c89794b42e0"
+BRAIN_FILE = security.DATA_DIR / "brain" / BRAIN_NAME
+_brain_fetch: dict = {"running": False, "error": ""}
+
+
+def _brain_ready() -> bool:
+    ok = security.DATA_DIR / "brain" / (BRAIN_NAME + ".ok")       # checked once; the size guards against changes
+    return BRAIN_FILE.is_file() and BRAIN_FILE.stat().st_size == BRAIN_SIZE and ok.is_file()
+
+
+def _fetch_brain() -> None:
+    """Downloads and checks the model file (a thread; ≈ 1–2 min on a good line). Resumes a partial download."""
+    import hashlib
+    import urllib.request
+    part = BRAIN_FILE.with_name(BRAIN_NAME + ".part")
+    try:
+        BRAIN_FILE.parent.mkdir(parents=True, exist_ok=True)
+        if BRAIN_FILE.is_file() and BRAIN_FILE.stat().st_size == BRAIN_SIZE:
+            BRAIN_FILE.replace(part)                              # whole but unchecked: check it below
+        have = part.stat().st_size if part.exists() else 0
+        if have < BRAIN_SIZE:
+            req = urllib.request.Request(BRAIN_URL, headers={"Range": f"bytes={have}-", "User-Agent": "ARYA"})
+            with urllib.request.urlopen(req, timeout=60) as r, open(part, "ab" if r.status == 206 else "wb") as out:
+                while chunk := r.read(1 << 20):
+                    out.write(chunk)
+        digest = hashlib.sha256()
+        with open(part, "rb") as f:
+            while chunk := f.read(1 << 20):
+                digest.update(chunk)
+        if digest.hexdigest() != BRAIN_SHA256:
+            part.unlink(missing_ok=True)
+            raise ValueError("the file didn't match its published checksum")
+        part.replace(BRAIN_FILE)
+        BRAIN_FILE.with_name(BRAIN_NAME + ".ok").write_text(BRAIN_SHA256, encoding="utf-8")
+        _brain_fetch["error"] = ""
+        print("Phone: offline brain file ready on the laptop for the phone")
+    except Exception as exc:
+        _brain_fetch["error"] = f"{type(exc).__name__}: {exc}"
+        print(f"Phone: couldn't get the offline brain file — {_brain_fetch['error']}")
+    finally:
+        _brain_fetch["running"] = False
+
+
+@app.api_route("/api/brain-file", methods=["GET", "HEAD"])
+async def brain_file(request: Request):
+    """The model file for the paired phone: 200 (resumable, Range) when the laptop has it checked; 202 while it
+    fetches it (started by this request); 503 when that failed."""
+    from fastapi.responses import FileResponse
+
+    if not _paired(request):
+        return JSONResponse({"error": "unpaired"}, status_code=401)
+    if _brain_ready():
+        return FileResponse(BRAIN_FILE, media_type="application/octet-stream", filename=BRAIN_NAME)
+    if not _brain_fetch["running"]:
+        if _brain_fetch["error"] and request.method == "HEAD":
+            return JSONResponse({"error": _brain_fetch["error"]}, status_code=503)
+        _brain_fetch.update(running=True, error="")
+        import threading
+        threading.Thread(target=_fetch_brain, name="arya-brain-fetch", daemon=True).start()
+        print("Phone: fetching the offline brain file for the phone (1.6 GB, once)")
+    return JSONResponse({"preparing": True}, status_code=202)
+
+
 PHONE_CLOUD = os.getenv("ARYA_PHONE_CLOUD", "1") != "0"
 PHONE_CLOUD_MODEL = os.getenv("ARYA_PHONE_CLOUD_MODEL", "openai/gpt-oss-20b")
 _inbox_seen: set[int] = set()
